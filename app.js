@@ -94,6 +94,14 @@ function conflicts(s){
   return out;
 }
 
+/* ---------- scheduling lineup: who shows on the schedule, in what order ---------- */
+const ROLE_ORDER = { Manager: 0, Lead: 1, Staff: 2 };
+function lineup(){       // active people, manager-chosen order first, then by role and name
+  const src = mgr() ? (data.users || []).filter(u => u.active) : (data.people || []);
+  return src.slice().sort((a, b) => ((a.order || 9999) - (b.order || 9999)) || ((ROLE_ORDER[a.role] ?? 3) - (ROLE_ORDER[b.role] ?? 3)) || a.name.localeCompare(b.name));
+}
+const shown = p => p.onSchedule !== false;
+
 /* ---------- wage estimates (managers only; wages never reach staff phones) ---------- */
 const wageOf = n => { const u = (data.users || []).find(x => x.name === n); return u ? Number(u.wage) || 0 : 0; };
 const money = (x, cents) => '$' + (cents ? (Math.round(x * 100) / 100).toFixed(2) : Math.round(x).toLocaleString());
@@ -300,11 +308,12 @@ function viewSchedule(){
 function viewScheduleGrid(){
   const [lo, hi] = weekBounds(), days = Array.from({ length: 7 }, (_, i) => plus(week, i)), M = mgr();
   const label = week === monday(T()) ? 'This week' : week === plus(monday(T()), 7) ? 'Next week' : week === plus(monday(T()), -7) ? 'Last week' : 'Week of ' + shortDay(week);
-  const order = { Manager: 0, Lead: 1, Staff: 2 };
-  const roster = (M ? (data.users || []).filter(u => u.active).map(u => ({ id: u.id, name: u.name, role: u.role, wage: u.wage })) : (data.people || []).map(p => ({ name: p.name, role: '' })));
   const inWeek = (data.shifts || []).filter(s => days.includes(s.date)), inWeekLive = inWeek.filter(notGone);
+  const everyone = lineup(), hasShift = n => inWeek.some(s => s.name === n && notGone(s));
+  // Hidden people drop off the grid – unless they still have a shift this week, so nothing goes missing.
+  const roster = everyone.filter(p => shown(p) || hasShift(p.name)).map(p => ({ id: p.id, name: p.name, role: p.role, wage: p.wage, hidden: !shown(p) }));
+  const hiddenOut = everyone.filter(p => !shown(p) && !hasShift(p.name));
   inWeek.forEach(s => { if (!roster.some(p => p.name === s.name)) roster.push({ name: s.name, role: 'Former' }); });
-  roster.sort((a, b) => (order[a.role] ?? 3) - (order[b.role] ?? 3) || a.name.localeCompare(b.name));
   const dayMins = d => inWeekLive.filter(s => s.date === d).reduce((n, s) => n + mins(s.end) - mins(s.start), 0);
   const L = M ? labor(shiftItems(inWeekLive)) : null;
   const cell = (p, d) => {
@@ -320,15 +329,18 @@ function viewScheduleGrid(){
   const rows = roster.map(p => { const m = inWeek.filter(s => s.name === p.name).reduce((n, s) => n + mins(s.end) - mins(s.start), 0);
     const m2 = inWeekLive.filter(s => s.name === p.name).reduce((n, s) => n + mins(s.end) - mins(s.start), 0);
     const wageIn = M && p.id ? `<label class="wagef"><span>$</span><input class="wage" inputmode="decimal" data-wage="${esc(p.id)}" value="${p.wage ? Number(p.wage).toFixed(2) : ''}" placeholder="wage" aria-label="${esc(p.name)} hourly wage"><span>/h</span></label>` : '';
-    return `<tr class="${p.name === data.me.name ? 'mine-row' : ''}"><th scope="row"><b>${esc(p.name)}</b><span class="sub">${esc(p.role || '')}</span>${wageIn}</th>${days.map(d => cell(p, d)).join('')}<td class="tot">${m2 ? hrs(m2) : ''}${M && m2 ? `<div class="money">${p.wage ? money(L.byPerson[p.name] || 0) : '<span class="sub">no wage</span>'}</div>${L.ot[p.name] ? `<span class="pill warn">OT ${hrs(L.ot[p.name] * 60)}</span>` : ''}` : ''}</td></tr>`; }).join('');
+    const handle = M && p.id ? `<span class="handle" data-rowdrag title="Drag to reorder" aria-label="Drag to reorder ${esc(p.name)}">⠿</span>` : '';
+    const hideBtn = M && p.id ? `<button class="mini" data-onsched="${esc(p.id)}" data-to="${p.hidden ? 1 : 0}" title="${p.hidden ? 'Show on the schedule' : 'Hide from the schedule'}">${p.hidden ? 'Show' : 'Hide'}</button>` : '';
+    return `<tr class="${p.name === data.me.name ? 'mine-row' : ''} ${p.hidden ? 'hid' : ''}" ${p.id ? `data-rid="${esc(p.id)}"` : ''}><th scope="row"><div class="who">${handle}<div><b>${esc(p.name)}</b><span class="sub">${esc(p.role || '')}${p.hidden ? ' · hidden' : ''}</span></div>${hideBtn}</div>${wageIn}</th>${days.map(d => cell(p, d)).join('')}<td class="tot">${m2 ? hrs(m2) : ''}${M && m2 ? `<div class="money">${p.wage ? money(L.byPerson[p.name] || 0) : '<span class="sub">no wage</span>'}</div>${L.ot[p.name] ? `<span class="pill warn">OT ${hrs(L.ot[p.name] * 60)}</span>` : ''}` : ''}</td></tr>`; }).join('');
   const total = inWeekLive.reduce((n, s) => n + mins(s.end) - mins(s.start), 0);
   return `<div class="gridhead"><h1 style="margin:0">Schedule</h1>
       <div class="weeknav" style="margin:0"><button class="btn sm" data-week="-7" ${week <= lo ? 'disabled' : ''} aria-label="Previous week">‹</button><div style="min-width:200px"><b>${label}</b><div class="sub">${shortDay(days[0])} – ${shortDay(days[6])}</div></div><button class="btn sm" data-week="7" ${week >= hi ? 'disabled' : ''} aria-label="Next week">›</button>${week !== monday(T()) ? '<button class="btn sm" data-thisweek>Today</button>' : ''}</div>
       ${M ? `<div class="labor"><span class="sub">Est. wages</span><b>${money(L.total)}</b><span class="sub">${hrs(total)}${data.pay && data.pay.extra ? ' · incl. ' + data.pay.extra + '% extra' : ''}</span></div>` : ''}
       <div class="btns">${M ? '<button class="btn sm" data-copyweek>Copy last week</button><button class="btn sm" data-clearweek>Clear week</button>' : ''}${lead() ? (weekPending(week).length ? `<button class="btn sm go" data-publish>Publish week (${weekPending(week).length})</button>` : '<span class="pill ok">Published</span>') : ''}<button class="btn sm" data-print>Print</button></div></div>
     <div class="gridwrap"><table class="grid"><thead><tr><th class="corner">${M ? '<span class="sub">Click a box to add. Drag to move, Alt-drag to copy.</span>' : ''}</th>${days.map(d => `<th class="${d === T() ? 'today' : ''}"><b>${DOW[pd(d).getDay()]}</b> ${pd(d).getDate()}<span class="sub">${hrs(dayMins(d))}</span></th>`).join('')}<th class="tot">Hours</th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="9" class="empty">No one on the team yet.</td></tr>`}</tbody>
+      <tbody data-reorder>${rows || `<tr><td colspan="9" class="empty">No one on the team yet.</td></tr>`}</tbody>
       <tfoot><tr><th scope="row">Total${M ? '<span class="sub">Estimated wages</span>' : ''}</th>${days.map(d => `<td class="tot">${inWeekLive.filter(s => s.date === d).length} shift${inWeekLive.filter(s => s.date === d).length === 1 ? '' : 's'}${M ? `<div class="money">${money(L.byDay[d] || 0)}</div>` : ''}</td>`).join('')}<td class="tot"><b>${hrs(total)}</b>${M ? `<div class="money"><b>${money(L.total)}</b></div>` : ''}</td></tr></tfoot></table></div>
+    ${M && hiddenOut.length ? `<p class="sub">Hidden from the schedule: ${hiddenOut.map(p => `${esc(p.name)} <button class="mini" data-onsched="${esc(p.id)}" data-to="1">Show</button>`).join(' · ')}</p>` : ''}
     ${M && L.missing.length ? `<p class="sub warn-t">No wage set for ${L.missing.map(n => esc(first(n))).join(', ')} – type it next to their name to include them.</p>` : ''}
     <p class="sub">Red outline = a problem (time off, unavailable or double-booked) – hover to see it. ${M && data.reminders && data.reminders.on ? 'People with an email get reminders before their shifts, and an email when a shift in the next 7 days changes.' : ''}</p>`;
 }
@@ -342,12 +354,12 @@ function publishSheet(){
       <button class="btn go">Publish</button></form></div></div>`;
 }
 function shiftSheet(){
-  const s = sheet, d = s.date, team = (data.users || []).filter(u => u.active).map(u => u.name);
+  const s = sheet, d = s.date, lu = lineup(), team = lu.filter(shown).map(u => u.name), hiddenTeam = lu.filter(u => !shown(u)).map(u => u.name);
   const status = n => { if (approvedOff(n, d)) return ' – time off'; const u = unavail(n, d); if (u) return u.from ? ' – unavailable ' + t12(u.from) + '–' + t12(u.to) : ' – unavailable'; if (pendingOff(n, d)) return ' – asked for off'; const b = shiftsOn(d).filter(x => notGone(x) && x.name === n && x.id !== s.id); return b.length ? ' – already ' + b.map(x => t12(x.start) + '–' + t12(x.end)).join(', ') : ''; };
   return `<div class="sheet" role="dialog" aria-label="Shift"><div class="sheet-in"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="margin:0">${s.id ? 'Edit shift' : 'New shift'}</h1><button class="btn sm" data-closesheet>Close</button></div>
     <p class="sub">${/^(Today|Tomorrow|Yesterday)$/.test(dayName(d)) ? dayName(d) + ' · ' + shortDay(d) : dayName(d)}</p>
     <form class="stack" data-form="shift" style="padding:0">
-      <label class="f">Who<select name="name" required>${s.name ? '' : '<option value="">Pick someone…</option>'}${team.map(n => `<option value="${esc(n)}" ${n === s.name ? 'selected' : ''}>${esc(n)}${esc(status(n))}</option>`).join('')}</select></label>
+      <label class="f">Who<select name="name" required>${s.name ? '' : '<option value="">Pick someone…</option>'}${team.map(n => `<option value="${esc(n)}" ${n === s.name ? 'selected' : ''}>${esc(n)}${esc(status(n))}</option>`).join('')}${hiddenTeam.length ? `<optgroup label="Hidden from the schedule">${hiddenTeam.map(n => `<option value="${esc(n)}" ${n === s.name ? 'selected' : ''}>${esc(n)}${esc(status(n))}</option>`).join('')}</optgroup>` : ''}</select></label>
       ${(data.presets || []).length ? `<div class="btns">${data.presets.map(p => `<button type="button" class="btn sm" data-preset="${p.start}|${p.end}">${esc(p.name)} ${t12(p.start)}–${t12(p.end)}</button>`).join('')}</div>` : ''}
       <div class="two"><label class="f">Start<input name="start" type="time" value="${esc(s.start || '07:00')}"></label><label class="f">End<input name="end" type="time" value="${esc(s.end || '13:00')}"></label></div>
       <label class="f">Position<select name="position"><option value=""></option>${(data.positions || []).map(p => `<option ${p === s.position ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
@@ -587,6 +599,8 @@ function viewTeam(){
       <div class="btns" style="margin-top:8px"><button class="btn sm" data-edit="${esc(u.id)}">Edit</button><button class="btn sm" data-newcode="${esc(u.id)}" data-name="${esc(u.name)}">New code</button>
         <button class="btn sm" data-active="${esc(u.id)}" data-to="${u.active ? 0 : 1}" data-name="${esc(u.name)}">${u.active ? 'Turn off' : 'Turn on'}</button></div></div>`;
   return `${back()}<h1>Team</h1>${addedCard}<div class="card">${us.map(row).join('')}</div>
+    <h2>Schedule lineup</h2><p class="sub" style="margin:0 4px 8px">Drag ⠿ to set the order people appear on the schedule. Hidden people stay on the team (they can still sign in); they just don't take up a row.</p>
+    <div class="card" data-reorder>${lineup().map(u => `<div class="row" data-rid="${esc(u.id)}"><span class="handle" data-rowdrag aria-label="Drag to reorder ${esc(u.name)}">⠿</span><div class="txt ${shown(u) ? '' : 'muted'}"><b>${esc(u.name)}</b><div class="sub">${esc(u.role)}${shown(u) ? '' : ' · hidden from the schedule'}</div></div><button class="btn sm" data-onsched="${esc(u.id)}" data-to="${shown(u) ? 0 : 1}">${shown(u) ? 'Hide' : 'Show'}</button></div>`).join('')}</div>
     <h2>Add someone</h2><div class="card">${form(null)}</div>
     <p class="sub">Turning someone off or giving a new code signs them out on every phone right away. Everything here is also on the Users tab of the sheet.</p>`;
 }
@@ -616,6 +630,7 @@ function viewMoreList(){
 
 const TABS = [['today', 'Today', '☀︎'], ['schedule', 'Schedule', '▦'], ['chat', 'Chat', '✉︎'], ['lists', 'Lists', '✓'], ['more', 'More', '☰']];
 function render(){
+  if (rowDrag){ rowDrag.later = true; return; }       // don't redraw under a finger mid-drag
   $('#offline').hidden = !offline;
   if (!TOKEN || !data){ $('#tabs').hidden = true; $('#refresh').hidden = true; $('#overlay').innerHTML = ''; $('#shop').textContent = load('pt-shop') || 'Peregrine'; $('#main').innerHTML = TOKEN ? '<div class="empty">Loading…</div>' : viewSignIn(); return; }
   data.meId = data.me.id;
@@ -702,6 +717,7 @@ document.addEventListener('click', async e => {
     if (x && x.status && x.status !== 'draft') x.status = 'removed'; else data.shifts = data.shifts.filter(s => s.id !== d.delshift);
     sheet = null; render(); act('deleteShift', { id: d.delshift }); return; }
   if (d.restore){ const x = data.shifts.find(s => s.id === d.restore); if (x) x.status = 'changed'; sheet = null; render(); act('restoreShift', { id: d.restore }); return; }
+  if (d.onsched){ const u = (data.users || []).find(x => x.id === d.onsched); if (u) u.onSchedule = d.to === '1'; render(); act('setOnSchedule', { id: d.onsched, on: d.to }).then(r => { if (r && u) toast(first(u.name) + (d.to === '1' ? ' is back on the schedule' : ' is hidden from the schedule')); }); return; }
   if (d.publish !== undefined){ sheet = { kind: 'publish' }; render(); return; }
   if (d.sendweek !== undefined){ if (!confirm('Email everyone working the week of ' + shortDay(week) + ' their shifts?')) return; b.disabled = true;
     act('sendWeek', { from: week }).then(r => { if (r && r.result) toast('Sent to ' + r.result.sent + (r.result.noEmail.length ? ' · no email for ' + r.result.noEmail.map(first).join(', ') : '')); }); return; }
@@ -772,6 +788,33 @@ document.addEventListener('submit', async e => {
   }
 });
 
+
+/* drag ⠿ to reorder people (works with mouse and touch) */
+let rowDrag = null;
+document.addEventListener('pointerdown', e => {
+  const h = e.target.closest && e.target.closest('[data-rowdrag]'); if (!h || !mgr()) return;
+  const row = h.closest('[data-rid]'), box = row && row.closest('[data-reorder]'); if (!box) return;
+  e.preventDefault(); try { h.setPointerCapture(e.pointerId); } catch (_) {}
+  rowDrag = { row, box, before: [...box.querySelectorAll(':scope > [data-rid]')].map(x => x.dataset.rid).join(',') }; row.classList.add('lifting');
+});
+document.addEventListener('pointermove', e => {
+  if (!rowDrag) return; e.preventDefault();
+  const { row, box } = rowDrag, y = e.clientY, sibs = [...box.querySelectorAll(':scope > [data-rid]')].filter(x => x !== row);
+  const next = sibs.find(x => { const b = x.getBoundingClientRect(); return y < b.top + b.height / 2; });
+  if (next) { if (row.nextElementSibling !== next) box.insertBefore(row, next); } else { const last = sibs[sibs.length - 1]; if (last && last.nextElementSibling !== row) last.after(row); }
+});
+const endRowDrag = () => {
+  if (!rowDrag) return;
+  const { row, box, before, later } = rowDrag; row.classList.remove('lifting');
+  const ids = [...box.querySelectorAll(':scope > [data-rid]')].map(x => x.dataset.rid); rowDrag = null;
+  if (ids.join(',') !== before) {
+    // Keep people not shown here (e.g. hidden ones off the grid) after the ones that were dragged.
+    const all = lineup().map(u => u.id), full = ids.concat(all.filter(id => ids.indexOf(id) < 0));
+    full.forEach((id, k) => { const u = (data.users || []).find(x => x.id === id); if (u) u.order = k + 1; });
+    render(); act('scheduleOrder', { ids: full.join(',') });
+  } else if (later) render();
+};
+document.addEventListener('pointerup', endRowDrag); document.addEventListener('pointercancel', endRowDrag);
 
 let dragId = '';
 document.addEventListener('dragstart', e => { const c = e.target.closest && e.target.closest('[data-drag]'); if (!c) return; dragId = c.dataset.drag; e.dataTransfer.effectAllowed = 'copyMove'; e.dataTransfer.setData('text/plain', dragId); c.classList.add('dragging'); });

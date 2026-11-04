@@ -195,3 +195,14 @@ table.grid{border-collapse:separate;border-spacing:0;width:100%;min-width:980px;
 .chip.st-changed .tag{color:var(--warn)}
 .chip.st-removed{opacity:.55;text-decoration:line-through;border-style:dashed}
 .gone b{text-decoration:line-through}
+
+/* lineup */
+.handle{cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;color:var(--muted);font-size:1.1rem;line-height:1;padding:6px 4px;flex:none}
+.handle:active{cursor:grabbing}
+.lifting{opacity:.85;box-shadow:0 6px 18px rgba(0,0,0,.18);position:relative;z-index:3;background:var(--card)}
+.grid tr.lifting th,.grid tr.lifting td{background:var(--accent-soft)}
+.grid .who{display:flex;align-items:flex-start;gap:6px} .grid .who > div{flex:1;min-width:0}
+.mini{all:unset;cursor:pointer;font:400 .66rem/1 var(--head);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:4px 6px}
+.mini:hover{color:var(--accent);border-color:var(--accent)}
+.grid tr.hid th{opacity:.7}
+.muted b{color:var(--muted)}

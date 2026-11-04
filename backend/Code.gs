@@ -11,12 +11,12 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '2.3';
+const VERSION = '2.4';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Off'];
 
 const TABS = {
-  'Users':         ['Name', 'Role', 'Code', 'Active', 'Phone', 'Email', 'User ID (do not edit)', 'Sign-in version (do not edit)', 'Added', 'Reminders (blank = default)', 'Hourly wage (managers only)'],
+  'Users':         ['Name', 'Role', 'Code', 'Active', 'Phone', 'Email', 'User ID (do not edit)', 'Sign-in version (do not edit)', 'Added', 'Reminders (blank = default)', 'Hourly wage (managers only)', 'On schedule (blank = yes)', 'Schedule order'],
   'Checklists':    ['List', 'Task', 'Order', 'Active', 'Notes', 'Days (blank = every day)', 'Section'],
   'Checklist log': ['Date', 'List', 'Task', 'Done by', 'Done at'],
   'Announcements': ['ID', 'Posted', 'From', 'Title', 'Message', 'Pinned', 'Active', 'Must acknowledge'],
@@ -110,7 +110,7 @@ function buildTab_(ss, name) {
   const text = c => sh.getRange(2, c, 999, 1).setNumberFormat('@');
   const list = (c, items) => sh.getRange(2, c, 999, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(items, true).setAllowInvalid(false).build());
   const box = c => sh.getRange(2, c, 999, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build());
-  if (name === 'Users') { list(2, ROLES); text(3); box(4); sh.getRange(2, 7, 999, 2).setFontColor('#888888'); list(10, REMIND_); sh.getRange(2, 11, 999, 1).setNumberFormat('$#,##0.00'); }
+  if (name === 'Users') { list(2, ROLES); text(3); box(4); sh.getRange(2, 7, 999, 2).setFontColor('#888888'); list(10, REMIND_); sh.getRange(2, 11, 999, 1).setNumberFormat('$#,##0.00'); box(12); }
   if (name === 'Shifts') { text(1); text(2); text(3); }
   if (name === 'Requests') { text(5); list(4, ['Time off', 'Swap', 'Cover']); list(7, ['Pending', 'Approved', 'Denied', 'Cancelled']); }
   if (name === 'Checklists') box(4);
@@ -291,7 +291,7 @@ function state_(ss, me) {
   const active = users.filter(r => truthy_(r[3])).map(r => String(r[0]));
   const out = { ok: true, version: VERSION, today, updated: new Date().toISOString(), name: setting_(ss, 'Shop name') || 'Team', me: { name: me.name, role: me.role, id: me.id, email: String(users.find(r => String(r[6]) === me.id)[5] || ''), reminders: remindMode_(ss, users.find(r => String(r[6]) === me.id)), cal: calKey_(users.find(r => String(r[6]) === me.id)) },
     reminders: { on: !/^off$/i.test(setting_(ss, 'Shift reminder emails')), night: setting_(ss, 'Night-before reminder at') || '19:00', hours: Number(setting_(ss, 'Hours-before reminder')) || 2 }, team: active,
-    people: users.filter(r => truthy_(r[3]) && r[6]).map(r => ({ id: String(r[6]), name: String(r[0]) })) };
+    people: users.filter(r => truthy_(r[3]) && r[6]).map(r => ({ id: String(r[6]), name: String(r[0]), role: role_(r[1]), onSchedule: onSched_(r), order: Number(r[12]) || 0 })) };
 
   // Checklists (today, plus the last 7 days for leads and managers)
   const lists = splitList_(setting_(ss, 'Checklist lists'));
@@ -362,7 +362,7 @@ function state_(ss, me) {
       file: !!driveId_(r[1]), order: Number(r[3]) || 0 })).sort((a, b) => a.order - b.order);
 
   // Team (managers)
-  if (isMgr) out.users = users.map(r => ({ id: String(r[6] || ''), name: String(r[0]), role: role_(r[1]), code: String(r[2] || ''), active: truthy_(r[3]), phone: String(r[4] || ''), email: String(r[5] || ''), reminders: remindMode_(ss, r), wage: Number(r[10]) || 0 }));
+  if (isMgr) out.users = users.map(r => ({ id: String(r[6] || ''), name: String(r[0]), role: role_(r[1]), code: String(r[2] || ''), active: truthy_(r[3]), phone: String(r[4] || ''), email: String(r[5] || ''), reminders: remindMode_(ss, r), wage: Number(r[10]) || 0, onSchedule: onSched_(r), order: Number(r[12]) || 0 }));
   if (isMgr) out.pay = { ot: Number(setting_(ss, 'Overtime after (hours a week)')) || 40, otRate: Number(setting_(ss, 'Overtime rate')) || 1.5, extra: Number(setting_(ss, 'Labor cost extra (%)')) || 0 };
   return out;
 }
@@ -431,12 +431,23 @@ function act_(ss, me, p) {
       if (rows.some(r => String(r[0]).trim().toLowerCase() === name.toLowerCase())) throw new Error('Someone called ' + name + ' is already on the team – add a last name or initial');
       const used = {}; rows.forEach(r => { used[String(r[2])] = 1; });
       const code = newCode_(used);
-      const row = put_(sh, [name, role_(p.role), code, true, clean_(p.phone, 40), clean_(p.email, 120), newId_(16), 1, new Date(), '', wage_(p.wage)]);
+      const row = put_(sh, [name, role_(p.role), code, true, clean_(p.phone, 40), clean_(p.email, 120), newId_(16), 1, new Date(), '', wage_(p.wage), true, rows.reduce((m, x) => Math.max(m, Number(x[12]) || 0), 0) + 1]);
       sh.getRange(row, 3).setNumberFormat('@').setValue(code);
       audit('Added ' + name + ' as ' + role_(p.role));
       return;
     }
-    case 'editUser': case 'newCode': case 'setActive': case 'setWage': {
+    case 'scheduleOrder': {                           // the order people appear on the schedule (drag to arrange)
+      needMgr();
+      const ids = String(p.ids || '').split(',').filter(Boolean), sh = tab('Users'), rows = vals_(sh);
+      if (!ids.length) return;
+      if (sh.getLastColumn() < 13) buildTab_(ss, 'Users');
+      const pos = {}; ids.forEach((id, k) => { pos[id] = k + 1; });
+      let next = ids.length;
+      const col = rows.map(r => [pos[String(r[6])] || (String(r[0]).trim() ? ++next : '')]);
+      if (col.length) sh.getRange(2, 13, col.length, 1).setValues(col);
+      return;
+    }
+    case 'editUser': case 'newCode': case 'setActive': case 'setWage': case 'setOnSchedule': {
       needMgr();
       const sh = tab('Users'), rows = vals_(sh), i = rows.findIndex(r => String(r[6]) === String(p.id)); if (i < 0) throw new Error('That person was removed');
       const row = i + 2, r = rows[i], name = String(r[0]);
@@ -446,6 +457,7 @@ function act_(ss, me, p) {
         sh.getRange(row, 3).setNumberFormat('@').setValue(newCode_(used)); sh.getRange(row, 8).setValue((Number(r[7]) || 1) + 1);
         audit('New code for ' + name + ' (signed out everywhere)'); return;
       }
+      if (A === 'setOnSchedule') { if (sh.getLastColumn() < 13) buildTab_(ss, 'Users'); sh.getRange(row, 12).setValue(p.on === '1'); audit((p.on === '1' ? 'Showed ' : 'Hid ') + name + ' on the schedule'); return; }
       if (A === 'setWage') { sh.getRange(row, 11).setValue(wage_(p.wage)); audit('Set ' + name + '\'s wage'); return; }
       if (A === 'setActive') {
         const on = p.active === '1';
@@ -834,6 +846,8 @@ function prepList_(ss, me, tz) {
   }).sort((a, b) => (!!a.doneAt - !!b.doneAt) || String(a.date).localeCompare(String(b.date)) || String(b.at).localeCompare(String(a.at)));
 }
 
+/** On the scheduling lineup unless a manager hid them (blank = yes). */
+function onSched_(r) { const v = r[11]; return v === '' || v === null || v === undefined ? true : truthy_(v); }
 function shiftObj_(r, tz) { return { id: String(r[6] || ''), date: ymd_(r[0], tz), start: hhmm_(r[1], tz), end: hhmm_(r[2], tz), name: String(r[3] || '').trim(), position: String(r[4] || ''), notes: String(r[5] || '') }; }
 function remindMode_(ss, r) { const v = r && String(r[9] || '').trim(); return REMIND_.indexOf(v) >= 0 ? v : (REMIND_.indexOf(setting_(ss, 'Default reminders')) >= 0 ? setting_(ss, 'Default reminders') : 'Night before'); }
 function t12_(hm) { let [h, m] = String(hm).split(':').map(Number); const ap = h >= 12 ? 'pm' : 'am'; h = h % 12 || 12; return h + (m ? ':' + pad_(m) : '') + ap; }
