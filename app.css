@@ -43,6 +43,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--ink)}
 .code{font:600 1.5rem/1 var(--head);letter-spacing:.3em}
 input.code{padding:8px 12px}
 .mine{border-left:4px solid var(--rust)}
+.sec{font:500 .74rem/1 var(--head);letter-spacing:.16em;text-transform:uppercase;color:var(--muted);background:var(--soft);padding:9px 14px}
 .tabs{position:fixed;left:0;right:0;bottom:0;z-index:6;background:var(--card);border-top:1px solid var(--line);display:flex;padding:6px 4px calc(6px + var(--safe-bot))}
 .tabs button{all:unset;flex:1;cursor:pointer;display:grid;justify-items:center;gap:2px;padding:4px 0;font:500 .66rem/1 var(--head);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);position:relative}
 .tabs button .ic{font-size:1.3rem;line-height:1.1}

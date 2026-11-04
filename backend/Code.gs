@@ -11,12 +11,12 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '1.0';
+const VERSION = '1.1';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 
 const TABS = {
   'Users':         ['Name', 'Role', 'Code', 'Active', 'Phone', 'Email', 'User ID (do not edit)', 'Sign-in version (do not edit)', 'Added'],
-  'Checklists':    ['List', 'Task', 'Order', 'Active', 'Notes'],
+  'Checklists':    ['List', 'Task', 'Order', 'Active', 'Notes', 'Days (blank = every day)', 'Section'],
   'Checklist log': ['Date', 'List', 'Task', 'Done by', 'Done at'],
   'Announcements': ['ID', 'Posted', 'From', 'Title', 'Message', 'Pinned', 'Active'],
   'Reads':         ['Announcement ID', 'Name', 'Read at'],
@@ -28,7 +28,7 @@ const TABS = {
 
 const SETTINGS = [
   ['Shop name',                    'Peregrine Coffee Roasters', 'Shown at the top of the app.'],
-  ['Checklist lists',              'Opening, Mid, Closing',     'Names of the shift checklists, in order, separated by commas. Tasks go on the Checklists tab.'],
+  ['Checklist lists',              'Opening, Mid, Closing, Side work', 'Names of the shift checklists, in order, separated by commas. Tasks go on the Checklists tab.'],
   ['Positions',                    'Bar, Register, Lead',       'Positions for the schedule, separated by commas.'],
   ['Ask for the code again every', '60',                        'Days before a phone asks for the name and code again (0 = never).'],
   ['Schedule days shown',          '14',                        'How many days ahead the schedule shows.'],
@@ -249,14 +249,15 @@ function state_(ss, me) {
 
   // Checklists (today, plus the last 7 days for leads and managers)
   const lists = splitList_(setting_(ss, 'Checklist lists'));
-  const tasks = vals_(ss.getSheetByName('Checklists')).filter(r => r[0] && r[1] && truthy_(r[3])).map(r => ({ list: String(r[0]).trim(), task: String(r[1]).trim(), order: Number(r[2]) || 0, notes: String(r[4] || '') }));
+  const tasks = vals_(ss.getSheetByName('Checklists')).filter(r => r[0] && r[1] && truthy_(r[3])).map(r => ({ list: String(r[0]).trim(), task: String(r[1]).trim(), order: Number(r[2]) || 0, notes: String(r[4] || ''), days: dayset_(r[5]), section: String(r[6] || '').trim() }));
   const log = vals_(ss.getSheetByName('Checklist log')).map(r => ({ date: ymd_(r[0], tz), list: String(r[1]), task: String(r[2]), by: String(r[3] || ''), at: toIso_(r[4]) }));
   const listNames = lists.length ? lists.filter(l => tasks.some(t => t.list === l)).concat([...new Set(tasks.map(t => t.list))].filter(l => lists.indexOf(l) < 0)) : [...new Set(tasks.map(t => t.list))];
   const dayLists = date => listNames.map(l => {
-    const ts = tasks.filter(t => t.list === l).sort((a, b) => a.order - b.order);
-    const items = ts.map(t => { const d = log.find(x => x.date === date && x.list === l && x.task === t.task); return { task: t.task, notes: t.notes, by: d ? d.by : '', at: d ? d.at : '' }; });
+    const dow = weekday_(date);
+    const ts = tasks.filter(t => t.list === l && (!t.days || t.days.indexOf(dow) >= 0)).sort((a, b) => a.order - b.order);
+    const items = ts.map(t => { const d = log.find(x => x.date === date && x.list === l && x.task === t.task); return { task: t.task, notes: t.notes, section: t.section, by: d ? d.by : '', at: d ? d.at : '' }; });
     return { list: l, items, done: items.filter(x => x.by).length, total: items.length };
-  });
+  }).filter(x => x.total);
   out.checklists = dayLists(today);
   const firstLog = log.reduce((m, x) => x.date && (!m || x.date < m) ? x.date : m, '');   // don't count days before anyone used the app
   if (isLead) out.history = [1, 2, 3, 4, 5, 6, 7].map(n => addDays_(today, -n)).filter(d => firstLog && d >= firstLog).map(d => { return { date: d, lists: dayLists(d).map(x => ({ list: x.list, done: x.done, total: x.total, missed: x.items.filter(i => !i.by).map(i => i.task) })) }; });
@@ -304,7 +305,7 @@ function act_(ss, me, p) {
   switch (A) {
     case 'check': {                                   // tick or untick a checklist task (today only)
       const list = String(p.list), task = String(p.task);
-      const exists = vals_(tab('Checklists')).some(r => String(r[0]).trim() === list && String(r[1]).trim() === task && truthy_(r[3]));
+      const exists = vals_(tab('Checklists')).some(r => String(r[0]).trim() === list && String(r[1]).trim() === task && truthy_(r[3]) && (!dayset_(r[5]) || dayset_(r[5]).indexOf(weekday_(today)) >= 0));
       if (!exists) throw new Error('That task changed – pull down to refresh');
       const sh = tab('Checklist log'), v = vals_(sh);
       const i = v.findIndex(r => ymd_(r[0], tz) === today && String(r[1]) === list && String(r[2]) === task);
@@ -320,7 +321,7 @@ function act_(ss, me, p) {
     case 'announce': {
       if (!isLead) throw new Error('Only leads and managers can post announcements');
       const title = clean_(p.title, 150); if (!title) throw new Error('Add a title');
-      const sh = tab('Announcements'); sh.appendRow([nextId_(sh, 'a'), new Date(), me.name, title, clean_(p.message, 3000), p.pinned === '1', true]);
+      const sh = tab('Announcements'); put_(sh, [nextId_(sh, 'a'), new Date(), me.name, title, clean_(p.message, 3000), p.pinned === '1', true]);
       return;
     }
     case 'unannounce': {
@@ -355,8 +356,8 @@ function act_(ss, me, p) {
       if (rows.some(r => String(r[0]).trim().toLowerCase() === name.toLowerCase())) throw new Error('Someone called ' + name + ' is already on the team – add a last name or initial');
       const used = {}; rows.forEach(r => { used[String(r[2])] = 1; });
       const code = newCode_(used);
-      sh.appendRow([name, role_(p.role), code, true, clean_(p.phone, 40), clean_(p.email, 120), newId_(16), 1, new Date()]);
-      sh.getRange(sh.getLastRow(), 3).setNumberFormat('@').setValue(code);
+      const row = put_(sh, [name, role_(p.role), code, true, clean_(p.phone, 40), clean_(p.email, 120), newId_(16), 1, new Date()]);
+      sh.getRange(row, 3).setNumberFormat('@').setValue(code);
       audit('Added ' + name + ' as ' + role_(p.role));
       return;
     }
@@ -411,6 +412,27 @@ function act_(ss, me, p) {
 /* ============================================================
    Helpers
    ============================================================ */
+/** Writes a row into the first row whose first cell is empty (checkbox columns make appendRow jump to the bottom). */
+function put_(sh, row) {
+  const n = Math.max(sh.getLastRow(), 1), col = sh.getRange(1, 1, n, 1).getValues();
+  let r = col.findIndex((x, i) => i > 0 && String(x[0]).trim() === '') + 1;
+  if (r < 2) r = n + 1;
+  sh.getRange(r, 1, 1, row.length).setValues([row]);
+  return r;
+}
+const DAYS_ = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+function weekday_(ymd) { const [y, m, d] = ymd.split('-').map(Number); return DAYS_[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]; }
+/** "Mon, Thu" / "Monday" / "weekdays" / "weekends" → ['Mon','Thu']; blank → null (every day). */
+function dayset_(v) {
+  const s = String(v || '').trim().toLowerCase(); if (!s || /^(every ?day|daily|all)$/.test(s)) return null;
+  const out = [];
+  s.split(/[,\/&]+|\band\b/).map(x => x.trim()).forEach(x => {
+    if (/^weekdays?$/.test(x)) out.push('Mon', 'Tue', 'Wed', 'Thu', 'Fri');
+    else if (/^weekends?$/.test(x)) out.push('Sat', 'Sun');
+    else { const i = DAYS_.findIndex(d => x.startsWith(d.toLowerCase())); if (i >= 0) out.push(DAYS_[i]); }
+  });
+  return out.length ? out : null;
+}
 function vals_(sh) { if (!sh || sh.getLastRow() < 2) return []; return sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues(); }
 function setting_(ss, label) { const r = vals_(ss.getSheetByName('Settings')).find(x => String(x[0]).trim() === label); return r ? String(r[1]).trim() : ''; }
 function head_(sh, n) { sh.getRange(1, 1, 1, n).setFontWeight('bold').setBackground('#eeeeee'); sh.setFrozenRows(1); }
