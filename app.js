@@ -5,6 +5,7 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const load = k => { try { return localStorage.getItem(k); } catch (_) { return null; } };
 const save = (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (_) {} };
+const WIDE = window.matchMedia('(min-width: 1000px)'); const wide = () => WIDE.matches;
 const standalone = () => window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
 const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
@@ -154,7 +155,9 @@ function viewToday(){
   const chatN = (d.channels || []).reduce((n, c) => n + c.unread, 0);
   const hour = new Date().getHours(), hi = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
   const att = mgr() ? weekReport(monday(T())).reduce((a, r) => ({ late: a.late + r.lates, no: a.no + r.noShow, miss: a.miss + r.missingOut }), { late: 0, no: 0, miss: 0 }) : null;
-  return `<h1>${hi}, ${esc(first(d.me.name))}</h1>${clockCard()}
+  const remindHint = d.reminders && d.reminders.on && !d.me.email && d.me.reminders !== 'Off' && load('pt-nohint') !== '1'
+    ? `<div class="hint"><b>Get a reminder before your shifts.</b> Add your email and pick when. <div class="btns" style="margin-top:8px"><button class="btn sm go" data-more="reminders">Set up reminders</button><button class="btn sm" data-nohint>Not now</button></div></div>` : '';
+  return `<h1>${hi}, ${esc(first(d.me.name))}</h1>${remindHint}${clockCard()}
     ${unread.length ? `<div class="card">${unread.slice(0, 3).map(annRow).join('')}</div>` : ''}
     ${chatN ? `<div class="card">${rowBtn('data-tab="chat"', `<div class="txt"><b>${chatN} unread message${chatN > 1 ? 's' : ''}</b></div><span>›</span>`)}</div>` : ''}
     <h2>Working today</h2><div class="card">${today.length ? today.map(s => `<div class="row ${s.name === d.me.name ? 'mine' : ''}"><div class="txt"><b>${esc(s.name)}</b><div class="sub">${t12(s.start)}–${t12(s.end)}${s.position ? ' · ' + esc(s.position) : ''}</div></div>${mgr() ? clockState(s) : ''}</div>`).join('') : '<div class="empty">Nobody scheduled today.</div>'}</div>
@@ -188,9 +191,11 @@ function viewLists(){
 }
 
 /* ----- schedule ----- */
+function weekBounds(){ return [monday(plus(T(), -21)), monday(plus(T(), mgr() ? 49 : 7))]; }
 function viewSchedule(){
-  const lo = monday(plus(T(), -21)), hi = monday(plus(T(), mgr() ? 49 : 7));
+  const [lo, hi] = weekBounds();
   if (!week || week < lo || week > hi) week = monday(T());
+  if (wide()) return viewScheduleGrid();
   const days = Array.from({ length: 7 }, (_, i) => plus(week, i));
   const label = week === monday(T()) ? 'This week' : week === plus(monday(T()), 7) ? 'Next week' : week === plus(monday(T()), -7) ? 'Last week' : 'Week of ' + shortDay(week);
   const nav = `<div class="weeknav"><button class="btn sm" data-week="-7" ${week <= lo ? 'disabled' : ''} aria-label="Previous week">‹</button><div><b>${label}</b><div class="sub">${shortDay(days[0])} – ${shortDay(days[6])}</div></div><button class="btn sm" data-week="7" ${week >= hi ? 'disabled' : ''} aria-label="Next week">›</button></div>`;
@@ -207,10 +212,41 @@ function viewSchedule(){
   };
   const totals = mgr() ? (() => { const t = {}; days.forEach(d => shiftsOn(d).forEach(s => { t[s.name] = (t[s.name] || 0) + mins(s.end) - mins(s.start); }));
     const names = Object.keys(t).sort(); return names.length ? `<h2>Hours this week</h2><div class="card">${names.map(n => `<div class="row"><div class="txt">${esc(n)}</div><b>${hrs(t[n])}</b></div>`).join('')}</div>` : ''; })() : '';
-  const tools = mgr() ? `<div class="btns" style="margin:10px 0 4px"><button class="btn sm" data-copyweek>Copy last week here</button><button class="btn sm" data-clearweek>Clear this week</button></div>` : '';
+  const tools = mgr() ? `<div class="btns" style="margin:10px 0 4px"><button class="btn sm" data-copyweek>Copy last week here</button><button class="btn sm" data-clearweek>Clear this week</button><button class="btn sm" data-sendweek>Email this week to the team</button></div>` : '';
   return `<h1>Schedule</h1>${nav}${mgr() ? '' : `<div class="seg"><button data-mine="0" aria-pressed="${!schedMine}">Everyone</button><button data-mine="1" aria-pressed="${schedMine}">My shifts</button></div>`}
     ${tools}${days.map(dayCard).join('')}${totals}
     <div class="btns" style="margin-top:14px"><button class="btn" data-more="requests">Time off & swaps</button><button class="btn" data-more="avail">My availability</button></div>`;
+}
+
+/** Desktop: the whole week as a grid, people down the side. Click a cell to add, click a shift to edit, drag to move (hold Alt/Option to copy). */
+function viewScheduleGrid(){
+  const [lo, hi] = weekBounds(), days = Array.from({ length: 7 }, (_, i) => plus(week, i)), M = mgr();
+  const label = week === monday(T()) ? 'This week' : week === plus(monday(T()), 7) ? 'Next week' : week === plus(monday(T()), -7) ? 'Last week' : 'Week of ' + shortDay(week);
+  const order = { Manager: 0, Lead: 1, Staff: 2 };
+  const roster = (M ? (data.users || []).filter(u => u.active).map(u => ({ name: u.name, role: u.role })) : (data.people || []).map(p => ({ name: p.name, role: '' })));
+  const inWeek = (data.shifts || []).filter(s => days.includes(s.date));
+  inWeek.forEach(s => { if (!roster.some(p => p.name === s.name)) roster.push({ name: s.name, role: 'Former' }); });
+  roster.sort((a, b) => (order[a.role] ?? 3) - (order[b.role] ?? 3) || a.name.localeCompare(b.name));
+  const dayMins = d => inWeek.filter(s => s.date === d).reduce((n, s) => n + mins(s.end) - mins(s.start), 0);
+  const cell = (p, d) => {
+    const list = inWeek.filter(s => s.name === p.name && s.date === d);
+    const off = approvedOff(p.name, d), ask = pendingOff(p.name, d), un = unavail(p.name, d);
+    const note = off ? '<div class="cnote warn">Time off</div>' : ask ? '<div class="cnote">Asked off</div>' : un ? `<div class="cnote">${un.from ? 'Can\'t ' + t12(un.from) + '–' + t12(un.to) : 'Unavailable'}</div>` : '';
+    const chips = list.map(s => { const cf = M ? conflicts(s) : [];
+      return `<button class="chip ${cf.some(c => c[0] === 'warn') ? 'bad' : ''} ${s.name === data.me.name ? 'me' : ''}" ${M ? `data-editshift="${esc(s.id)}" draggable="true" data-drag="${esc(s.id)}"` : 'tabindex="-1"'} title="${esc(cf.map(c => c[1]).join(', '))}">
+        <b>${t12(s.start)}–${t12(s.end)}</b>${s.position ? `<span>${esc(s.position)}</span>` : ''}${s.notes ? `<span class="n2">${esc(s.notes)}</span>` : ''}</button>`; }).join('');
+    return `<td class="${d === T() ? 'today' : ''} ${off ? 'off' : un && !un.from ? 'un' : ''}" ${M ? `data-cell="${esc(p.name)}|${d}"` : ''}>${note}${chips}${M ? `<button class="addc" data-addshift="${d}" data-who="${esc(p.name)}" aria-label="Add a shift for ${esc(p.name)} on ${shortDay(d)}">+</button>` : ''}</td>`;
+  };
+  const rows = roster.map(p => { const m = inWeek.filter(s => s.name === p.name).reduce((n, s) => n + mins(s.end) - mins(s.start), 0);
+    return `<tr class="${p.name === data.me.name ? 'mine-row' : ''}"><th scope="row"><b>${esc(p.name)}</b><span class="sub">${esc(p.role || '')}</span></th>${days.map(d => cell(p, d)).join('')}<td class="tot">${m ? hrs(m) : ''}</td></tr>`; }).join('');
+  const total = inWeek.reduce((n, s) => n + mins(s.end) - mins(s.start), 0);
+  return `<div class="gridhead"><h1 style="margin:0">Schedule</h1>
+      <div class="weeknav" style="margin:0"><button class="btn sm" data-week="-7" ${week <= lo ? 'disabled' : ''} aria-label="Previous week">‹</button><div style="min-width:200px"><b>${label}</b><div class="sub">${shortDay(days[0])} – ${shortDay(days[6])}</div></div><button class="btn sm" data-week="7" ${week >= hi ? 'disabled' : ''} aria-label="Next week">›</button>${week !== monday(T()) ? '<button class="btn sm" data-thisweek>Today</button>' : ''}</div>
+      <div class="btns">${M ? '<button class="btn sm" data-copyweek>Copy last week</button><button class="btn sm" data-clearweek>Clear week</button><button class="btn sm go" data-sendweek>Email week to team</button>' : ''}<button class="btn sm" data-print>Print</button></div></div>
+    <div class="gridwrap"><table class="grid"><thead><tr><th class="corner">${M ? '<span class="sub">Click a box to add. Drag to move, Alt-drag to copy.</span>' : ''}</th>${days.map(d => `<th class="${d === T() ? 'today' : ''}"><b>${DOW[pd(d).getDay()]}</b> ${pd(d).getDate()}<span class="sub">${hrs(dayMins(d))}</span></th>`).join('')}<th class="tot">Hours</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="9" class="empty">No one on the team yet.</td></tr>`}</tbody>
+      <tfoot><tr><th scope="row">Total</th>${days.map(d => `<td class="tot">${inWeek.filter(s => s.date === d).length} shift${inWeek.filter(s => s.date === d).length === 1 ? '' : 's'}</td>`).join('')}<td class="tot"><b>${hrs(total)}</b></td></tr></tfoot></table></div>
+    <p class="sub">Red outline = a problem (time off, unavailable or double-booked) – hover to see it. ${M && data.reminders && data.reminders.on ? 'People with an email get reminders before their shifts, and an email when a shift in the next 7 days changes.' : ''}</p>`;
 }
 function shiftSheet(){
   const s = sheet, d = s.date, team = (data.users || []).filter(u => u.active).map(u => u.name);
@@ -320,6 +356,28 @@ function pickSheet(kind){
         <button class="btn go">Create</button></form>`}</div></div>`;
 }
 
+
+/* ----- reminders ----- */
+function viewReminders(){
+  const me = data.me, R = data.reminders || {}, cal = API && me.cal ? API + '?cal=' + encodeURIComponent(me.cal) : '';
+  const webcal = cal.replace(/^https?:/, 'webcal:');
+  const modes = [['Night before', 'Night before at ' + t12(R.night || '19:00')], ['Before shift', R.hours + ' hours before'], ['Both', 'Both'], ['Off', 'Off']];
+  return `${back()}<h1>Shift reminders</h1>
+    ${R.on ? '' : '<div class="hint">Reminder emails are turned off for the shop right now. A manager can turn them on in the sheet\'s Settings.</div>'}
+    <div class="card"><form class="stack" data-form="reminders">
+      <label class="f">Email for reminders<input name="email" type="email" autocomplete="email" maxlength="120" value="${esc(me.email || '')}" placeholder="you@example.com"></label>
+      <div class="f" style="display:grid;gap:6px;font-size:.8rem;color:var(--muted)">When to remind me
+        ${modes.map(([k, n]) => `<label class="opt"><input type="radio" name="mode" value="${k}" ${me.reminders === k ? 'checked' : ''}> ${esc(n)}</label>`).join('')}</div>
+      <div class="btns"><button class="btn go">Save</button>${me.email ? '<button type="button" class="btn" data-testmail>Send me a test</button>' : ''}</div>
+      <p class="sub" style="margin:0">You'll also get an email if a manager adds, moves or removes one of your shifts in the next 7 days (unless reminders are Off).</p></form></div>
+    ${cal ? `<h2>Put your shifts in your calendar</h2><div class="card"><div class="row" style="display:block">
+      <p style="margin:0 0 10px">Your shifts show up in your phone's calendar and update by themselves, with an alert 1 hour before each one.</p>
+      <div class="btns"><a class="btn go" href="${esc(webcal)}">iPhone / Mac calendar</a><button class="btn" data-copycal="${esc(cal)}">Copy link for Google Calendar</button></div>
+      <details class="more" style="margin-top:10px"><summary>How to set it up</summary><div class="sub">
+        <b>iPhone:</b> tap the first button, then Subscribe. To get the 1-hour alerts: Settings › Calendar › Accounts › Subscribed Calendars › this calendar › turn off <i>Remove Alerts</i>.<br>
+        <b>Google Calendar:</b> copy the link, then on a computer go to calendar.google.com › Other calendars › + › From URL, and paste it. Google refreshes it every few hours, so last-minute changes can show up late – the emails are faster.<br>
+        This link is private to you. If you get a new sign-in code, the old link stops working and you'll need to add it again.</div></details></div></div>` : ''}`;
+}
 /* ----- announcements ----- */
 function annRow(a){
   return `<div class="row" style="display:block"><div style="display:flex;gap:8px;align-items:baseline"><b style="flex:1">${a.pinned ? '📌 ' : ''}${esc(a.title)}</b><span class="sub">${ago(a.posted)}</span></div>
@@ -426,7 +484,7 @@ function viewTeam(){
       <div class="btns"><button class="btn go">${u ? 'Save' : 'Add to the team'}</button>${u ? '<button type="button" class="btn" data-canceledit>Cancel</button>' : ''}</div></form>`;
   const row = u => editUser === u.id ? `<div class="row" style="display:block;padding:0">${form(u)}</div>` : `<div class="row" style="display:block;${u.active ? '' : 'opacity:.55'}">
       <div style="display:flex;gap:8px;align-items:center"><b style="flex:1">${esc(u.name)}</b><span class="pill ${u.role === 'Manager' ? 'warn' : u.role === 'Lead' ? 'ok' : 'mute'}">${esc(u.role)}</span>${u.active ? '' : '<span class="pill mute">Off</span>'}</div>
-      <div class="sub">${u.phone ? esc(u.phone) + ' · ' : ''}Code ${showCode[u.id] ? `<b>${esc(u.code)}</b>` : '••••'} <button class="btn sm" data-showcode="${esc(u.id)}" style="padding:4px 8px;min-height:0">${showCode[u.id] ? 'Hide' : 'Show'}</button></div>
+      <div class="sub">${u.email ? (u.reminders === 'Off' ? 'Reminders off' : 'Reminders: ' + esc(u.reminders)) : 'No email – no reminders'}</div><div class="sub">${u.phone ? esc(u.phone) + ' · ' : ''}Code ${showCode[u.id] ? `<b>${esc(u.code)}</b>` : '••••'} <button class="btn sm" data-showcode="${esc(u.id)}" style="padding:4px 8px;min-height:0">${showCode[u.id] ? 'Hide' : 'Show'}</button></div>
       <div class="btns" style="margin-top:8px"><button class="btn sm" data-edit="${esc(u.id)}">Edit</button><button class="btn sm" data-newcode="${esc(u.id)}" data-name="${esc(u.name)}">New code</button>
         <button class="btn sm" data-active="${esc(u.id)}" data-to="${u.active ? 0 : 1}" data-name="${esc(u.name)}">${u.active ? 'Turn off' : 'Turn on'}</button></div></div>`;
   return `${back()}<h1>Team</h1>${addedCard}<div class="card">${us.map(row).join('')}</div>
@@ -435,7 +493,7 @@ function viewTeam(){
 }
 
 function viewMore(){
-  const views = { requests: viewRequests, avail: viewAvail, time: viewTime, news: viewNews, resources: viewResources, tests: viewTests, team: () => mgr() ? viewTeam() : viewMoreList() };
+  const views = { reminders: viewReminders, requests: viewRequests, avail: viewAvail, time: viewTime, news: viewNews, resources: viewResources, tests: viewTests, team: () => mgr() ? viewTeam() : viewMoreList() };
   return views[moreView] ? views[moreView]() : viewMoreList();
 }
 function viewMoreList(){
@@ -448,6 +506,7 @@ function viewMoreList(){
       ${item('time', mgr() ? 'Time sheets' : 'My time', mgr() ? 'Hours, late arrivals, missed punches' : 'Your hours vs. the schedule')}
       ${item('requests', 'Time off & swaps', '', pill(pendN))}
       ${item('avail', 'Availability', 'When you can\'t work')}
+      ${item('reminders', 'Shift reminders', data.me.reminders === 'Off' || !data.me.email ? 'Off' : data.me.reminders + ' · ' + esc(data.me.email))}
       ${item('resources', 'Resources', 'Recipes, guides, handbooks')}
       ${item('tests', 'Training & tests', 'Certification tests and your results')}
       ${mgr() ? item('team', 'Team & sign-in codes') : ''}</div>
@@ -470,6 +529,7 @@ function render(){
   $('#tabs').innerHTML = TABS.map(([k, n, ic]) => `<button data-tab="${k}" ${tab === k ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}${badge[k] ? `<span class="n">${badge[k]}</span>` : ''}</button>`).join('');
   const typingIn = document.activeElement && document.activeElement.closest && document.activeElement.closest('.composer');
   const draft = typingIn ? document.activeElement.value : null;
+  document.body.classList.toggle('wide', wide() && tab === 'schedule');
   $('#main').innerHTML = tab === 'lists' ? viewLists() : tab === 'schedule' ? viewSchedule() : tab === 'chat' ? viewChat() : tab === 'more' ? viewMore() : viewToday();
   if (draft !== null){ const t = $('.composer textarea'); if (t){ t.value = draft; t.focus(); } }
   $('#overlay').innerHTML = viewer ? viewViewer() : sheet ? (sheet.kind === 'shift' ? shiftSheet() : sheet.kind === 'punch' ? punchSheet() : pickSheet(sheet.kind)) : '';
@@ -487,7 +547,8 @@ function getPos(){
   return new Promise(res => navigator.geolocation.getCurrentPosition(p => res({ lat: p.coords.latitude, lng: p.coords.longitude }), () => res({}), { timeout: 7000, maximumAge: 60000, enableHighAccuracy: true }));
 }
 document.addEventListener('click', async e => {
-  const b = e.target.closest('button, a[data-x]'); if (!b) return;
+  const b = e.target.closest('button, a[data-x]');
+  if (!b){ const td = e.target.closest && e.target.closest('td[data-cell]'); if (td && mgr()){ const [who, date] = td.dataset.cell.split('|'); sheet = { kind: 'shift', date, name: who, start: (data.presets[0] || {}).start, end: (data.presets[0] || {}).end }; render(); } return; }
   const d = b.dataset;
   if (b.id === 'refresh'){ if (chat.open) { openChat(chat.open); return; } refresh().then(r => { if (r) toast('Up to date'); }); return; }
   if (d.install !== undefined && installEvt){ installEvt.prompt(); installEvt = null; return; }
@@ -531,9 +592,16 @@ document.addEventListener('click', async e => {
   if (d.unann){ if (!confirm('Remove this announcement for everyone?')) return; data.announcements = data.announcements.filter(x => x.id !== d.unann); render(); act('unannounce', { id: d.unann }); return; }
   if (d.decide){ const note = d.ok === '1' ? '' : (prompt('Reason (optional) – they will see it') || ''); act('decide', { id: d.decide, approve: d.ok, note }).then(r => { if (r) toast(d.ok === '1' ? 'Approved' : 'Denied'); }); return; }
   if (d.cancelreq){ act('cancelRequest', { id: d.cancelreq }); return; }
-  if (d.addshift){ sheet = { kind: 'shift', date: d.addshift, name: '', start: (data.presets[0] || {}).start, end: (data.presets[0] || {}).end }; render(); return; }
+  if (d.addshift){ sheet = { kind: 'shift', date: d.addshift, name: d.who || '', start: (data.presets[0] || {}).start, end: (data.presets[0] || {}).end }; render(); return; }
   if (d.editshift){ const s = data.shifts.find(x => x.id === d.editshift); if (s) { sheet = Object.assign({ kind: 'shift' }, s); render(); } return; }
   if (d.delshift){ if (!confirm('Delete this shift?')) return; data.shifts = data.shifts.filter(s => s.id !== d.delshift); sheet = null; render(); act('deleteShift', { id: d.delshift }); return; }
+  if (d.sendweek !== undefined){ if (!confirm('Email everyone working the week of ' + shortDay(week) + ' their shifts?')) return; b.disabled = true;
+    act('sendWeek', { from: week }).then(r => { if (r && r.result) toast('Sent to ' + r.result.sent + (r.result.noEmail.length ? ' · no email for ' + r.result.noEmail.map(first).join(', ') : '')); }); return; }
+  if (d.testmail !== undefined){ b.disabled = true; act('testReminder').then(r => { if (r) toast('Sent – check your inbox (and spam)'); }); return; }
+  if (d.copycal){ (navigator.clipboard ? navigator.clipboard.writeText(d.copycal) : Promise.reject()).then(() => toast('Link copied'), () => prompt('Copy this link', d.copycal)); return; }
+  if (d.nohint !== undefined){ save('pt-nohint', '1'); render(); return; }
+  if (d.thisweek !== undefined){ week = monday(T()); render(); return; }
+  if (d.print !== undefined){ window.print(); return; }
   if (d.copyweek !== undefined){ if (!confirm('Copy last week\'s shifts into this week? Shifts already here stay; exact duplicates are skipped.')) return; act('copyWeek', { from: plus(week, -7), to: week }).then(r => { if (r) toast('Copied'); }); return; }
   if (d.clearweek !== undefined){ if (!confirm('Delete every shift this week?')) return; act('clearWeek', { from: week }).then(r => { if (r) toast('Week cleared'); }); return; }
   if (d.delavail){ data.availability = data.availability.filter(a => a.id !== d.delavail); render(); act('delAvail', { id: d.delavail }); return; }
@@ -565,6 +633,8 @@ document.addEventListener('submit', async e => {
     if (p.end <= p.start){ toast('The end has to be after the start'); return; }
     sheet = null; act('saveShift', p).then(r => { if (r) toast(p.id ? 'Shift saved' : 'Shift added'); }); return; }
   if (kind === 'punch'){ const p = { id: sheet && sheet.id || '', name: v('name'), date: v('date'), in: v('in'), out: v('out'), note: v('note') }; sheet = null; act('savePunch', p).then(r => { if (r) toast('Saved'); }); return; }
+  if (kind === 'reminders'){ const mode = (f.querySelector('input[name=mode]:checked') || {}).value || '';
+    act('myReminders', { email: v('email'), mode }).then(r => { if (r) toast(mode === 'Off' ? 'Reminders off' : v('email') ? 'Saved' : 'Saved – add an email to get them'); }); return; }
   if (kind === 'avail'){ const day = v('day') === 'date' ? v('date') : v('day'); if (!day){ toast('Pick a date'); return; } act('addAvail', { day, from: v('from'), to: v('to'), note: v('note') }).then(r => { if (r) toast('Added'); }); f.reset(); return; }
   if (kind === 'group'){ const members = [...f.querySelectorAll('input[name=m]:checked')].map(x => x.value).join(','); sheet = null; act('newChannel', { kind: 'group', name: v('name'), members }).then(r => { if (r) toast('Group made'); }); return; }
   if (kind === 'channel'){ sheet = null; act('newChannel', { kind: 'channel', name: v('name'), who: v('who') }).then(r => { if (r) toast('Channel made'); }); return; }
@@ -578,6 +648,22 @@ document.addEventListener('submit', async e => {
   }
 });
 
+
+let dragId = '';
+document.addEventListener('dragstart', e => { const c = e.target.closest && e.target.closest('[data-drag]'); if (!c) return; dragId = c.dataset.drag; e.dataTransfer.effectAllowed = 'copyMove'; e.dataTransfer.setData('text/plain', dragId); c.classList.add('dragging'); });
+document.addEventListener('dragend', e => { dragId = ''; document.querySelectorAll('.dragging,.drop').forEach(x => x.classList.remove('dragging', 'drop')); });
+document.addEventListener('dragover', e => { const td = dragId && e.target.closest && e.target.closest('[data-cell]'); if (!td) return; e.preventDefault(); e.dataTransfer.dropEffect = e.altKey ? 'copy' : 'move';
+  document.querySelectorAll('.drop').forEach(x => x !== td && x.classList.remove('drop')); td.classList.add('drop'); });
+document.addEventListener('drop', e => {
+  const td = dragId && e.target.closest && e.target.closest('[data-cell]'); if (!td) return; e.preventDefault();
+  const s = (data.shifts || []).find(x => x.id === dragId); dragId = ''; if (!s) return;
+  const [name, date] = td.dataset.cell.split('|'), copy = e.altKey;
+  if (!copy && name === s.name && date === s.date) return render();
+  const p = { id: copy ? '' : s.id, name, date, start: s.start, end: s.end, position: s.position, notes: s.notes };
+  if (copy) data.shifts.push(Object.assign({}, s, { id: 'tmp' + Date.now(), name, date })); else Object.assign(s, { name, date });
+  render(); act('saveShift', p).then(r => { if (r) toast(copy ? 'Copied to ' + first(name) + ', ' + shortDay(date) : 'Moved to ' + first(name) + ', ' + shortDay(date)); });
+});
+WIDE.addEventListener && WIDE.addEventListener('change', () => { if (data) render(); });
 const typing = () => { const a = document.activeElement; return a && /INPUT|TEXTAREA|SELECT/.test(a.tagName); };
 document.addEventListener('visibilitychange', () => { if (document.hidden || !TOKEN) return; if (chat.open && tab === 'chat') openChat(chat.open); else if (!pending && !typing() && !sheet) refresh(); });
 setInterval(() => { if (!document.hidden && TOKEN && !pending && !typing() && !sheet && !viewer && !chat.open) refresh(); }, 90000);

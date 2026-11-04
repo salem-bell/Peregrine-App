@@ -11,11 +11,12 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '2.0';
+const VERSION = '2.1';
 const ROLES = ['Manager', 'Lead', 'Staff'];
+const REMIND_ = ['Night before', 'Before shift', 'Both', 'Off'];
 
 const TABS = {
-  'Users':         ['Name', 'Role', 'Code', 'Active', 'Phone', 'Email', 'User ID (do not edit)', 'Sign-in version (do not edit)', 'Added'],
+  'Users':         ['Name', 'Role', 'Code', 'Active', 'Phone', 'Email', 'User ID (do not edit)', 'Sign-in version (do not edit)', 'Added', 'Reminders (blank = default)'],
   'Checklists':    ['List', 'Task', 'Order', 'Active', 'Notes', 'Days (blank = every day)', 'Section'],
   'Checklist log': ['Date', 'List', 'Task', 'Done by', 'Done at'],
   'Announcements': ['ID', 'Posted', 'From', 'Title', 'Message', 'Pinned', 'Active', 'Must acknowledge'],
@@ -30,6 +31,7 @@ const TABS = {
   'Requests':      ['ID', 'Created', 'From', 'Type', 'Date', 'Details', 'Status', 'Decided by', 'Decided at', 'Note'],
   'Links':         ['Name', 'Link', 'Who sees it', 'Order'],
   'Audit':         ['When', 'Who', 'What'],
+  'Reminder log':  ['Key', 'Name', 'Kind', 'Sent'],
 };
 
 const SETTINGS = [
@@ -45,6 +47,11 @@ const SETTINGS = [
   ['Shop location (lat, lng)',     '',                          'Optional. e.g. 32.9483, -96.7299. Clock-ins farther away than the distance below are flagged (not blocked).'],
   ['Clock-in distance (meters)',   '200',                       'How close to the shop counts as "at the shop".'],
   ['Test portal',                  '',                          'The certification test web app address (ends in /exec). Test links that start with ? are added to it.'],
+  ['Shift reminder emails',        'On',                        'On or Off. Emails each person before their shifts (they pick when in the app, under More › Reminders). Needs an email on the Users tab.'],
+  ['Night-before reminder at',     '19:00',                     'When the night-before email goes out (24-hour time).'],
+  ['Hours-before reminder',        '2',                         'How many hours before a shift the second reminder goes out.'],
+  ['Default reminders',            'Night before',              'For people who haven\'t chosen: Night before, Before shift, Both or Off.'],
+  ['Email schedule changes',       'On',                        'On or Off. When a manager adds, moves or deletes a shift in the next 7 days, the people affected get an email.'],
   ['Test results sheet',           'https://docs.google.com/spreadsheets/d/1dl8gi2SkPfYOjBzX0syp2WkWssg7t-rpZChpeZNm5QQ/edit', 'The sheet the tests write results to. The app shows each person their own results.'],
 ];
 
@@ -71,8 +78,9 @@ function setup() {
   if (!props.getProperty('SECRET')) props.setProperty('SECRET', newId_(40));
   fixUsers_(ss, isCopy);
   ['Start Here', 'Settings', 'Users'].forEach((n, i) => move_(ss, n, i + 1));
-  ['Checklist log', 'Reads', 'Audit', 'Messages', 'Chat reads'].forEach(n => { const s = ss.getSheetByName(n); if (s) { move_(ss, n, ss.getSheets().length); s.setTabColor('#bbbbbb'); } });
+  ['Checklist log', 'Reads', 'Audit', 'Messages', 'Chat reads', 'Reminder log'].forEach(n => { const s = ss.getSheetByName(n); if (s) { move_(ss, n, ss.getSheets().length); s.setTabColor('#bbbbbb'); } });
   const blank = ss.getSheetByName('Sheet1'); if (blank && blank.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(blank);
+  if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'sendShiftReminders')) ScriptApp.newTrigger('sendShiftReminders').timeBased().everyMinutes(15).create();
   ss.setActiveSheet(ss.getSheetByName('Start Here'));
   SpreadsheetApp.getUi().alert('Set up done', 'Next: add your team on the Users tab, then follow Step 3 on the Start Here tab.', SpreadsheetApp.getUi().ButtonSet.OK);
 }
@@ -95,7 +103,7 @@ function buildTab_(ss, name) {
   const text = c => sh.getRange(2, c, 999, 1).setNumberFormat('@');
   const list = (c, items) => sh.getRange(2, c, 999, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(items, true).setAllowInvalid(false).build());
   const box = c => sh.getRange(2, c, 999, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build());
-  if (name === 'Users') { list(2, ROLES); text(3); box(4); sh.getRange(2, 7, 999, 2).setFontColor('#888888'); }
+  if (name === 'Users') { list(2, ROLES); text(3); box(4); sh.getRange(2, 7, 999, 2).setFontColor('#888888'); list(10, REMIND_); }
   if (name === 'Shifts') { text(1); text(2); text(3); }
   if (name === 'Requests') { text(5); list(4, ['Time off', 'Swap', 'Cover']); list(7, ['Pending', 'Approved', 'Denied', 'Cancelled']); }
   if (name === 'Checklists') box(4);
@@ -190,7 +198,10 @@ function writeStartHere_(ss) {
 /* ============================================================
    Web API (the phone app posts JSON here)
    ============================================================ */
-function doGet() { return json_({ ok: true, app: 'Peregrine Team', version: VERSION }); }
+function doGet(e) {
+  if (e && e.parameter && e.parameter.cal) return calendar_(String(e.parameter.cal));
+  return json_({ ok: true, app: 'Peregrine Team', version: VERSION });
+}
 
 function doPost(e) {
   let body = {};
@@ -255,7 +266,8 @@ function api_(token, p) {
   const ss = SpreadsheetApp.getActive(), me = who_(ss, token);
   if (p.action) {
     const lock = LockService.getScriptLock(); lock.waitLock(20000);
-    try { act_(ss, me, p); SpreadsheetApp.flush(); } finally { lock.releaseLock(); }
+    let res; try { res = act_(ss, me, p); SpreadsheetApp.flush(); } finally { lock.releaseLock(); }
+    const out = state_(ss, who_(ss, token)); if (res !== undefined) out.result = res; return out;
   } else { const lock = LockService.getScriptLock(); if (lock.tryLock(8000)) lock.releaseLock(); }
   return state_(ss, who_(ss, token));
 }
@@ -269,7 +281,8 @@ function state_(ss, me) {
   if (isMgr && vals_(ss.getSheetByName('Users')).some(r => String(r[0]).trim() && (!r[6] || !/^\d{4}$/.test(String(r[2]))))) fixUsers_(ss, false);
   const users = vals_(ss.getSheetByName('Users')).filter(r => String(r[0]).trim());
   const active = users.filter(r => truthy_(r[3])).map(r => String(r[0]));
-  const out = { ok: true, version: VERSION, today, updated: new Date().toISOString(), name: setting_(ss, 'Shop name') || 'Team', me: { name: me.name, role: me.role, id: me.id }, team: active,
+  const out = { ok: true, version: VERSION, today, updated: new Date().toISOString(), name: setting_(ss, 'Shop name') || 'Team', me: { name: me.name, role: me.role, id: me.id, email: String(users.find(r => String(r[6]) === me.id)[5] || ''), reminders: remindMode_(ss, users.find(r => String(r[6]) === me.id)), cal: calKey_(users.find(r => String(r[6]) === me.id)) },
+    reminders: { on: !/^off$/i.test(setting_(ss, 'Shift reminder emails')), night: setting_(ss, 'Night-before reminder at') || '19:00', hours: Number(setting_(ss, 'Hours-before reminder')) || 2 }, team: active,
     people: users.filter(r => truthy_(r[3]) && r[6]).map(r => ({ id: String(r[6]), name: String(r[0]) })) };
 
   // Checklists (today, plus the last 7 days for leads and managers)
@@ -334,7 +347,7 @@ function state_(ss, me) {
       file: !!driveId_(r[1]), order: Number(r[3]) || 0 })).sort((a, b) => a.order - b.order);
 
   // Team (managers)
-  if (isMgr) out.users = users.map(r => ({ id: String(r[6] || ''), name: String(r[0]), role: role_(r[1]), code: String(r[2] || ''), active: truthy_(r[3]), phone: String(r[4] || ''), email: String(r[5] || '') }));
+  if (isMgr) out.users = users.map(r => ({ id: String(r[6] || ''), name: String(r[0]), role: role_(r[1]), code: String(r[2] || ''), active: truthy_(r[3]), phone: String(r[4] || ''), email: String(r[5] || ''), reminders: remindMode_(ss, r) }));
   return out;
 }
 
@@ -445,17 +458,49 @@ function act_(ss, me, p) {
       const name = String(p.name || '');
       if (!vals_(tab('Users')).some(r => String(r[0]) === name && truthy_(r[3]))) throw new Error('Pick someone on the team');
       const sh = tab('Shifts'), row = [p.date, p.start, p.end, name, clean_(p.position, 40), clean_(p.notes, 200)];
+      const after = { date: p.date, start: p.start, end: p.end, name, position: row[4], notes: row[5] };
       if (p.id) {
         const v = vals_(sh), i = v.findIndex(r => String(r[6]) === String(p.id)); if (i < 0) throw new Error('That shift was removed');
-        sh.getRange(i + 2, 1, 1, 6).setValues([row]); return;
+        const before = shiftObj_(v[i], tz);
+        sh.getRange(i + 2, 1, 1, 6).setValues([row]);
+        if (before.name !== name) { changed_(ss, before, null, tz); changed_(ss, null, after, tz); }
+        else if (before.date !== after.date || before.start !== after.start || before.end !== after.end || before.position !== after.position) changed_(ss, before, after, tz);
+        return;
       }
-      sh.getRange(sh.getLastRow() + 1, 1, 1, 7).setValues([row.concat(newId_(10))]); return;
+      sh.getRange(sh.getLastRow() + 1, 1, 1, 7).setValues([row.concat(newId_(10))]); changed_(ss, null, after, tz); return;
     }
     case 'deleteShift': {
       needMgr();
       const sh = tab('Shifts'), v = vals_(sh);
       const i = p.id ? v.findIndex(r => String(r[6]) === String(p.id)) : v.findIndex(r => ymd_(r[0], tz) === p.date && hhmm_(r[1], tz) === p.start && String(r[3]).trim() === p.name);
-      if (i >= 0) sh.deleteRow(i + 2); return;
+      if (i >= 0) { const before = shiftObj_(v[i], tz); sh.deleteRow(i + 2); changed_(ss, before, null, tz); } return;
+    }
+    case 'sendWeek': {                                // email everyone working that week their shifts
+      needMgr();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(p.from || ''))) throw new Error('Pick a week');
+      const to = addDays_(p.from, 6), shifts = vals_(tab('Shifts')).map(r => shiftObj_(r, tz)).filter(x => x.name && x.date >= p.from && x.date <= to);
+      const people = vals_(tab('Users')).filter(r => truthy_(r[3]));
+      let sent = 0, noEmail = [];
+      people.forEach(u => {
+        const mine = shifts.filter(x => x.name === String(u[0])).sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start)); if (!mine.length) return;
+        const email = String(u[5] || '').trim(); if (!/@/.test(email)) { noEmail.push(String(u[0])); return; }
+        const lines = mine.map(x => longDay_(x.date) + ':  ' + t12_(x.start) + '–' + t12_(x.end) + (x.position ? '  (' + x.position + ')' : '') + (x.notes ? ' – ' + x.notes : ''));
+        if (mail_(ss, email, 'Your schedule for the week of ' + longDay_(p.from), 'Hi ' + String(u[0]).split(' ')[0] + ',', 'Here are your shifts for the week of ' + longDay_(p.from) + ':', lines)) sent++;
+      });
+      audit('Emailed the schedule for the week of ' + p.from + ' to ' + sent + ' people');
+      return { sent, noEmail };
+    }
+    case 'myReminders': {                             // each person sets their own email and reminder choice
+      const sh = tab('Users'), email = clean_(p.email, 120), mode = REMIND_.indexOf(String(p.mode)) >= 0 ? String(p.mode) : '';
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('That email doesn\'t look right');
+      sh.getRange(me.row, 6).setValue(email); sh.getRange(me.row, 10).setValue(mode);
+      return;
+    }
+    case 'testReminder': {
+      const u = vals_(tab('Users'))[me.row - 2], email = String(u[5] || '').trim();
+      if (!/@/.test(email)) throw new Error('Add your email first');
+      if (!mail_(ss, email, 'Test from the ' + (setting_(ss, 'Shop name') || 'team') + ' app', 'Hi ' + me.name.split(' ')[0] + ',', 'Shift reminders will come to this address.', [])) throw new Error('The daily email limit is used up – try tomorrow');
+      return { sent: 1 };
     }
     case 'copyWeek': {                                // copy one week's shifts onto another week (skips exact duplicates)
       needMgr();
@@ -652,6 +697,97 @@ function file_(token, id) {
    Helpers
    ============================================================ */
 /** Writes a row into the first row whose first cell is empty (checkbox columns make appendRow jump to the bottom). */
+/* ============================================================
+   Shift reminders, schedule-change emails and the calendar feed
+   ============================================================ */
+function shiftObj_(r, tz) { return { id: String(r[6] || ''), date: ymd_(r[0], tz), start: hhmm_(r[1], tz), end: hhmm_(r[2], tz), name: String(r[3] || '').trim(), position: String(r[4] || ''), notes: String(r[5] || '') }; }
+function remindMode_(ss, r) { const v = r && String(r[9] || '').trim(); return REMIND_.indexOf(v) >= 0 ? v : (REMIND_.indexOf(setting_(ss, 'Default reminders')) >= 0 ? setting_(ss, 'Default reminders') : 'Night before'); }
+function t12_(hm) { let [h, m] = String(hm).split(':').map(Number); const ap = h >= 12 ? 'pm' : 'am'; h = h % 12 || 12; return h + (m ? ':' + pad_(m) : '') + ap; }
+function longDay_(ymd) { const [y, m, d] = ymd.split('-').map(Number), x = new Date(Date.UTC(y, m - 1, d)); return ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][x.getUTCDay()] + ', ' + ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m - 1] + ' ' + d; }
+function appUrl_(ss) { return setting_(ss, 'App address') || ''; }
+
+/** Sends one plain email from the shop. Returns false (never throws) when mail can't go out. */
+function mail_(ss, to, subject, hello, intro, lines) {
+  try {
+    if (MailApp.getRemainingDailyQuota() < 1) return false;
+    const shop = setting_(ss, 'Shop name') || 'Team', app = appUrl_(ss);
+    const text = [hello, '', intro].concat(lines.length ? [''].concat(lines) : []).concat(['', app ? 'Open the app: ' + app : '', 'Change your reminders in the app: More › Reminders.']).join('\n');
+    const html = '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5;color:#231F20">' + '<p>' + esc_(hello) + '</p><p>' + esc_(intro) + '</p>' +
+      (lines.length ? '<p style="border-left:4px solid #D29229;padding-left:12px">' + lines.map(esc_).join('<br>') + '</p>' : '') +
+      (app ? '<p><a href="' + esc_(app) + '" style="color:#1E5662">Open the app</a></p>' : '') + '<p style="color:#6B6661;font-size:13px">Change your reminders in the app: More › Reminders.</p></div>';
+    MailApp.sendEmail({ to, subject, body: text, htmlBody: html, name: shop });
+    return true;
+  } catch (e) { return false; }
+}
+
+/** A shift in the next 7 days was added, moved or removed: tell whoever it affects. Never blocks the change. */
+function changed_(ss, before, after, tz) {
+  try {
+    if (/^off$/i.test(setting_(ss, 'Email schedule changes'))) return;
+    const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd'), soon = d => d && d >= today && d <= addDays_(today, 7);
+    const x = after || before; if (!soon((before || {}).date) && !soon((after || {}).date)) return;
+    const u = vals_(ss.getSheetByName('Users')).find(r => String(r[0]).trim() === x.name && truthy_(r[3])); if (!u || !/@/.test(String(u[5])) || remindMode_(ss, u) === 'Off') return;
+    const desc = s => longDay_(s.date) + ', ' + t12_(s.start) + '–' + t12_(s.end) + (s.position ? ' (' + s.position + ')' : '');
+    const subject = !before ? 'New shift: ' + desc(after) : !after ? 'Shift removed: ' + desc(before) : 'Shift changed: ' + desc(after);
+    const lines = !before ? ['Added: ' + desc(after)] : !after ? ['Removed: ' + desc(before)] : ['Was: ' + desc(before), 'Now: ' + desc(after)];
+    mail_(ss, String(u[5]).trim(), subject, 'Hi ' + x.name.split(' ')[0] + ',', 'Your schedule changed.', lines);
+  } catch (e) {}
+}
+
+/** Runs every 15 minutes (set up by Team › 1. Set up). Night-before and hours-before emails, each sent once per shift and time. */
+function sendShiftReminders() {
+  const ss = SpreadsheetApp.getActive(); if (/^off$/i.test(setting_(ss, 'Shift reminder emails'))) return;
+  const tz = ss.getSpreadsheetTimeZone(), now = new Date(), today = Utilities.formatDate(now, tz, 'yyyy-MM-dd'), hm = Utilities.formatDate(now, tz, 'HH:mm');
+  const night = /^\d{1,2}:\d{2}$/.test(setting_(ss, 'Night-before reminder at')) ? hhmm_(setting_(ss, 'Night-before reminder at'), tz) : '19:00';
+  const hours = Number(setting_(ss, 'Hours-before reminder')) || 2;
+  const users = vals_(ss.getSheetByName('Users')).filter(r => String(r[0]).trim() && truthy_(r[3]));
+  const log = ss.getSheetByName('Reminder log') || (buildTab_(ss, 'Reminder log'), ss.getSheetByName('Reminder log'));
+  const sent = {}; vals_(log).forEach(r => { sent[String(r[0])] = 1; });
+  const shifts = vals_(ss.getSheetByName('Shifts')).map(r => shiftObj_(r, tz)).filter(x => x.name && (x.date === today || x.date === addDays_(today, 1)));
+  const rows = [];
+  shifts.forEach(x => {
+    const u = users.find(r => String(r[0]).trim() === x.name); if (!u || !/@/.test(String(u[5]))) return;
+    const mode = remindMode_(ss, u); if (mode === 'Off') return;
+    const startAt = atLocal_(x.date, x.start, tz).getTime(), left = (startAt - now.getTime()) / 36e5;
+    const want = [];
+    if ((mode === 'Night before' || mode === 'Both') && x.date === addDays_(today, 1) && hm >= night) want.push('night');
+    if ((mode === 'Before shift' || mode === 'Both') && left > 0 && left <= hours) want.push('soon');
+    want.forEach(kind => {
+      const key = [x.id || x.date, kind, x.date, x.start].join('|'); if (sent[key]) return;
+      const crew = shifts.filter(o => o !== x && o.date === x.date && o.start < x.end && o.end > x.start).map(o => o.name.split(' ')[0]);
+      const when = kind === 'night' ? 'tomorrow' : 'today';
+      const lines = [longDay_(x.date) + ':  ' + t12_(x.start) + '–' + t12_(x.end) + (x.position ? '  (' + x.position + ')' : '')].concat(x.notes ? ['Note: ' + x.notes] : []).concat(crew.length ? ['Working with: ' + crew.join(', ')] : []);
+      if (mail_(ss, String(u[5]).trim(), 'Reminder: you work ' + when + ' at ' + t12_(x.start), 'Hi ' + x.name.split(' ')[0] + ',', 'A reminder that you work ' + when + '.', lines)) { rows.push([key, x.name, kind, new Date()]); sent[key] = 1; }
+    });
+  });
+  if (rows.length) log.getRange(log.getLastRow() + 1, 1, rows.length, 4).setValues(rows);
+  const v = vals_(log); if (v.length > 2000) log.deleteRows(2, v.length - 1500);   // keep the log small
+}
+
+/** A private calendar address per person. A new sign-in code changes it, so an old address stops working. */
+function calKey_(r) {
+  if (!r || !r[6]) return '';
+  const sig = Utilities.computeHmacSha256Signature(['cal', r[6], String(r[2]).trim(), Number(r[7]) || 1].join('|'), PropertiesService.getScriptProperties().getProperty('SECRET') || 'x')
+    .map(b => ('0' + ((b + 256) % 256).toString(16)).slice(-2)).join('').slice(0, 24);
+  return r[6] + '.' + sig;
+}
+function calendar_(key) {
+  const ss = SpreadsheetApp.getActive(), tz = ss.getSpreadsheetTimeZone(), id = key.split('.')[0];
+  const u = vals_(ss.getSheetByName('Users')).find(r => String(r[6]) === id && truthy_(r[3]));
+  if (!u || calKey_(u) !== key) return ContentService.createTextOutput('Not found').setMimeType(ContentService.MimeType.TEXT);
+  const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd'), shop = setting_(ss, 'Shop name') || 'Work';
+  const stamp = d => Utilities.formatDate(d, 'UTC', "yyyyMMdd'T'HHmmss'Z'"), icsEsc = t => String(t).replace(/([,;\\])/g, '\\$1').replace(/\n/g, '\\n');
+  const L = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Peregrine Team//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', 'X-WR-CALNAME:' + icsEsc(shop + ' shifts'), 'REFRESH-INTERVAL;VALUE=DURATION:PT1H', 'X-PUBLISHED-TTL:PT1H'];
+  vals_(ss.getSheetByName('Shifts')).map(r => shiftObj_(r, tz)).filter(x => x.name === String(u[0]).trim() && x.date >= addDays_(today, -14) && x.date <= addDays_(today, 60)).forEach(x => {
+    const a = atLocal_(x.date, x.start, tz), b = atLocal_(x.end < x.start ? addDays_(x.date, 1) : x.date, x.end, tz);
+    L.push('BEGIN:VEVENT', 'UID:' + (x.id || x.date + x.start) + '@peregrine-team', 'DTSTAMP:' + stamp(new Date()), 'DTSTART:' + stamp(a), 'DTEND:' + stamp(b),
+      'SUMMARY:' + icsEsc(shop + (x.position ? ' – ' + x.position : ' shift')), 'LOCATION:' + icsEsc(shop), x.notes ? 'DESCRIPTION:' + icsEsc(x.notes) : null,
+      'BEGIN:VALARM', 'ACTION:DISPLAY', 'DESCRIPTION:' + icsEsc('Shift at ' + t12_(x.start)), 'TRIGGER:-PT1H', 'END:VALARM', 'END:VEVENT');
+  });
+  L.push('END:VCALENDAR');
+  return ContentService.createTextOutput(L.filter(Boolean).join('\r\n')).setMimeType(ContentService.MimeType.ICAL);
+}
+
 /** Clocked in, not out, within the last 16 hours. An older open punch is a forgotten clock-out and doesn't block a new clock-in. */
 function openPunch_(r) { return r[3] && !r[4] && Date.now() - toMs_(r[3]) < 16 * 36e5; }
 function put_(sh, row) {
