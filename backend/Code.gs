@@ -11,16 +11,22 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '1.1';
+const VERSION = '2.0';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 
 const TABS = {
   'Users':         ['Name', 'Role', 'Code', 'Active', 'Phone', 'Email', 'User ID (do not edit)', 'Sign-in version (do not edit)', 'Added'],
   'Checklists':    ['List', 'Task', 'Order', 'Active', 'Notes', 'Days (blank = every day)', 'Section'],
   'Checklist log': ['Date', 'List', 'Task', 'Done by', 'Done at'],
-  'Announcements': ['ID', 'Posted', 'From', 'Title', 'Message', 'Pinned', 'Active'],
+  'Announcements': ['ID', 'Posted', 'From', 'Title', 'Message', 'Pinned', 'Active', 'Must acknowledge'],
   'Reads':         ['Announcement ID', 'Name', 'Read at'],
-  'Shifts':        ['Date', 'Start', 'End', 'Name', 'Position', 'Notes'],
+  'Shifts':        ['Date', 'Start', 'End', 'Name', 'Position', 'Notes', 'ID (do not edit)'],
+  'Availability':  ['ID', 'Name', 'Day or date', 'From', 'To', 'Note', 'Updated'],
+  'Time clock':    ['ID', 'Name', 'Date', 'In', 'Out', 'Shift ID', 'Clock-in place', 'Clock-out place', 'Note', 'Edited by'],
+  'Channels':      ['ID', 'Name', 'Kind', 'Members (user IDs; blank = everyone)', 'Who sees it', 'Created by', 'Created'],
+  'Messages':      ['ID', 'Channel ID', 'From ID', 'From', 'Sent', 'Text'],
+  'Chat reads':    ['User ID', 'Channel ID', 'Read at'],
+  'Tests':         ['Test', 'Link (full address, or ?level=… to add to Settings › Test portal)', 'Results tab', 'Must have passed first', 'Who sees it', 'Order'],
   'Requests':      ['ID', 'Created', 'From', 'Type', 'Date', 'Details', 'Status', 'Decided by', 'Decided at', 'Note'],
   'Links':         ['Name', 'Link', 'Who sees it', 'Order'],
   'Audit':         ['When', 'Who', 'What'],
@@ -34,6 +40,12 @@ const SETTINGS = [
   ['Schedule days shown',          '14',                        'How many days ahead the schedule shows.'],
   ['Server address',               '',                          'Paste the Web app URL from Deploy › Manage deployments (ends in /exec). The menu uses it.'],
   ['App address',                  'https://salem-bell.github.io/Peregrine-App/', 'Where staff open the app and add it to their home screen.'],
+  ['Shift presets',                'Open 06:30-12:30, Mid 10:00-15:00, Close 12:00-18:05', 'One-tap shift times on the schedule editor: Name HH:MM-HH:MM, separated by commas.'],
+  ['Late after (minutes)',         '5',                         'Clock-ins this many minutes after the shift start count as late.'],
+  ['Shop location (lat, lng)',     '',                          'Optional. e.g. 32.9483, -96.7299. Clock-ins farther away than the distance below are flagged (not blocked).'],
+  ['Clock-in distance (meters)',   '200',                       'How close to the shop counts as "at the shop".'],
+  ['Test portal',                  '',                          'The certification test web app address (ends in /exec). Test links that start with ? are added to it.'],
+  ['Test results sheet',           'https://docs.google.com/spreadsheets/d/1dl8gi2SkPfYOjBzX0syp2WkWssg7t-rpZChpeZNm5QQ/edit', 'The sheet the tests write results to. The app shows each person their own results.'],
 ];
 
 /* ============================================================
@@ -59,7 +71,7 @@ function setup() {
   if (!props.getProperty('SECRET')) props.setProperty('SECRET', newId_(40));
   fixUsers_(ss, isCopy);
   ['Start Here', 'Settings', 'Users'].forEach((n, i) => move_(ss, n, i + 1));
-  ['Checklist log', 'Reads', 'Audit'].forEach(n => { const s = ss.getSheetByName(n); if (s) { move_(ss, n, ss.getSheets().length); s.setTabColor('#bbbbbb'); } });
+  ['Checklist log', 'Reads', 'Audit', 'Messages', 'Chat reads'].forEach(n => { const s = ss.getSheetByName(n); if (s) { move_(ss, n, ss.getSheets().length); s.setTabColor('#bbbbbb'); } });
   const blank = ss.getSheetByName('Sheet1'); if (blank && blank.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(blank);
   ss.setActiveSheet(ss.getSheetByName('Start Here'));
   SpreadsheetApp.getUi().alert('Set up done', 'Next: add your team on the Users tab, then follow Step 3 on the Start Here tab.', SpreadsheetApp.getUi().ButtonSet.OK);
@@ -89,6 +101,10 @@ function buildTab_(ss, name) {
   if (name === 'Checklists') box(4);
   if (name === 'Announcements') { box(6); box(7); sh.getRange(2, 5, 999, 1).setWrap(true); }
   if (name === 'Links') list(3, ['Everyone', 'Leads and managers', 'Managers']);
+  if (name === 'Tests') list(5, ['Everyone', 'Leads and managers', 'Managers']);
+  if (name === 'Availability') { text(3); text(4); text(5); }
+  if (name === 'Time clock') { text(3); }
+  if (name === 'Channels') { list(3, ['channel', 'group', 'dm']); list(5, ['Everyone', 'Leads and managers', 'Managers']); }
   const ex = examples_(name);
   if (ex.length) sh.getRange(2, 1, ex.length, header.length).setValues(ex.map(r => header.map((_, i) => r[i] === undefined ? '' : r[i])));
   sh.autoResizeColumns(1, header.length);
@@ -104,6 +120,12 @@ function examples_(name) {
       ['Closing', 'Backflush and clean group heads', 1, true], ['Closing', 'Clean grinders and empty hoppers', 2, true], ['Closing', 'Close the drawer', 3, true], ['Closing', 'Take out trash and recycling', 4, true]];
     case 'Announcements': return [['a01', new Date(), 'Salem', 'Welcome to the team app', 'Check your checklists, the schedule and announcements here. Tap "Got it" so I know you saw this.', true, true]];
     case 'Shifts': return [[d(0), '06:30', '12:30', 'Salem', 'Lead'], [d(1), '12:00', '18:00', 'Salem', 'Bar']];
+    case 'Channels': return [['general', 'General', 'channel', '', 'Everyone', 'Setup', new Date()], ['training', 'Training', 'channel', '', 'Everyone', 'Setup', new Date()],
+                             ['inventory', 'Inventory', 'channel', '', 'Everyone', 'Setup', new Date()], ['schedule', 'Schedule & swaps', 'channel', '', 'Everyone', 'Setup', new Date()],
+                             ['leads', 'Leads & managers', 'channel', '', 'Leads and managers', 'Setup', new Date()]];
+    case 'Tests': return [['Barista Level I', '?level=1', 'Barista Level I', '', 'Everyone', 1], ['Barista Level II', '?level=2', 'Barista Level II', 'Barista Level I', 'Everyone', 2],
+                          ['Coffee Knowledge', '', 'Coffee Knowledge', 'Barista Level I', 'Everyone', 3], ['Lead (Level III)', '?level=3', 'Lead (Level III)', 'Barista Level II', 'Everyone', 4],
+                          ['Level IV – Coffee Knowledge', '?level=4', 'Level IV Coffee Knowledge', 'Lead (Level III)', 'Leads and managers', 5]];
     case 'Links': return [['Employee manual', 'https://drive.google.com', 'Everyone', 1], ['Drink build menu', 'https://drive.google.com', 'Everyone', 2], ['Payroll & admin', 'https://drive.google.com', 'Managers', 3]];
   }
   return [];
@@ -177,6 +199,8 @@ function doPost(e) {
     if (body.fn === 'info') return json_(info_());
     if (body.fn === 'signIn') return json_(signIn_(body.name, body.code));
     if (body.fn === 'api') return json_(api_(body.token, body.p || {}));
+    if (body.fn === 'chat') return json_(chat_(body.token, body.channel, body.text));
+    if (body.fn === 'file') return json_(file_(body.token, body.id));
     return json_({ error: 'Unknown request' });
   } catch (err) {
     return json_({ error: String(err && err.message || err).replace(/^Error:\s*/, '') });
@@ -245,7 +269,8 @@ function state_(ss, me) {
   if (isMgr && vals_(ss.getSheetByName('Users')).some(r => String(r[0]).trim() && (!r[6] || !/^\d{4}$/.test(String(r[2]))))) fixUsers_(ss, false);
   const users = vals_(ss.getSheetByName('Users')).filter(r => String(r[0]).trim());
   const active = users.filter(r => truthy_(r[3])).map(r => String(r[0]));
-  const out = { ok: true, version: VERSION, today, updated: new Date().toISOString(), name: setting_(ss, 'Shop name') || 'Team', me: { name: me.name, role: me.role }, team: active };
+  const out = { ok: true, version: VERSION, today, updated: new Date().toISOString(), name: setting_(ss, 'Shop name') || 'Team', me: { name: me.name, role: me.role, id: me.id }, team: active,
+    people: users.filter(r => truthy_(r[3]) && r[6]).map(r => ({ id: String(r[6]), name: String(r[0]) })) };
 
   // Checklists (today, plus the last 7 days for leads and managers)
   const lists = splitList_(setting_(ss, 'Checklist lists'));
@@ -266,16 +291,36 @@ function state_(ss, me) {
   const reads = vals_(ss.getSheetByName('Reads'));
   out.announcements = vals_(ss.getSheetByName('Announcements')).filter(r => r[0] && r[3] && truthy_(r[6])).map(r => {
     const id = String(r[0]), readers = reads.filter(x => String(x[0]) === id).map(x => String(x[1]));
-    const a = { id, posted: toIso_(r[1]), from: String(r[2] || ''), title: String(r[3]), message: String(r[4] || ''), pinned: truthy_(r[5]), read: readers.indexOf(me.name) >= 0 };
+    const a = { id, posted: toIso_(r[1]), from: String(r[2] || ''), title: String(r[3]), message: String(r[4] || ''), pinned: truthy_(r[5]), mustAck: truthy_(r[7]) && Date.now() - toMs_(r[1]) < 30 * 864e5, read: readers.indexOf(me.name) >= 0 || String(r[2] || '') === me.name };   // the poster has read their own; must-read lapses after 30 days
     if (isLead) { a.readers = readers.filter(n => active.indexOf(n) >= 0); a.notRead = active.filter(n => readers.indexOf(n) < 0 && n !== a.from); }
     return a;
   }).sort((a, b) => (b.pinned - a.pinned) || String(b.posted).localeCompare(String(a.posted))).slice(0, 40);
 
   // Schedule
-  const days = Math.min(Math.max(Number(setting_(ss, 'Schedule days shown')) || 14, 1), 60), last = addDays_(today, days - 1);
-  out.shifts = vals_(ss.getSheetByName('Shifts')).map(r => ({ date: ymd_(r[0], tz), start: hhmm_(r[1], tz), end: hhmm_(r[2], tz), name: String(r[3] || '').trim(), position: String(r[4] || ''), notes: String(r[5] || '') }))
-    .filter(s => s.date && s.name && s.date >= today && s.date <= last).sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
+  const days = Math.min(Math.max(Number(setting_(ss, 'Schedule days shown')) || 14, 1), 60);
+  const first = addDays_(today, -21), last = addDays_(today, isMgr ? 56 : days - 1);   // the past three weeks feed the time sheets
+  ensureShiftIds_(ss);
+  out.shifts = vals_(ss.getSheetByName('Shifts')).map(r => ({ id: String(r[6] || ''), date: ymd_(r[0], tz), start: hhmm_(r[1], tz), end: hhmm_(r[2], tz), name: String(r[3] || '').trim(), position: String(r[4] || ''), notes: String(r[5] || '') }))
+    .filter(s => s.date && s.name && s.date >= first && s.date <= last).sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
   out.positions = splitList_(setting_(ss, 'Positions'));
+  out.presets = splitList_(setting_(ss, 'Shift presets')).map(x => { const m = x.match(/^(.*?)\s*(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})$/); return m ? { name: m[1].trim(), start: hhmm_(m[2], tz), end: hhmm_(m[3], tz) } : null; }).filter(Boolean);
+  out.availability = vals_(ss.getSheetByName('Availability')).filter(r => r[0] && r[1] && (isMgr || String(r[1]).trim() === me.name))
+    .map(r => ({ id: String(r[0]), name: String(r[1]).trim(), day: /^\d{4}-/.test(ymd_(r[2], tz)) ? ymd_(r[2], tz) : String(r[2] || '').trim().slice(0, 3), from: hhmm_(r[3], tz), to: hhmm_(r[4], tz), note: String(r[5] || '') }))
+    .filter(a => !/^\d{4}-/.test(a.day) || a.day >= addDays_(today, -1));
+
+  // Time clock
+  out.lateAfter = Number(setting_(ss, 'Late after (minutes)')) || 5;
+  out.geo = /\d/.test(setting_(ss, 'Shop location (lat, lng)'));
+  out.punches = vals_(ss.getSheetByName('Time clock')).filter(r => r[0] && r[1] && (isMgr || String(r[1]).trim() === me.name))
+    .map(r => ({ id: String(r[0]), name: String(r[1]).trim(), date: ymd_(r[2], tz), in: toIso_(r[3]), out: toIso_(r[4]), shift: String(r[5] || ''), inPlace: String(r[6] || ''), outPlace: String(r[7] || ''), note: String(r[8] || ''), edited: String(r[9] || '') }))
+    .filter(x => x.date >= first).sort((a, b) => String(a.in).localeCompare(String(b.in)));
+  out.open = out.punches.find(x => x.name === me.name && x.in && !x.out && Date.now() - new Date(x.in) < 16 * 36e5) || null;   // older ones are missed clock-outs for a manager to fix
+
+  // Chat (channel list + unread counts; messages load separately)
+  out.channels = channels_(ss, me, users);
+
+  // Tests
+  out.tests = tests_(ss, me);
 
   // Requests
   const reqs = vals_(ss.getSheetByName('Requests')).filter(r => r[0]).map(r => ({ id: String(r[0]), created: toIso_(r[1]), from: String(r[2] || ''), type: String(r[3] || ''), date: ymd_(r[4], tz) || String(r[4] || ''),
@@ -284,8 +329,9 @@ function state_(ss, me) {
 
   // Links
   const can = w => /^manager/i.test(w) ? isMgr : /lead/i.test(w) ? isLead : true;
-  out.links = vals_(ss.getSheetByName('Links')).filter(r => r[0] && /^https?:\/\//.test(String(r[1])) && can(String(r[2] || 'Everyone')))
-    .map(r => ({ name: String(r[0]), url: String(r[1]), order: Number(r[3]) || 0 })).sort((a, b) => a.order - b.order);
+  out.links = vals_(ss.getSheetByName('Links')).map((r, i) => ({ r, i })).filter(({ r }) => r[0] && /^https?:\/\//.test(String(r[1])) && can(String(r[2] || 'Everyone')))
+    .map(({ r, i }) => ({ id: 'L' + (i + 2), name: String(r[0]), url: String(r[1]), tier: /^manager/i.test(String(r[2])) ? 'Managers' : /lead/i.test(String(r[2])) ? 'Leads and managers' : 'Everyone',
+      file: !!driveId_(r[1]), order: Number(r[3]) || 0 })).sort((a, b) => a.order - b.order);
 
   // Team (managers)
   if (isMgr) out.users = users.map(r => ({ id: String(r[6] || ''), name: String(r[0]), role: role_(r[1]), code: String(r[2] || ''), active: truthy_(r[3]), phone: String(r[4] || ''), email: String(r[5] || '') }));
@@ -321,7 +367,7 @@ function act_(ss, me, p) {
     case 'announce': {
       if (!isLead) throw new Error('Only leads and managers can post announcements');
       const title = clean_(p.title, 150); if (!title) throw new Error('Add a title');
-      const sh = tab('Announcements'); put_(sh, [nextId_(sh, 'a'), new Date(), me.name, title, clean_(p.message, 3000), p.pinned === '1', true]);
+      const sh = tab('Announcements'); put_(sh, [nextId_(sh, 'a'), new Date(), me.name, title, clean_(p.message, 3000), p.pinned === '1', true, p.mustAck === '1']);
       return;
     }
     case 'unannounce': {
@@ -384,35 +430,230 @@ function act_(ss, me, p) {
       sh.getRange(row, 1, 1, 2).setValues([[newName, role]]);
       sh.getRange(row, 5, 1, 2).setValues([[clean_(p.phone, 40), clean_(p.email, 120)]]);
       if (newName !== name) {                         // keep the schedule pointing at the same person
-        const shifts = tab('Shifts'), sv = vals_(shifts);
-        sv.forEach((x, j) => { if (String(x[3]).trim() === name) shifts.getRange(j + 2, 4).setValue(newName); });
+        [['Shifts', 4], ['Availability', 2], ['Time clock', 2], ['Requests', 3]].forEach(([t, c]) => {
+          const sh2 = ss.getSheetByName(t); if (!sh2) return;
+          vals_(sh2).forEach((x, j) => { if (String(x[c - 1]).trim() === name) sh2.getRange(j + 2, c).setValue(newName); });
+        });
       }
       audit('Updated ' + name + (newName !== name ? ' → ' + newName : '') + ' (' + role + ')');
       return;
     }
     // ----- schedule (managers) -----
-    case 'addShift': {
+    case 'addShift': case 'saveShift': {
       needMgr();
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(p.date || '')) || !/^\d{2}:\d{2}$/.test(String(p.start || '')) || !/^\d{2}:\d{2}$/.test(String(p.end || ''))) throw new Error('A shift needs a date, a start and an end');
       const name = String(p.name || '');
       if (!vals_(tab('Users')).some(r => String(r[0]) === name && truthy_(r[3]))) throw new Error('Pick someone on the team');
-      tab('Shifts').appendRow([p.date, p.start, p.end, name, clean_(p.position, 40), clean_(p.notes, 200)]);
-      return;
+      const sh = tab('Shifts'), row = [p.date, p.start, p.end, name, clean_(p.position, 40), clean_(p.notes, 200)];
+      if (p.id) {
+        const v = vals_(sh), i = v.findIndex(r => String(r[6]) === String(p.id)); if (i < 0) throw new Error('That shift was removed');
+        sh.getRange(i + 2, 1, 1, 6).setValues([row]); return;
+      }
+      sh.getRange(sh.getLastRow() + 1, 1, 1, 7).setValues([row.concat(newId_(10))]); return;
     }
     case 'deleteShift': {
       needMgr();
       const sh = tab('Shifts'), v = vals_(sh);
-      const i = v.findIndex(r => ymd_(r[0], tz) === p.date && hhmm_(r[1], tz) === p.start && String(r[3]).trim() === p.name);
+      const i = p.id ? v.findIndex(r => String(r[6]) === String(p.id)) : v.findIndex(r => ymd_(r[0], tz) === p.date && hhmm_(r[1], tz) === p.start && String(r[3]).trim() === p.name);
       if (i >= 0) sh.deleteRow(i + 2); return;
+    }
+    case 'copyWeek': {                                // copy one week's shifts onto another week (skips exact duplicates)
+      needMgr();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(p.from || '')) || !/^\d{4}-\d{2}-\d{2}$/.test(String(p.to || ''))) throw new Error('Pick the weeks');
+      const sh = tab('Shifts'), v = vals_(sh).map(r => ({ date: ymd_(r[0], tz), start: hhmm_(r[1], tz), end: hhmm_(r[2], tz), name: String(r[3]).trim(), pos: String(r[4] || ''), notes: String(r[5] || '') }));
+      const shift = (d, n) => addDays_(d, n), off = Math.round((Date.parse(p.to) - Date.parse(p.from)) / 864e5);
+      const src = v.filter(x => x.date >= p.from && x.date <= shift(p.from, 6));
+      const have = {}; v.forEach(x => { have[x.date + '|' + x.start + '|' + x.name] = 1; });
+      const active = vals_(tab('Users')).filter(r => truthy_(r[3])).map(r => String(r[0]));
+      const rows = src.filter(x => active.indexOf(x.name) >= 0).map(x => [shift(x.date, off), x.start, x.end, x.name, x.pos, x.notes, newId_(10)]).filter(r => !have[r[0] + '|' + r[1] + '|' + r[3]]);
+      if (rows.length) sh.getRange(sh.getLastRow() + 1, 1, rows.length, 7).setValues(rows);
+      audit('Copied ' + rows.length + ' shifts from the week of ' + p.from + ' to ' + p.to); return;
+    }
+    case 'clearWeek': {
+      needMgr();
+      const sh = tab('Shifts'), v = vals_(sh);
+      for (let i = v.length - 1; i >= 0; i--) { const d = ymd_(v[i][0], tz); if (d >= p.from && d <= addDays_(p.from, 6)) sh.deleteRow(i + 2); }
+      audit('Cleared the schedule for the week of ' + p.from); return;
+    }
+    // ----- availability -----
+    case 'addAvail': {
+      const name = isMgr && p.name ? String(p.name) : me.name;
+      const day = String(p.day || ''); if (!/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)$/.test(day) && !/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error('Pick a day of the week or a date');
+      const from = /^\d{2}:\d{2}$/.test(p.from || '') ? p.from : '', to = /^\d{2}:\d{2}$/.test(p.to || '') ? p.to : '';
+      if ((from && !to) || (!from && to) || (from && to <= from)) throw new Error('Give a start and an end time, or leave both blank for all day');
+      tab('Availability').appendRow([nextId_(tab('Availability'), 'u'), name, day, from, to, clean_(p.note, 200), new Date()]); return;
+    }
+    case 'delAvail': {
+      const sh = tab('Availability'), r = findRow_(sh, p.id); if (!r) return;
+      if (String(sh.getRange(r, 2).getValue()).trim() !== me.name && !isMgr) throw new Error('That isn\'t yours');
+      sh.deleteRow(r); return;
+    }
+    // ----- time clock -----
+    case 'clockIn': {
+      const sh = tab('Time clock'), v = vals_(sh);
+      if (v.some(r => String(r[1]).trim() === me.name && openPunch_(r))) throw new Error('You\'re already clocked in');
+      const now = new Date(), shiftId = matchShift_(ss, me.name, now, tz);
+      put_(sh, [nextId_(sh, 'p'), me.name, today, now, '', shiftId, place_(ss, p.lat, p.lng), '', '', '']); return;
+    }
+    case 'clockOut': {
+      const sh = tab('Time clock'), v = vals_(sh), i = v.findIndex(r => String(r[1]).trim() === me.name && openPunch_(r));
+      if (i < 0) throw new Error('You aren\'t clocked in');
+      sh.getRange(i + 2, 5).setValue(new Date()); sh.getRange(i + 2, 8).setValue(place_(ss, p.lat, p.lng)); return;
+    }
+    case 'savePunch': {                               // managers fix or add a punch
+      needMgr();
+      const name = String(p.name || ''), date = String(p.date || '');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(p.in || '')) throw new Error('A punch needs a date and a clock-in time');
+      if (!vals_(tab('Users')).some(r => String(r[0]) === name)) throw new Error('Pick someone on the team');
+      const tIn = atLocal_(date, p.in, tz), tOut = /^\d{2}:\d{2}$/.test(p.out || '') ? atLocal_(p.out < p.in ? addDays_(date, 1) : date, p.out, tz) : '';
+      const sh = tab('Time clock');
+      if (p.id) {
+        const r = findRow_(sh, p.id); if (!r) throw new Error('That punch was removed');
+        sh.getRange(r, 2, 1, 4).setValues([[name, date, tIn, tOut]]); sh.getRange(r, 9, 1, 2).setValues([[clean_(p.note, 200), me.name]]);
+        audit('Edited ' + name + '\'s punch on ' + date + ' (' + p.in + '–' + (p.out || '…') + ')'); return;
+      }
+      put_(sh, [nextId_(sh, 'p'), name, date, tIn, tOut, matchShift_(ss, name, tIn, tz), 'added by manager', tOut ? 'added by manager' : '', clean_(p.note, 200), me.name]);
+      audit('Added a punch for ' + name + ' on ' + date); return;
+    }
+    case 'deletePunch': { needMgr(); const sh = tab('Time clock'), r = findRow_(sh, p.id); if (r) { audit('Deleted punch ' + p.id + ' for ' + sh.getRange(r, 2).getValue()); sh.deleteRow(r); } return; }
+    // ----- chat -----
+    case 'newChannel': {
+      const kind = p.kind === 'group' ? 'group' : 'channel';
+      if (kind === 'channel' && !isLead) throw new Error('Only leads and managers can make channels – start a group instead');
+      const name = clean_(p.name, 40); if (!name) throw new Error('Give it a name');
+      const ids = vals_(tab('Users')).filter(r => truthy_(r[3])).map(r => String(r[6]));
+      let members = String(p.members || '').split(',').filter(x => ids.indexOf(x) >= 0);
+      if (kind === 'group') { if (members.indexOf(me.id) < 0) members.push(me.id); if (members.length < 2) throw new Error('Pick at least one other person'); } else members = [];
+      tab('Channels').appendRow(['c' + newId_(8), name, kind, members.join(','), kind === 'channel' && /lead|manager/i.test(p.who || '') ? String(p.who) : 'Everyone', me.name, new Date()]); return;
+    }
+    case 'deleteMessage': {
+      const sh = tab('Messages'), r = findRow_(sh, p.id); if (!r) return;
+      if (String(sh.getRange(r, 3).getValue()) !== me.id && !isMgr) throw new Error('You can only delete your own messages');
+      sh.deleteRow(r); return;
     }
   }
   throw new Error('Unknown action');
 }
 
 /* ============================================================
+   Schedule, time clock, chat, tests, files
+   ============================================================ */
+function ensureShiftIds_(ss) {
+  const sh = ss.getSheetByName('Shifts'), v = vals_(sh);
+  v.forEach((r, i) => { if (r[0] && r[3] && !r[6]) sh.getRange(i + 2, 7).setValue(newId_(10)); });   // rows typed straight into the sheet
+}
+function atLocal_(ymd, hm, tz) { return Utilities.parseDate(ymd + ' ' + hm, tz, 'yyyy-MM-dd HH:mm'); }
+/** The shift this clock-in belongs to: same person, same day, starting within 3 hours (or already running). */
+function matchShift_(ss, name, when, tz) {
+  const d = Utilities.formatDate(when, tz, 'yyyy-MM-dd'), t = when.getTime();
+  let best = '', gap = Infinity;
+  vals_(ss.getSheetByName('Shifts')).forEach(r => {
+    if (String(r[3]).trim() !== name || ymd_(r[0], tz) !== d || !r[6]) return;
+    const s = atLocal_(d, hhmm_(r[1], tz) || '00:00', tz).getTime(), e = atLocal_(d, hhmm_(r[2], tz) || '23:59', tz).getTime();
+    const g = t >= s && t <= e ? 0 : Math.abs(t - s);
+    if (g < gap && g <= 3 * 36e5) { gap = g; best = String(r[6]); }
+  });
+  return best;
+}
+/** "at the shop" / "away (1.2 km)" / "no location" – a flag for managers, never a block. */
+function place_(ss, lat, lng) {
+  const m = setting_(ss, 'Shop location (lat, lng)').match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/);
+  if (!m) return lat !== undefined && lat !== '' ? 'location shared' : '';
+  if (lat === undefined || lat === '' || isNaN(Number(lat))) return 'no location';
+  const R = 6371000, rad = x => x * Math.PI / 180, a1 = rad(Number(m[1])), a2 = rad(Number(lat)), dl = rad(Number(lng) - Number(m[2])), da = a2 - a1;
+  const dist = 2 * R * Math.asin(Math.sqrt(Math.sin(da / 2) ** 2 + Math.cos(a1) * Math.cos(a2) * Math.sin(dl / 2) ** 2));
+  const max = Number(setting_(ss, 'Clock-in distance (meters)')) || 200;
+  return dist <= max ? 'at the shop' : 'away (' + (dist < 1000 ? Math.round(dist) + ' m' : (dist / 1000).toFixed(1) + ' km') + ')';
+}
+
+const tierOk_ = (me, w) => /^manager/i.test(w) ? me.role === 'Manager' : /lead/i.test(w) ? me.role !== 'Staff' : true;
+/** Channels this person can see, with unread counts and the last message. DMs are 'dm-<id>-<id>'. */
+function channels_(ss, me, users) {
+  const byId = {}; users.forEach(r => { byId[String(r[6])] = String(r[0]); });
+  const reads = {}; vals_(ss.getSheetByName('Chat reads')).forEach(r => { if (String(r[0]) === me.id) reads[String(r[1])] = toMs_(r[2]); });
+  const msgs = vals_(ss.getSheetByName('Messages'));
+  const list = vals_(ss.getSheetByName('Channels')).filter(r => r[0] && r[1]).map(r => ({ id: String(r[0]), name: String(r[1]), kind: String(r[2] || 'channel'), members: String(r[3] || '').split(',').filter(Boolean), who: String(r[4] || 'Everyone') }))
+    .filter(c => c.kind === 'channel' ? tierOk_(me, c.who) : c.members.indexOf(me.id) >= 0);
+  // DMs exist as soon as there is a message
+  const dms = {}; msgs.forEach(m => { const c = String(m[1]); if (/^dm-/.test(c) && c.split('-').indexOf(me.id) > 0) dms[c] = 1; });
+  Object.keys(dms).forEach(c => { if (!list.some(x => x.id === c)) { const other = c.split('-').slice(1).find(x => x !== me.id) || me.id; list.push({ id: c, name: byId[other] || 'Former teammate', kind: 'dm', members: c.split('-').slice(1), who: '' }); } });
+  return list.map(c => {
+    const ms = msgs.filter(m => String(m[1]) === c.id), last = ms[ms.length - 1];
+    const seen = reads[c.id] || 0;
+    return { id: c.id, name: c.kind === 'group' && !c.name ? c.members.map(x => byId[x]).join(', ') : c.name, kind: c.kind, who: c.who,
+      members: c.kind === 'channel' ? [] : c.members.map(x => byId[x]).filter(Boolean),
+      unread: ms.filter(m => toMs_(m[4]) > seen && String(m[2]) !== me.id).length,
+      last: last ? { from: String(last[3]), text: String(last[5]).slice(0, 80), at: toIso_(last[4]) } : null };
+  }).sort((a, b) => (a.kind === 'channel' ? 0 : 1) - (b.kind === 'channel' ? 0 : 1) || String((b.last || {}).at || '').localeCompare(String((a.last || {}).at || '')));
+}
+/** Opens a channel (and marks it read), optionally sending a message first. Light: doesn't rebuild the whole app state. */
+function chat_(token, channel, text) {
+  const ss = SpreadsheetApp.getActive(), me = who_(ss, token), users = vals_(ss.getSheetByName('Users')).filter(r => String(r[0]).trim());
+  channel = String(channel || '');
+  let ok = channels_(ss, me, users).some(c => c.id === channel);
+  if (!ok && /^dm-/.test(channel)) {                 // a brand-new DM: both people must be active teammates
+    const ids = channel.split('-').slice(1), act = users.filter(r => truthy_(r[3])).map(r => String(r[6]));
+    ok = ids.length === 2 && ids.indexOf(me.id) >= 0 && ids.every(x => act.indexOf(x) >= 0) && channel === 'dm-' + ids.slice().sort().join('-');
+  }
+  if (!ok) throw new Error('You can\'t see that conversation');
+  const lock = LockService.getScriptLock(); lock.waitLock(15000);
+  try {
+    if (text !== undefined && String(text).trim()) {
+      const sh = ss.getSheetByName('Messages'); sh.appendRow([newId_(12), channel, me.id, me.name, new Date(), clean_(text, 2000)]);
+    }
+    const rs = ss.getSheetByName('Chat reads'), rv = vals_(rs), i = rv.findIndex(r => String(r[0]) === me.id && String(r[1]) === channel);
+    if (i >= 0) rs.getRange(i + 2, 3).setValue(new Date()); else rs.appendRow([me.id, channel, new Date()]);
+    SpreadsheetApp.flush();
+  } finally { lock.releaseLock(); }
+  const msgs = vals_(ss.getSheetByName('Messages')).filter(m => String(m[1]) === channel).slice(-150)
+    .map(m => ({ id: String(m[0]), fromId: String(m[2]), from: String(m[3]), at: toIso_(m[4]), text: String(m[5]) }));
+  return { ok: true, channel, me: me.id, messages: msgs, channels: channels_(ss, me, users) };
+}
+
+/** Each test with this person's latest result (from the results sheet) and whether it's unlocked. */
+function tests_(ss, me) {
+  const portal = setting_(ss, 'Test portal').replace(/[?#].*$/, '');
+  let book = null; try { const id = driveId_(setting_(ss, 'Test results sheet')); if (id) book = SpreadsheetApp.openById(id); } catch (_) {}
+  const mine = n => String(n || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const meN = mine(me.name), first = meN.split(' ')[0];
+  const results = {};
+  const rows = vals_(ss.getSheetByName('Tests')).filter(r => r[0] && tierOk_(me, String(r[4] || 'Everyone'))).sort((a, b) => (Number(a[5]) || 0) - (Number(b[5]) || 0));
+  rows.forEach(r => {
+    const tabName = String(r[2] || ''); if (!book || !tabName) return;
+    const sh = book.getSheetByName(tabName); if (!sh) return;
+    const v = vals_(sh).filter(x => { const n = mine(x[1]); return n === meN || (meN.indexOf(' ') < 0 && n.split(' ')[0] === first); });
+    const passed = v.some(x => /pass/i.test(String(x[4])) && !/not/i.test(String(x[4])));
+    const last = v[v.length - 1];
+    results[String(r[0])] = { taken: v.length, passed, last: last ? { when: toIso_(last[0]) || String(last[0]), score: String(last[2] || ''), outOf: String(last[3] || ''), result: String(last[4] || '') } : null };
+  });
+  return rows.map(r => {
+    const name = String(r[0]), link = String(r[1] || '').trim(), need = String(r[3] || '').trim(), res = results[name] || { taken: 0, passed: false, last: null };
+    const url = /^https?:\/\//.test(link) ? link : link && portal ? portal + (link.charAt(0) === '?' ? link : '?' + link) : '';
+    return { name, url, need, unlocked: !need || !!(results[need] && results[need].passed) || me.role === 'Manager', passed: res.passed, taken: res.taken, last: res.last };
+  });
+}
+
+function driveId_(url) { const m = String(url || '').match(/\/d\/([\w-]{20,})/) || String(url || '').match(/[?&]id=([\w-]{20,})/); return m ? m[1] : ''; }
+/** A resource as a PDF (Google Docs/Sheets/Slides are converted), only for people whose tier can see it. */
+function file_(token, id) {
+  const ss = SpreadsheetApp.getActive(), me = who_(ss, token);
+  const row = Number(String(id || '').replace(/^L/, '')); if (!(row >= 2)) throw new Error('Unknown file');
+  const r = ss.getSheetByName('Links').getRange(row, 1, 1, 4).getValues()[0];
+  if (!r[0] || !tierOk_(me, String(r[2] || 'Everyone'))) throw new Error('You don\'t have access to that');
+  const fid = driveId_(r[1]); if (!fid) throw new Error('That link isn\'t a Drive file');
+  const f = DriveApp.getFileById(fid), mime = f.getMimeType();
+  const blob = /^application\/vnd\.google-apps\./.test(mime) ? f.getAs('application/pdf') : f.getBlob();
+  const bytes = blob.getBytes();
+  if (bytes.length > 20 * 1024 * 1024) throw new Error('That file is too big to open in the app');
+  return { ok: true, name: String(r[0]), mime: blob.getContentType(), updated: f.getLastUpdated().toISOString(), data: Utilities.base64Encode(bytes) };
+}
+
+/* ============================================================
    Helpers
    ============================================================ */
 /** Writes a row into the first row whose first cell is empty (checkbox columns make appendRow jump to the bottom). */
+/** Clocked in, not out, within the last 16 hours. An older open punch is a forgotten clock-out and doesn't block a new clock-in. */
+function openPunch_(r) { return r[3] && !r[4] && Date.now() - toMs_(r[3]) < 16 * 36e5; }
 function put_(sh, row) {
   const n = Math.max(sh.getLastRow(), 1), col = sh.getRange(1, 1, n, 1).getValues();
   let r = col.findIndex((x, i) => i > 0 && String(x[0]).trim() === '') + 1;
@@ -452,6 +693,7 @@ function hhmm_(v, tz) {
   let h = Number(m[1]); const mi = Number(m[2] || 0); if (m[3]) { if (h === 12) h = 0; if (m[3][0] === 'p') h += 12; }
   return h < 24 && mi < 60 ? pad_(h) + ':' + pad_(mi) : '';
 }
+function toMs_(v) { if (v instanceof Date) return v.getTime(); const n = Number(v); return n > 1e11 ? n : (v ? Date.parse(v) || 0 : 0); }
 function toIso_(v) { if (v instanceof Date && !isNaN(v)) return v.toISOString(); const n = Number(v); return n > 1e11 ? new Date(n).toISOString() : ''; }
 function clean_(v, max) { let t = String(v == null ? '' : v).slice(0, max).trim(); return /^[=+\-@]/.test(t) ? "'" + t : t; }
 function esc_(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
