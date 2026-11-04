@@ -88,6 +88,40 @@ function conflicts(s){
   return out;
 }
 
+/* ---------- wage estimates (managers only; wages never reach staff phones) ---------- */
+const wageOf = n => { const u = (data.users || []).find(x => x.name === n); return u ? Number(u.wage) || 0 : 0; };
+const money = (x, cents) => '$' + (cents ? (Math.round(x * 100) / 100).toFixed(2) : Math.round(x).toLocaleString());
+/** items: [{key, name, date, sort, h}] within one Mon–Sun week. Overtime past the weekly threshold, in time order, at the overtime rate. */
+function labor(items){
+  const P = data.pay || { ot: 40, otRate: 1.5, extra: 0 }, k = 1 + (Number(P.extra) || 0) / 100;
+  const out = { byKey: {}, byPerson: {}, byDay: {}, hoursByPerson: {}, ot: {}, total: 0, missing: [] }, groups = {};
+  items.forEach(i => (groups[i.name] = groups[i.name] || []).push(i));
+  Object.keys(groups).forEach(n => {
+    const w = wageOf(n); if (!w) out.missing.push(n);
+    let acc = 0;
+    groups[n].sort((a, b) => a.sort.localeCompare(b.sort)).forEach(i => {
+      const reg = Math.max(0, Math.min(i.h, P.ot - acc)), over = i.h - reg; acc += i.h;
+      const c = (reg * w + over * w * P.otRate) * k;
+      out.byKey[i.key] = c; out.byPerson[n] = (out.byPerson[n] || 0) + c; out.byDay[i.date] = (out.byDay[i.date] || 0) + c; out.total += c;
+      out.hoursByPerson[n] = acc; if (over > 0) out.ot[n] = (out.ot[n] || 0) + over;
+    });
+  });
+  return out;
+}
+const shiftItems = list => list.map(s => ({ key: s.id, name: s.name, date: s.date, sort: s.date + s.start, h: Math.max(0, mins(s.end) - mins(s.start)) / 60 }));
+const punchItems = list => list.filter(p => p.in && p.out).map(p => ({ key: p.id, name: p.name, date: p.date, sort: p.in, h: Math.max(0, new Date(p.out) - new Date(p.in)) / 36e5 }));
+const weekShifts = wk => (data.shifts || []).filter(s => s.date >= wk && s.date <= plus(wk, 6));
+/** Live estimate for the shift being edited, counting the rest of that person's week (so overtime shows up). */
+function shiftEstimate(f){
+  const g = n => (f.elements.namedItem(n) || {}).value || '', name = g('name'), date = g('date'), start = g('start'), end = g('end');
+  if (!name || !date || !start || !end || end <= start) return '';
+  const w = wageOf(name); if (!w) return `<span class="sub">No wage set for ${esc(first(name))} – add it in Team to see an estimate.</span>`;
+  const wk = monday(date), others = weekShifts(wk).filter(s => s.id !== (sheet && sheet.id));
+  const L = labor(shiftItems(others.concat([{ id: '_this', name, date, start, end }])));
+  const h = (mins(end) - mins(start)) / 60, c = L.byKey._this || 0, regCost = h * w * (1 + (Number((data.pay || {}).extra) || 0) / 100);
+  return `<b>Est. ${money(c, true)}</b> <span class="sub">· ${hrs(h * 60)} × ${money(w, true)}/h${c > regCost + 0.005 ? ' · includes overtime' : ''} · ${esc(first(name))}'s week: ${hrs(L.hoursByPerson[name] * 60)}${L.ot[name] ? ' (' + hrs(L.ot[name] * 60) + ' overtime)' : ''}, ${money(L.byPerson[name] || 0)}</span>`;
+}
+
 /* ---------- time sheet logic ---------- */
 function weekReport(wk, name){
   const days = Array.from({ length: 7 }, (_, i) => plus(wk, i)), now = new Date();
@@ -211,7 +245,9 @@ function viewSchedule(){
       ${mgr() ? rowBtn(`data-addshift="${d}"`, '<div class="txt accent"><b>+ Add shift</b></div>') : ''}</div>`;
   };
   const totals = mgr() ? (() => { const t = {}; days.forEach(d => shiftsOn(d).forEach(s => { t[s.name] = (t[s.name] || 0) + mins(s.end) - mins(s.start); }));
-    const names = Object.keys(t).sort(); return names.length ? `<h2>Hours this week</h2><div class="card">${names.map(n => `<div class="row"><div class="txt">${esc(n)}</div><b>${hrs(t[n])}</b></div>`).join('')}</div>` : ''; })() : '';
+    const L = labor(shiftItems(weekShifts(week)));
+    const names = Object.keys(t).sort(); return names.length ? `<h2>Hours & estimated wages</h2><div class="card">${names.map(n => `<div class="row"><div class="txt">${esc(n)}${L.ot[n] ? ` <span class="pill warn">OT ${hrs(L.ot[n] * 60)}</span>` : ''}</div><b>${hrs(t[n])}</b><span class="money">${wageOf(n) ? money(L.byPerson[n] || 0) : '<span class="sub">no wage</span>'}</span></div>`).join('')}
+      <div class="row"><div class="txt"><b>Total</b></div><b>${hrs(Object.values(t).reduce((a, b) => a + b, 0))}</b><span class="money"><b>${money(L.total)}</b></span></div></div>` : ''; })() : '';
   const tools = mgr() ? `<div class="btns" style="margin:10px 0 4px"><button class="btn sm" data-copyweek>Copy last week here</button><button class="btn sm" data-clearweek>Clear this week</button><button class="btn sm" data-sendweek>Email this week to the team</button></div>` : '';
   return `<h1>Schedule</h1>${nav}${mgr() ? '' : `<div class="seg"><button data-mine="0" aria-pressed="${!schedMine}">Everyone</button><button data-mine="1" aria-pressed="${schedMine}">My shifts</button></div>`}
     ${tools}${days.map(dayCard).join('')}${totals}
@@ -223,11 +259,12 @@ function viewScheduleGrid(){
   const [lo, hi] = weekBounds(), days = Array.from({ length: 7 }, (_, i) => plus(week, i)), M = mgr();
   const label = week === monday(T()) ? 'This week' : week === plus(monday(T()), 7) ? 'Next week' : week === plus(monday(T()), -7) ? 'Last week' : 'Week of ' + shortDay(week);
   const order = { Manager: 0, Lead: 1, Staff: 2 };
-  const roster = (M ? (data.users || []).filter(u => u.active).map(u => ({ name: u.name, role: u.role })) : (data.people || []).map(p => ({ name: p.name, role: '' })));
+  const roster = (M ? (data.users || []).filter(u => u.active).map(u => ({ id: u.id, name: u.name, role: u.role, wage: u.wage })) : (data.people || []).map(p => ({ name: p.name, role: '' })));
   const inWeek = (data.shifts || []).filter(s => days.includes(s.date));
   inWeek.forEach(s => { if (!roster.some(p => p.name === s.name)) roster.push({ name: s.name, role: 'Former' }); });
   roster.sort((a, b) => (order[a.role] ?? 3) - (order[b.role] ?? 3) || a.name.localeCompare(b.name));
   const dayMins = d => inWeek.filter(s => s.date === d).reduce((n, s) => n + mins(s.end) - mins(s.start), 0);
+  const L = M ? labor(shiftItems(inWeek)) : null;
   const cell = (p, d) => {
     const list = inWeek.filter(s => s.name === p.name && s.date === d);
     const off = approvedOff(p.name, d), ask = pendingOff(p.name, d), un = unavail(p.name, d);
@@ -238,14 +275,17 @@ function viewScheduleGrid(){
     return `<td class="${d === T() ? 'today' : ''} ${off ? 'off' : un && !un.from ? 'un' : ''}" ${M ? `data-cell="${esc(p.name)}|${d}"` : ''}>${note}${chips}${M ? `<button class="addc" data-addshift="${d}" data-who="${esc(p.name)}" aria-label="Add a shift for ${esc(p.name)} on ${shortDay(d)}">+</button>` : ''}</td>`;
   };
   const rows = roster.map(p => { const m = inWeek.filter(s => s.name === p.name).reduce((n, s) => n + mins(s.end) - mins(s.start), 0);
-    return `<tr class="${p.name === data.me.name ? 'mine-row' : ''}"><th scope="row"><b>${esc(p.name)}</b><span class="sub">${esc(p.role || '')}</span></th>${days.map(d => cell(p, d)).join('')}<td class="tot">${m ? hrs(m) : ''}</td></tr>`; }).join('');
+    const wageIn = M && p.id ? `<label class="wagef"><span>$</span><input class="wage" inputmode="decimal" data-wage="${esc(p.id)}" value="${p.wage ? Number(p.wage).toFixed(2) : ''}" placeholder="wage" aria-label="${esc(p.name)} hourly wage"><span>/h</span></label>` : '';
+    return `<tr class="${p.name === data.me.name ? 'mine-row' : ''}"><th scope="row"><b>${esc(p.name)}</b><span class="sub">${esc(p.role || '')}</span>${wageIn}</th>${days.map(d => cell(p, d)).join('')}<td class="tot">${m ? hrs(m) : ''}${M && m ? `<div class="money">${p.wage ? money(L.byPerson[p.name] || 0) : '<span class="sub">no wage</span>'}</div>${L.ot[p.name] ? `<span class="pill warn">OT ${hrs(L.ot[p.name] * 60)}</span>` : ''}` : ''}</td></tr>`; }).join('');
   const total = inWeek.reduce((n, s) => n + mins(s.end) - mins(s.start), 0);
   return `<div class="gridhead"><h1 style="margin:0">Schedule</h1>
       <div class="weeknav" style="margin:0"><button class="btn sm" data-week="-7" ${week <= lo ? 'disabled' : ''} aria-label="Previous week">‹</button><div style="min-width:200px"><b>${label}</b><div class="sub">${shortDay(days[0])} – ${shortDay(days[6])}</div></div><button class="btn sm" data-week="7" ${week >= hi ? 'disabled' : ''} aria-label="Next week">›</button>${week !== monday(T()) ? '<button class="btn sm" data-thisweek>Today</button>' : ''}</div>
+      ${M ? `<div class="labor"><span class="sub">Est. wages</span><b>${money(L.total)}</b><span class="sub">${hrs(total)}${data.pay && data.pay.extra ? ' · incl. ' + data.pay.extra + '% extra' : ''}</span></div>` : ''}
       <div class="btns">${M ? '<button class="btn sm" data-copyweek>Copy last week</button><button class="btn sm" data-clearweek>Clear week</button><button class="btn sm go" data-sendweek>Email week to team</button>' : ''}<button class="btn sm" data-print>Print</button></div></div>
     <div class="gridwrap"><table class="grid"><thead><tr><th class="corner">${M ? '<span class="sub">Click a box to add. Drag to move, Alt-drag to copy.</span>' : ''}</th>${days.map(d => `<th class="${d === T() ? 'today' : ''}"><b>${DOW[pd(d).getDay()]}</b> ${pd(d).getDate()}<span class="sub">${hrs(dayMins(d))}</span></th>`).join('')}<th class="tot">Hours</th></tr></thead>
       <tbody>${rows || `<tr><td colspan="9" class="empty">No one on the team yet.</td></tr>`}</tbody>
-      <tfoot><tr><th scope="row">Total</th>${days.map(d => `<td class="tot">${inWeek.filter(s => s.date === d).length} shift${inWeek.filter(s => s.date === d).length === 1 ? '' : 's'}</td>`).join('')}<td class="tot"><b>${hrs(total)}</b></td></tr></tfoot></table></div>
+      <tfoot><tr><th scope="row">Total${M ? '<span class="sub">Estimated wages</span>' : ''}</th>${days.map(d => `<td class="tot">${inWeek.filter(s => s.date === d).length} shift${inWeek.filter(s => s.date === d).length === 1 ? '' : 's'}${M ? `<div class="money">${money(L.byDay[d] || 0)}</div>` : ''}</td>`).join('')}<td class="tot"><b>${hrs(total)}</b>${M ? `<div class="money"><b>${money(L.total)}</b></div>` : ''}</td></tr></tfoot></table></div>
+    ${M && L.missing.length ? `<p class="sub warn-t">No wage set for ${L.missing.map(n => esc(first(n))).join(', ')} – type it next to their name to include them.</p>` : ''}
     <p class="sub">Red outline = a problem (time off, unavailable or double-booked) – hover to see it. ${M && data.reminders && data.reminders.on ? 'People with an email get reminders before their shifts, and an email when a shift in the next 7 days changes.' : ''}</p>`;
 }
 function shiftSheet(){
@@ -260,6 +300,7 @@ function shiftSheet(){
       <label class="f">Position<select name="position"><option value=""></option>${(data.positions || []).map(p => `<option ${p === s.position ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
       <label class="f">Notes<input name="notes" maxlength="200" value="${esc(s.notes || '')}"></label>
       <label class="f">Date<input name="date" type="date" value="${esc(d)}"></label>
+      <div class="est" id="est" aria-live="polite"></div>
       <div class="btns"><button class="btn go">${s.id ? 'Save' : 'Add shift'}</button>${s.id ? `<button type="button" class="btn" data-delshift="${esc(s.id)}">Delete</button>` : ''}</div></form></div></div>`;
 }
 
@@ -290,15 +331,18 @@ function viewTime(){
     return canEdit ? rowBtn(`data-editpunch="${p ? esc(p.id) : ''}" data-pdate="${l.date}" data-pname="${esc(tsPerson)}" data-pstart="${s ? s.start : ''}" data-pend="${s ? s.end : ''}"`, inner + '<span class="sub">Fix</span>') : `<div class="row">${inner}</div>`; };
   if (!mgr() || tsPerson){
     const who = mgr() ? tsPerson : data.me.name, r = weekReport(tsWeek, who)[0] || { sched: 0, worked: 0, lines: [] };
+    const pay = mgr() && wageOf(who) ? [labor(shiftItems(weekShifts(tsWeek).filter(s => s.name === who))), labor(punchItems((data.punches || []).filter(p => p.name === who && p.date >= tsWeek && p.date <= plus(tsWeek, 6))))] : null;
     return `${back(mgr() ? 'time' : '')}<h1>${mgr() ? esc(who) : 'My time'}</h1>${nav}
-      <div class="card"><div class="row"><div class="txt">Scheduled</div><b>${hrs(r.sched)}</b></div><div class="row"><div class="txt">Worked</div><b>${hrs(r.worked)}</b></div></div>
+      <div class="card"><div class="row"><div class="txt">Scheduled</div><b>${hrs(r.sched)}</b>${pay ? `<span class="money">${money(pay[0].total)}</span>` : ''}</div><div class="row"><div class="txt">Worked</div><b>${hrs(r.worked)}</b>${pay ? `<span class="money">${money(pay[1].total)}</span>` : ''}</div>
+      ${pay ? `<div class="row"><div class="txt sub">At ${money(wageOf(who), true)}/h${pay[1].ot[who] ? ' · ' + hrs(pay[1].ot[who] * 60) + ' overtime' : ''}. Estimate only – payroll decides.</div></div>` : ''}</div>
       <div class="card">${r.lines.map(l => line(l, mgr() && l.date <= T())).join('') || '<div class="empty">Nothing this week.</div>'}</div>
       ${mgr() ? `<button class="btn" data-editpunch="" data-pdate="${T()}" data-pname="${esc(who)}">+ Add a missed punch</button>` : '<p class="sub">Something wrong? Tell a manager – they can fix punches.</p>'}`;
   }
   const rep = weekReport(tsWeek), tot = rep.reduce((a, r) => ({ s: a.s + r.sched, w: a.w + r.worked }), { s: 0, w: 0 });
+  const LS = labor(shiftItems(weekShifts(tsWeek))), LW = labor(punchItems((data.punches || []).filter(p => p.date >= tsWeek && p.date <= plus(tsWeek, 6))));
   return `${back()}<h1>Time sheets</h1>${nav}
-    <div class="card"><div class="row"><div class="txt">Scheduled</div><b>${hrs(tot.s)}</b></div><div class="row"><div class="txt">Worked</div><b>${hrs(tot.w)}</b></div></div>
-    <div class="card">${rep.map(r => rowBtn(`data-tsperson="${esc(r.name)}"`, `<div class="txt"><b>${esc(r.name)}</b><div class="sub">${hrs(r.worked)} worked of ${hrs(r.sched)} scheduled</div>
+    <div class="card"><div class="row"><div class="txt">Scheduled</div><b>${hrs(tot.s)}</b><span class="money">${money(LS.total)}</span></div><div class="row"><div class="txt">Worked</div><b>${hrs(tot.w)}</b><span class="money">${money(LW.total)}</span></div></div>
+    <div class="card">${rep.map(r => rowBtn(`data-tsperson="${esc(r.name)}"`, `<div class="txt"><b>${esc(r.name)}</b><div class="sub">${hrs(r.worked)} worked of ${hrs(r.sched)} scheduled${wageOf(r.name) ? ` · ${money(LW.byPerson[r.name] || 0)} of ${money(LS.byPerson[r.name] || 0)} est.` : ' · no wage set'}</div>
       ${r.lates || r.noShow || r.missingOut || r.unscheduled ? `<div style="margin-top:4px">${[r.lates ? ['warn', r.lates + ' late'] : null, r.noShow ? ['warn', r.noShow + ' no-show'] : null, r.missingOut ? ['warn', r.missingOut + ' no clock-out'] : null, r.unscheduled ? ['mute', r.unscheduled + ' unscheduled'] : null].filter(Boolean).map(([c, t]) => `<span class="pill ${c}">${t}</span>`).join(' ')}</div>` : ''}</div><span>›</span>`)).join('') || '<div class="empty">No shifts or punches this week.</div>'}</div>
     <p class="sub">Late means clocking in more than ${data.lateAfter || 5} minutes after the shift start. Approved time off never counts as a no-show.</p>`;
 }
@@ -481,10 +525,11 @@ function viewTeam(){
       <label class="f">Name<input name="name" maxlength="60" value="${esc(u ? u.name : '')}" placeholder="First and last name"></label>
       <label class="f">Role<select name="role">${['Staff', 'Lead', 'Manager'].map(r => `<option ${u && u.role === r ? 'selected' : ''}>${r}</option>`).join('')}</select></label>
       <div class="two"><label class="f">Phone<input name="phone" type="tel" maxlength="40" value="${esc(u ? u.phone : '')}"></label><label class="f">Email<input name="email" type="email" maxlength="120" value="${esc(u ? u.email : '')}"></label></div>
+      <label class="f">Hourly wage ($) – only managers see this<input name="wage" inputmode="decimal" maxlength="8" value="${u && u.wage ? Number(u.wage).toFixed(2) : ''}" placeholder="e.g. 15.50"></label>
       <div class="btns"><button class="btn go">${u ? 'Save' : 'Add to the team'}</button>${u ? '<button type="button" class="btn" data-canceledit>Cancel</button>' : ''}</div></form>`;
   const row = u => editUser === u.id ? `<div class="row" style="display:block;padding:0">${form(u)}</div>` : `<div class="row" style="display:block;${u.active ? '' : 'opacity:.55'}">
       <div style="display:flex;gap:8px;align-items:center"><b style="flex:1">${esc(u.name)}</b><span class="pill ${u.role === 'Manager' ? 'warn' : u.role === 'Lead' ? 'ok' : 'mute'}">${esc(u.role)}</span>${u.active ? '' : '<span class="pill mute">Off</span>'}</div>
-      <div class="sub">${u.email ? (u.reminders === 'Off' ? 'Reminders off' : 'Reminders: ' + esc(u.reminders)) : 'No email – no reminders'}</div><div class="sub">${u.phone ? esc(u.phone) + ' · ' : ''}Code ${showCode[u.id] ? `<b>${esc(u.code)}</b>` : '••••'} <button class="btn sm" data-showcode="${esc(u.id)}" style="padding:4px 8px;min-height:0">${showCode[u.id] ? 'Hide' : 'Show'}</button></div>
+      <div class="sub">${u.wage ? money(u.wage, true) + '/h · ' : ''}${u.email ? (u.reminders === 'Off' ? 'Reminders off' : 'Reminders: ' + esc(u.reminders)) : 'No email – no reminders'}</div><div class="sub">${u.phone ? esc(u.phone) + ' · ' : ''}Code ${showCode[u.id] ? `<b>${esc(u.code)}</b>` : '••••'} <button class="btn sm" data-showcode="${esc(u.id)}" style="padding:4px 8px;min-height:0">${showCode[u.id] ? 'Hide' : 'Show'}</button></div>
       <div class="btns" style="margin-top:8px"><button class="btn sm" data-edit="${esc(u.id)}">Edit</button><button class="btn sm" data-newcode="${esc(u.id)}" data-name="${esc(u.name)}">New code</button>
         <button class="btn sm" data-active="${esc(u.id)}" data-to="${u.active ? 0 : 1}" data-name="${esc(u.name)}">${u.active ? 'Turn off' : 'Turn on'}</button></div></div>`;
   return `${back()}<h1>Team</h1>${addedCard}<div class="card">${us.map(row).join('')}</div>
@@ -527,6 +572,7 @@ function render(){
   const badge = { chat: chatN, more: (mgr() ? (data.requests || []).filter(q => q.status === 'Pending' && q.from !== data.me.name).length : 0) + (data.announcements || []).filter(a => !a.read).length };
   $('#tabs').hidden = false;
   $('#tabs').innerHTML = TABS.map(([k, n, ic]) => `<button data-tab="${k}" ${tab === k ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}${badge[k] ? `<span class="n">${badge[k]}</span>` : ''}</button>`).join('');
+  const ae = document.activeElement, keepWage = ae && ae.dataset && ae.dataset.wage ? [ae.dataset.wage, ae.value, ae.selectionStart] : null;
   const typingIn = document.activeElement && document.activeElement.closest && document.activeElement.closest('.composer');
   const draft = typingIn ? document.activeElement.value : null;
   document.body.classList.toggle('wide', wide() && tab === 'schedule');
@@ -534,6 +580,8 @@ function render(){
   if (draft !== null){ const t = $('.composer textarea'); if (t){ t.value = draft; t.focus(); } }
   $('#overlay').innerHTML = viewer ? viewViewer() : sheet ? (sheet.kind === 'shift' ? shiftSheet() : sheet.kind === 'punch' ? punchSheet() : pickSheet(sheet.kind)) : '';
   document.body.classList.toggle('noscroll', !!(viewer || sheet));
+  if (keepWage){ const el = document.querySelector(`[data-wage="${keepWage[0]}"]`); if (el){ el.value = keepWage[1]; el.focus(); try { el.setSelectionRange(keepWage[2], keepWage[2]); } catch (_) {} } }
+  const sf = document.querySelector('form[data-form=shift]'), est = $('#est'); if (sf && est) est.innerHTML = shiftEstimate(sf);
 }
 
 /* ---------- events ---------- */
@@ -576,7 +624,7 @@ document.addEventListener('click', async e => {
   if (d.newgroup !== undefined){ sheet = { kind: 'group' }; render(); return; }
   if (d.newchannel !== undefined){ sheet = { kind: 'channel' }; render(); return; }
   if (d.dm){ sheet = null; const id = 'dm-' + [data.meId, d.dm].sort().join('-'); chat.msgs = []; openChat(id, d.dmname); return; }
-  if (d.preset){ const [s, en] = d.preset.split('|'), f = b.closest('form'); f.elements.namedItem('start').value = s; f.elements.namedItem('end').value = en; return; }
+  if (d.preset){ const [s, en] = d.preset.split('|'), f = b.closest('form'); f.elements.namedItem('start').value = s; f.elements.namedItem('end').value = en; const e2 = $('#est'); if (e2) e2.innerHTML = shiftEstimate(f); return; }
   if (!data) return;
   if (d.clock){
     b.disabled = true; b.textContent = d.clock === 'in' ? 'Clocking in…' : 'Clocking out…';
@@ -611,6 +659,14 @@ document.addEventListener('click', async e => {
   if (d.newcode){ if (!confirm('Give ' + d.name + ' a new code? Their old code stops working and they are signed out everywhere.')) return; showCode[d.newcode] = true; act('newCode', { id: d.newcode }).then(r => { if (r) toast('New code made – tell ' + first(d.name)); }); return; }
   if (d.active){ if (d.to === '0' && !confirm('Turn off ' + d.name + '? They are signed out right away and cannot sign in.')) return; act('setActive', { id: d.active, active: d.to }); return; }
 });
+let wageTimer = {};
+document.addEventListener('input', e => {
+  const f = e.target.closest && e.target.closest('form[data-form=shift]'); if (f){ const el = $('#est'); if (el) el.innerHTML = shiftEstimate(f); }
+  const w = e.target.dataset && e.target.dataset.wage;
+  if (w){ const u = (data.users || []).find(x => x.id === w), val = e.target.value.replace(/[$,\s]/g, '');
+    if (u && (val === '' || (!isNaN(+val) && +val >= 0 && +val < 1000))){ u.wage = val === '' ? 0 : +val; render();
+      clearTimeout(wageTimer[w]); wageTimer[w] = setTimeout(() => act('setWage', { id: w, wage: val }), 900); } }
+});
 document.addEventListener('change', e => { if (e.target.name === 'day' && e.target.closest('form[data-form=avail]')){ const f = e.target.closest('form'); f.querySelector('[data-onlydate]').hidden = e.target.value !== 'date'; } });
 document.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && e.target.closest && e.target.closest('.composer') && !isIOS()){ e.preventDefault(); e.target.closest('form').requestSubmit(); } });
 
@@ -631,7 +687,10 @@ document.addEventListener('submit', async e => {
     const t = $('.composer textarea'); if (t) t.focus(); openChat(chat.open, null, text); return; }
   if (kind === 'shift'){ if (!v('name')){ toast('Pick who is working'); return; } const p = { id: sheet && sheet.id || '', name: v('name'), date: v('date'), start: v('start'), end: v('end'), position: v('position'), notes: v('notes') };
     if (p.end <= p.start){ toast('The end has to be after the start'); return; }
-    sheet = null; act('saveShift', p).then(r => { if (r) toast(p.id ? 'Shift saved' : 'Shift added'); }); return; }
+    const ex = p.id && (data.shifts || []).find(x => x.id === p.id);
+    if (ex) Object.assign(ex, p); else data.shifts.push(Object.assign({}, p, { id: 'tmp' + Date.now() }));
+    data.shifts.sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
+    sheet = null; render(); act('saveShift', p).then(r => { if (r) toast(p.id ? 'Shift saved' : 'Shift added'); }); return; }
   if (kind === 'punch'){ const p = { id: sheet && sheet.id || '', name: v('name'), date: v('date'), in: v('in'), out: v('out'), note: v('note') }; sheet = null; act('savePunch', p).then(r => { if (r) toast('Saved'); }); return; }
   if (kind === 'reminders'){ const mode = (f.querySelector('input[name=mode]:checked') || {}).value || '';
     act('myReminders', { email: v('email'), mode }).then(r => { if (r) toast(mode === 'Off' ? 'Reminders off' : v('email') ? 'Saved' : 'Saved – add an email to get them'); }); return; }
@@ -642,7 +701,7 @@ document.addEventListener('submit', async e => {
   if (kind === 'request'){ act('request', { type: v('type'), date: v('date'), details: v('details') }).then(r => { if (r) toast('Sent to managers'); }); f.reset(); return; }
   if (kind === 'user'){
     if (!v('name')){ toast('Add a name'); return; }
-    const p = { name: v('name'), role: v('role'), phone: v('phone'), email: v('email') };
+    const p = { name: v('name'), role: v('role'), phone: v('phone'), email: v('email'), wage: v('wage') };
     if (f.dataset.id){ editUser = null; act('editUser', Object.assign({ id: f.dataset.id }, p)).then(r => { if (r) toast('Saved'); }); }
     else { act('addUser', p).then(r => { if (r){ justAdded = p.name; render(); window.scrollTo(0, 0); } }); f.reset(); }
   }

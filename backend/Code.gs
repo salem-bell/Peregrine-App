@@ -11,12 +11,12 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '2.1';
+const VERSION = '2.2';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Off'];
 
 const TABS = {
-  'Users':         ['Name', 'Role', 'Code', 'Active', 'Phone', 'Email', 'User ID (do not edit)', 'Sign-in version (do not edit)', 'Added', 'Reminders (blank = default)'],
+  'Users':         ['Name', 'Role', 'Code', 'Active', 'Phone', 'Email', 'User ID (do not edit)', 'Sign-in version (do not edit)', 'Added', 'Reminders (blank = default)', 'Hourly wage (managers only)'],
   'Checklists':    ['List', 'Task', 'Order', 'Active', 'Notes', 'Days (blank = every day)', 'Section'],
   'Checklist log': ['Date', 'List', 'Task', 'Done by', 'Done at'],
   'Announcements': ['ID', 'Posted', 'From', 'Title', 'Message', 'Pinned', 'Active', 'Must acknowledge'],
@@ -52,6 +52,9 @@ const SETTINGS = [
   ['Hours-before reminder',        '2',                         'How many hours before a shift the second reminder goes out.'],
   ['Default reminders',            'Night before',              'For people who haven\'t chosen: Night before, Before shift, Both or Off.'],
   ['Email schedule changes',       'On',                        'On or Off. When a manager adds, moves or deletes a shift in the next 7 days, the people affected get an email.'],
+  ['Overtime after (hours a week)', '40',                        'Wage estimates pay hours past this, Monday to Sunday, at the overtime rate.'],
+  ['Overtime rate',                '1.5',                       'Multiplier for overtime hours.'],
+  ['Labor cost extra (%)',         '0',                         'Optional. Added on top of wages in estimates, e.g. 10 for employer payroll taxes.'],
   ['Test results sheet',           'https://docs.google.com/spreadsheets/d/1dl8gi2SkPfYOjBzX0syp2WkWssg7t-rpZChpeZNm5QQ/edit', 'The sheet the tests write results to. The app shows each person their own results.'],
 ];
 
@@ -103,7 +106,7 @@ function buildTab_(ss, name) {
   const text = c => sh.getRange(2, c, 999, 1).setNumberFormat('@');
   const list = (c, items) => sh.getRange(2, c, 999, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(items, true).setAllowInvalid(false).build());
   const box = c => sh.getRange(2, c, 999, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build());
-  if (name === 'Users') { list(2, ROLES); text(3); box(4); sh.getRange(2, 7, 999, 2).setFontColor('#888888'); list(10, REMIND_); }
+  if (name === 'Users') { list(2, ROLES); text(3); box(4); sh.getRange(2, 7, 999, 2).setFontColor('#888888'); list(10, REMIND_); sh.getRange(2, 11, 999, 1).setNumberFormat('$#,##0.00'); }
   if (name === 'Shifts') { text(1); text(2); text(3); }
   if (name === 'Requests') { text(5); list(4, ['Time off', 'Swap', 'Cover']); list(7, ['Pending', 'Approved', 'Denied', 'Cancelled']); }
   if (name === 'Checklists') box(4);
@@ -347,7 +350,8 @@ function state_(ss, me) {
       file: !!driveId_(r[1]), order: Number(r[3]) || 0 })).sort((a, b) => a.order - b.order);
 
   // Team (managers)
-  if (isMgr) out.users = users.map(r => ({ id: String(r[6] || ''), name: String(r[0]), role: role_(r[1]), code: String(r[2] || ''), active: truthy_(r[3]), phone: String(r[4] || ''), email: String(r[5] || ''), reminders: remindMode_(ss, r) }));
+  if (isMgr) out.users = users.map(r => ({ id: String(r[6] || ''), name: String(r[0]), role: role_(r[1]), code: String(r[2] || ''), active: truthy_(r[3]), phone: String(r[4] || ''), email: String(r[5] || ''), reminders: remindMode_(ss, r), wage: Number(r[10]) || 0 }));
+  if (isMgr) out.pay = { ot: Number(setting_(ss, 'Overtime after (hours a week)')) || 40, otRate: Number(setting_(ss, 'Overtime rate')) || 1.5, extra: Number(setting_(ss, 'Labor cost extra (%)')) || 0 };
   return out;
 }
 
@@ -415,12 +419,12 @@ function act_(ss, me, p) {
       if (rows.some(r => String(r[0]).trim().toLowerCase() === name.toLowerCase())) throw new Error('Someone called ' + name + ' is already on the team – add a last name or initial');
       const used = {}; rows.forEach(r => { used[String(r[2])] = 1; });
       const code = newCode_(used);
-      const row = put_(sh, [name, role_(p.role), code, true, clean_(p.phone, 40), clean_(p.email, 120), newId_(16), 1, new Date()]);
+      const row = put_(sh, [name, role_(p.role), code, true, clean_(p.phone, 40), clean_(p.email, 120), newId_(16), 1, new Date(), '', wage_(p.wage)]);
       sh.getRange(row, 3).setNumberFormat('@').setValue(code);
       audit('Added ' + name + ' as ' + role_(p.role));
       return;
     }
-    case 'editUser': case 'newCode': case 'setActive': {
+    case 'editUser': case 'newCode': case 'setActive': case 'setWage': {
       needMgr();
       const sh = tab('Users'), rows = vals_(sh), i = rows.findIndex(r => String(r[6]) === String(p.id)); if (i < 0) throw new Error('That person was removed');
       const row = i + 2, r = rows[i], name = String(r[0]);
@@ -430,6 +434,7 @@ function act_(ss, me, p) {
         sh.getRange(row, 3).setNumberFormat('@').setValue(newCode_(used)); sh.getRange(row, 8).setValue((Number(r[7]) || 1) + 1);
         audit('New code for ' + name + ' (signed out everywhere)'); return;
       }
+      if (A === 'setWage') { sh.getRange(row, 11).setValue(wage_(p.wage)); audit('Set ' + name + '\'s wage'); return; }
       if (A === 'setActive') {
         const on = p.active === '1';
         if (!on && role_(r[1]) === 'Manager' && !managersLeft) throw new Error('You can\'t turn off the last manager');
@@ -442,6 +447,7 @@ function act_(ss, me, p) {
       if (newName.toLowerCase() !== name.toLowerCase() && rows.some((x, j) => j !== i && String(x[0]).trim().toLowerCase() === newName.toLowerCase())) throw new Error('Someone called ' + newName + ' is already on the team');
       sh.getRange(row, 1, 1, 2).setValues([[newName, role]]);
       sh.getRange(row, 5, 1, 2).setValues([[clean_(p.phone, 40), clean_(p.email, 120)]]);
+      if (p.wage !== undefined) sh.getRange(row, 11).setValue(wage_(p.wage));
       if (newName !== name) {                         // keep the schedule pointing at the same person
         [['Shifts', 4], ['Availability', 2], ['Time clock', 2], ['Requests', 3]].forEach(([t, c]) => {
           const sh2 = ss.getSheetByName(t); if (!sh2) return;
@@ -700,6 +706,8 @@ function file_(token, id) {
 /* ============================================================
    Shift reminders, schedule-change emails and the calendar feed
    ============================================================ */
+/** '$16.50' or '16.5' → 16.5. Blank → ''. Rejects nonsense. */
+function wage_(v) { const t = String(v == null ? '' : v).replace(/[$,\s]/g, ''); if (!t) return ''; const n = Number(t); if (!(n >= 0 && n < 1000)) throw new Error('Wage should be dollars an hour, like 16.50'); return Math.round(n * 100) / 100; }
 function shiftObj_(r, tz) { return { id: String(r[6] || ''), date: ymd_(r[0], tz), start: hhmm_(r[1], tz), end: hhmm_(r[2], tz), name: String(r[3] || '').trim(), position: String(r[4] || ''), notes: String(r[5] || '') }; }
 function remindMode_(ss, r) { const v = r && String(r[9] || '').trim(); return REMIND_.indexOf(v) >= 0 ? v : (REMIND_.indexOf(setting_(ss, 'Default reminders')) >= 0 ? setting_(ss, 'Default reminders') : 'Night before'); }
 function t12_(hm) { let [h, m] = String(hm).split(':').map(Number); const ap = h >= 12 ? 'pm' : 'am'; h = h % 12 || 12; return h + (m ? ':' + pad_(m) : '') + ap; }

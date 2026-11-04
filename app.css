@@ -139,7 +139,7 @@ body.noscroll{overflow:hidden}
 table.grid{border-collapse:separate;border-spacing:0;width:100%;min-width:980px;table-layout:fixed}
 .grid th,.grid td{border-bottom:1px solid var(--soft);border-right:1px solid var(--soft);vertical-align:top;text-align:left;padding:6px}
 .grid thead th{position:sticky;top:0;z-index:2;background:var(--card);font:400 .82rem/1.2 var(--head);letter-spacing:.08em;text-transform:uppercase;border-bottom:1px solid var(--line);padding:10px 8px}
-.grid thead th .sub,.grid tbody th .sub{display:block;font:400 .76rem/1.3 var(--body);letter-spacing:0;text-transform:none;margin-top:2px}
+.grid thead th .sub,.grid tbody th .sub,.grid tfoot th .sub{display:block;font:400 .76rem/1.3 var(--body);letter-spacing:0;text-transform:none;margin-top:2px}
 .grid thead th.today{color:var(--accent);box-shadow:inset 0 -3px 0 var(--teal)}
 .grid th.corner{width:170px;font:400 .74rem/1.3 var(--body);text-transform:none;letter-spacing:0}
 .grid tbody th{position:sticky;left:0;z-index:1;background:var(--card);width:170px;padding:10px}
@@ -179,3 +179,12 @@ table.grid{border-collapse:separate;border-spacing:0;width:100%;min-width:980px;
   main{margin:0;padding:0} .gridwrap{max-height:none;overflow:visible;border:0;box-shadow:none}
   body{background:#fff;color:#000} table.grid{min-width:0;font-size:11px} .grid thead th,.grid tbody th,.grid tfoot th,.grid tfoot td{position:static}
 }
+
+/* wages */
+.money{min-width:72px;text-align:right;font-variant-numeric:tabular-nums;color:var(--ink)}
+.grid .tot .money{margin-top:2px;color:var(--ink)} .grid .tot .pill{margin-top:4px}
+.wagef{display:flex;align-items:center;gap:3px;margin-top:6px;font-size:.78rem;color:var(--muted)}
+.wagef input.wage{width:70px;min-height:30px;padding:4px 6px;font-size:.85rem;border-radius:7px;text-align:right}
+.labor{display:grid;justify-items:center;line-height:1.15} .labor b{font:400 1.35rem/1.1 var(--head);letter-spacing:.04em}
+.est{min-height:22px;font-size:.92rem}
+.warn-t{color:var(--warn)}
