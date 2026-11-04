@@ -120,18 +120,18 @@ function viewSignIn(){
     ? `<div class="hint"><b>Put it on your home screen:</b> tap <b>Share</b> <span aria-hidden="true">⬆︎</span> at the bottom of Safari, then <b>Add to Home Screen</b>. Open it from there and sign in.</div>`
     : installEvt ? `<div class="hint"><b>Install the app</b> for one-tap access. <button class="btn sm go" data-install>Install</button></div>`
     : `<div class="hint"><b>Put it on your home screen:</b> in Chrome, tap <b>⋮</b> then <b>Add to Home screen</b> (or <b>Install app</b>).</div>`) : '';
-  return `<div class="signin"><img class="logo" src="icons/icon-192.png" alt=""><p class="big">${esc((data && data.name) || load('pt-shop') || 'Peregrine')}</p><p class="sub" style="text-align:center;margin:0 0 18px">Team sign-in</p>
+  return `<div class="signin"><img class="logo" src="brand/falcon.png" alt=""><p class="big">${esc((data && data.name) || load('pt-shop') || 'Peregrine')}</p><p class="sub" style="text-align:center;margin:0 0 18px">Team sign-in</p>
     ${hint}<div class="card"><form class="stack" data-form="signin">
       <label class="f">First name<input name="name" autocomplete="username" autocapitalize="words" spellcheck="false" maxlength="60" value="${esc(load('pt-last') || '')}"></label>
       <label class="f">4-digit code<input name="code" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="current-password" class="code" style="text-align:center"></label>
       <button class="btn go">Sign in</button></form></div>
-    <p class="sub" style="text-align:center">Don't know your code? Ask a manager.</p></div>`;
+    <p class="sub" style="text-align:center">Don't know your code? Ask a manager.</p><i class="sprig" aria-hidden="true"></i></div>`;
 }
 
 /** Must-read announcements cover the app until each one is acknowledged. */
 function mustRead(){ return (data.announcements || []).filter(a => a.mustAck && !a.read); }
 function viewMustRead(a, left){
-  return `<div class="gate"><div class="gate-in"><p class="sub" style="margin:0 0 6px">${left > 1 ? `1 of ${left} · ` : ''}Please read before you continue</p>
+  return `<div class="gate"><div class="gate-in"><img class="mark" src="brand/bird-gold.png" alt=""><p class="sub" style="margin:0 0 6px">${left > 1 ? `1 of ${left} · ` : ''}Please read before you continue</p>
     <h1 style="margin-bottom:8px">${esc(a.title)}</h1><div class="msg" style="font-size:1.05rem">${esc(a.message)}</div>
     <p class="sub">From ${esc(a.from)} · ${ago(a.posted)}</p><button class="btn go" data-ack="${esc(a.id)}" style="width:100%;margin-top:14px">I've read this</button></div></div>`;
 }
@@ -141,7 +141,7 @@ function myNextShift(){ const now = new Date(); return (data.shifts || []).find(
 function clockCard(){
   const o = data.open, next = myNextShift();
   if (o) { const s = (data.shifts || []).find(x => x.id === o.shift);
-    return `<div class="card clock on"><div class="row"><div class="txt"><b>Clocked in · ${timeOf(o.in)}</b><div class="sub">${s ? 'Shift ' + t12(s.start) + '–' + t12(s.end) : 'Not on the schedule'}${o.inPlace && o.inPlace !== 'at the shop' ? ' · ' + esc(o.inPlace) : ''}</div></div><button class="btn rust" data-clock="out">Clock out</button></div></div>`; }
+    return `<div class="card clock on"><div class="row"><div class="txt"><b>Clocked in · ${timeOf(o.in)}</b><div class="sub">${s ? 'Shift ' + t12(s.start) + '–' + t12(s.end) : 'Not on the schedule'}${o.inPlace && o.inPlace !== 'at the shop' ? ' · ' + esc(o.inPlace) : ''}</div></div><button class="btn warn" data-clock="out">Clock out</button></div></div>`; }
   const soon = next && next.date === T();
   return `<div class="card clock"><div class="row"><div class="txt"><b>${soon ? 'Your shift today · ' + t12(next.start) + '–' + t12(next.end) : 'Not clocked in'}</b><div class="sub">${soon ? esc(next.position || '') : next ? 'Next: ' + dayName(next.date) + ' ' + t12(next.start) : 'No shifts coming up'}</div></div><button class="btn go" data-clock="in">Clock in</button></div></div>`;
 }
@@ -198,12 +198,12 @@ function viewSchedule(){
   const dayCard = d => {
     const list = shiftsOn(d).filter(s => !mineOnly || s.name === data.me.name);
     const offs = mgr() ? (data.requests || []).filter(q => q.type === 'Time off' && q.date === d && q.status === 'Approved').map(q => first(q.from)) : [];
-    return `<h2 ${d === T() ? 'id="todayh" style="color:var(--rust)"' : ''}>${dayName(d)}${d !== T() && d !== plus(T(), 1) ? '' : ' · ' + shortDay(d)}</h2><div class="card">
+    return `<h2 ${d === T() ? 'id="todayh" class="today-h"' : ''}>${dayName(d)}${d !== T() && d !== plus(T(), 1) ? '' : ' · ' + shortDay(d)}</h2><div class="card">
       ${list.map(s => { const cf = mgr() ? conflicts(s) : [];
         const inner = `<div class="txt"><b>${esc(s.name)}</b><div class="sub">${t12(s.start)}–${t12(s.end)} · ${hrs(mins(s.end) - mins(s.start))}${s.position ? ' · ' + esc(s.position) : ''}${s.notes ? ' · ' + esc(s.notes) : ''}</div>${cf.length ? `<div style="margin-top:4px">${cf.map(([c, t]) => `<span class="pill ${c}">${esc(t)}</span>`).join(' ')}</div>` : ''}</div>${mgr() ? '<span class="sub">Edit</span>' : ''}`;
         return mgr() ? rowBtn(`data-editshift="${esc(s.id)}" class="${s.name === data.me.name ? 'mine' : ''}"`, inner) : `<div class="row ${s.name === data.me.name ? 'mine' : ''}">${inner}</div>`; }).join('') || '<div class="empty" style="padding:14px">No shifts.</div>'}
       ${offs.length ? `<div class="row"><div class="txt sub">Off: ${offs.map(esc).join(', ')}</div></div>` : ''}
-      ${mgr() ? rowBtn(`data-addshift="${d}"`, '<div class="txt" style="color:var(--rust)"><b>+ Add shift</b></div>') : ''}</div>`;
+      ${mgr() ? rowBtn(`data-addshift="${d}"`, '<div class="txt accent"><b>+ Add shift</b></div>') : ''}</div>`;
   };
   const totals = mgr() ? (() => { const t = {}; days.forEach(d => shiftsOn(d).forEach(s => { t[s.name] = (t[s.name] || 0) + mins(s.end) - mins(s.start); }));
     const names = Object.keys(t).sort(); return names.length ? `<h2>Hours this week</h2><div class="card">${names.map(n => `<div class="row"><div class="txt">${esc(n)}</div><b>${hrs(t[n])}</b></div>`).join('')}</div>` : ''; })() : '';
@@ -451,6 +451,7 @@ function viewMoreList(){
       ${item('resources', 'Resources', 'Recipes, guides, handbooks')}
       ${item('tests', 'Training & tests', 'Certification tests and your results')}
       ${mgr() ? item('team', 'Team & sign-in codes') : ''}</div>
+    <h2>Look</h2><div class="seg">${[['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']].map(([k, n]) => `<button data-theme="${k}" aria-pressed="${theme() === k}">${n}</button>`).join('')}</div>
     <h2>${esc(data.me.name)} · ${esc(data.me.role)}</h2><div class="card"><div class="row"><div class="txt sub">Signed in on this phone.${!standalone() ? ' Tip: add this app to your home screen.' : ''}</div><button class="btn sm" data-signout>Sign out</button></div></div>
     <p class="sub" style="text-align:center">Peregrine Team · server ${esc(data.version || '')}</p>`;
 }
@@ -460,7 +461,7 @@ function render(){
   $('#offline').hidden = !offline;
   if (!TOKEN || !data){ $('#tabs').hidden = true; $('#refresh').hidden = true; $('#overlay').innerHTML = ''; $('#shop').textContent = load('pt-shop') || 'Peregrine'; $('#main').innerHTML = TOKEN ? '<div class="empty">Loading…</div>' : viewSignIn(); return; }
   data.meId = data.me.id;
-  $('#shop').textContent = data.name; save('pt-shop', data.name); $('#refresh').hidden = false;
+  const short = String(data.name || 'Peregrine').replace(/\s+(coffee|roasters?|roastery|co\.?)\b.*$/i, '') || data.name; $('#shop').textContent = short; save('pt-shop', short); $('#refresh').hidden = false;
   const gate = mustRead();
   if (gate.length){ $('#tabs').hidden = true; $('#overlay').innerHTML = ''; $('#main').innerHTML = viewMustRead(gate[0], gate.length); return; }
   const chatN = (data.channels || []).reduce((n, c) => n + c.unread, 0);
@@ -476,6 +477,10 @@ function render(){
 }
 
 /* ---------- events ---------- */
+const theme = () => load('pt-theme') || 'auto';
+function setTheme(t){ save('pt-theme', t === 'auto' ? null : t); if (t === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
+  const dark = t === 'dark' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+  document.querySelectorAll('meta[name=theme-color]').forEach(m => { m.content = dark ? '#0E1111' : '#1E5662'; }); }
 function scrollToday(){ const h = $('#todayh'); if (h) window.scrollTo(0, h.getBoundingClientRect().top + window.scrollY - 70); }
 function getPos(){
   if (!data.geo || !navigator.geolocation) return Promise.resolve({});
@@ -491,6 +496,7 @@ document.addEventListener('click', async e => {
   if (d.golist){ listTab = d.golist; tab = 'lists'; save('pt-tab', tab); window.scrollTo(0, 0); render(); return; }
   if (d.more !== undefined){ tab = 'more'; moreView = d.more; editUser = null; if (d.more !== 'time') tsPerson = ''; if (d.more === 'time' && b.textContent.includes('Back')) tsPerson = ''; window.scrollTo(0, 0); render(); return; }
   if (d.list){ listTab = d.list; render(); return; }
+  if (d.theme){ setTheme(d.theme); render(); return; }
   if (d.mine !== undefined){ schedMine = d.mine === '1'; save('pt-mine', schedMine ? '1' : '0'); render(); return; }
   if (d.week){ week = plus(week, Number(d.week)); render(); window.scrollTo(0, 0); scrollToday(); return; }
   if (d.tsweek){ tsWeek = plus(tsWeek, Number(d.tsweek)); render(); return; }
@@ -579,5 +585,6 @@ window.addEventListener('online', () => { if (TOKEN) refresh(); });
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; if (!TOKEN) render(); });
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 
+if (theme() !== 'auto') setTheme(theme());
 render();
 if (TOKEN) refresh();
