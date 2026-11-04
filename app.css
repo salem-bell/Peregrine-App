@@ -188,3 +188,10 @@ table.grid{border-collapse:separate;border-spacing:0;width:100%;min-width:980px;
 .labor{display:grid;justify-items:center;line-height:1.15} .labor b{font:400 1.35rem/1.1 var(--head);letter-spacing:.04em}
 .est{min-height:22px;font-size:.92rem}
 .warn-t{color:var(--warn)}
+
+/* drafts / publish */
+.chip .tag{font-style:normal;font:400 .62rem/1 var(--head);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:2px}
+.chip.st-draft{border-style:dashed;border-left-style:solid;background:transparent}
+.chip.st-changed .tag{color:var(--warn)}
+.chip.st-removed{opacity:.55;text-decoration:line-through;border-style:dashed}
+.gone b{text-decoration:line-through}

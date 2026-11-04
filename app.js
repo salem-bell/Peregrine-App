@@ -73,6 +73,12 @@ const rowBtn = (attrs, inner) => { let cls = ''; attrs = attrs.replace(/\s*class
 
 /* ---------- schedule logic ---------- */
 const shiftsOn = d => (data.shifts || []).filter(s => s.date === d);
+/** Shifts as the team sees them (managers and leads also get drafts and pending changes, marked by status). */
+const live = s => !s.status || s.status === 'published' || s.status === 'changed';
+const notGone = s => s.status !== 'removed';
+const STATUS = { draft: ['mute', 'Draft'], changed: ['warn', 'Not published'], removed: ['warn', 'Removing'] };
+const statusPill = s => STATUS[s.status] ? `<span class="pill ${STATUS[s.status][0]}">${STATUS[s.status][1]}</span>` : '';
+const weekPending = wk => (data.shifts || []).filter(s => s.date >= wk && s.date <= plus(wk, 6) && s.status && s.status !== 'published');
 const approvedOff = (name, d) => (data.requests || []).some(q => q.from === name && q.type === 'Time off' && q.date === d && q.status === 'Approved');
 const pendingOff = (name, d) => (data.requests || []).some(q => q.from === name && q.type === 'Time off' && q.date === d && q.status === 'Pending');
 function unavail(name, d, start, end){       // the availability rule that clashes with this time, if any
@@ -84,7 +90,7 @@ function conflicts(s){
   if (approvedOff(s.name, s.date)) out.push(['warn', 'Time off']);
   else if (pendingOff(s.name, s.date)) out.push(['mute', 'Asked for off']);
   const u = unavail(s.name, s.date, s.start, s.end); if (u) out.push(['warn', u.from ? 'Unavailable ' + t12(u.from) + '–' + t12(u.to) : 'Unavailable']);
-  if ((data.shifts || []).some(x => x !== s && x.id !== s.id && x.name === s.name && x.date === s.date && mins(x.start) < mins(s.end) && mins(x.end) > mins(s.start))) out.push(['warn', 'Double-booked']);
+  if (s.status !== 'removed' && (data.shifts || []).some(x => x !== s && x.id !== s.id && notGone(x) && x.name === s.name && x.date === s.date && mins(x.start) < mins(s.end) && mins(x.end) > mins(s.start))) out.push(['warn', 'Double-booked']);
   return out;
 }
 
@@ -110,7 +116,7 @@ function labor(items){
 }
 const shiftItems = list => list.map(s => ({ key: s.id, name: s.name, date: s.date, sort: s.date + s.start, h: Math.max(0, mins(s.end) - mins(s.start)) / 60 }));
 const punchItems = list => list.filter(p => p.in && p.out).map(p => ({ key: p.id, name: p.name, date: p.date, sort: p.in, h: Math.max(0, new Date(p.out) - new Date(p.in)) / 36e5 }));
-const weekShifts = wk => (data.shifts || []).filter(s => s.date >= wk && s.date <= plus(wk, 6));
+const weekShifts = wk => (data.shifts || []).filter(s => notGone(s) && s.date >= wk && s.date <= plus(wk, 6));
 /** Live estimate for the shift being edited, counting the rest of that person's week (so overtime shows up). */
 function shiftEstimate(f){
   const g = n => (f.elements.namedItem(n) || {}).value || '', name = g('name'), date = g('date'), start = g('start'), end = g('end');
@@ -128,7 +134,7 @@ function weekReport(wk, name){
   const people = name ? [name] : [...new Set((data.shifts || []).filter(s => days.includes(s.date)).map(s => s.name).concat((data.punches || []).filter(p => days.includes(p.date)).map(p => p.name)))].sort();
   const late = data.lateAfter || 5;
   return people.map(n => {
-    const sh = (data.shifts || []).filter(s => s.name === n && days.includes(s.date)), pu = (data.punches || []).filter(p => p.name === n && days.includes(p.date));
+    const sh = (data.shifts || []).filter(s => live(s) && s.name === n && days.includes(s.date)), pu = (data.punches || []).filter(p => p.name === n && days.includes(p.date));
     let sched = 0, worked = 0, lates = 0, noShow = 0, missingOut = 0; const lines = [];
     sh.forEach(s => {
       sched += mins(s.end) - mins(s.start);
@@ -171,7 +177,7 @@ function viewMustRead(a, left){
     <p class="sub">From ${esc(a.from)} · ${ago(a.posted)}</p><button class="btn go" data-ack="${esc(a.id)}" style="width:100%;margin-top:14px">I've read this</button></div></div>`;
 }
 
-function myNextShift(){ const now = new Date(); return (data.shifts || []).find(s => s.name === data.me.name && (s.date > T() || (s.date === T() && mins(s.end) > now.getHours() * 60 + now.getMinutes()))); }
+function myNextShift(){ const now = new Date(); return (data.shifts || []).find(s => live(s) && s.name === data.me.name && (s.date > T() || (s.date === T() && mins(s.end) > now.getHours() * 60 + now.getMinutes()))); }
 
 function clockCard(){
   const o = data.open, next = myNextShift();
@@ -182,7 +188,7 @@ function clockCard(){
 }
 
 function viewToday(){
-  const d = data, today = shiftsOn(T()), next = myNextShift();
+  const d = data, today = shiftsOn(T()).filter(live), next = myNextShift();
   const unread = (d.announcements || []).filter(a => !a.read);
   const pendingReq = mgr() ? (d.requests || []).filter(q => q.status === 'Pending' && q.from !== d.me.name) : [];
   const mine = (d.requests || []).filter(q => q.from === d.me.name && q.status !== 'Cancelled').slice(0, 3);
@@ -191,7 +197,10 @@ function viewToday(){
   const att = mgr() ? weekReport(monday(T())).reduce((a, r) => ({ late: a.late + r.lates, no: a.no + r.noShow, miss: a.miss + r.missingOut }), { late: 0, no: 0, miss: 0 }) : null;
   const remindHint = d.reminders && d.reminders.on && !d.me.email && d.me.reminders !== 'Off' && load('pt-nohint') !== '1'
     ? `<div class="hint"><b>Get a reminder before your shifts.</b> Add your email and pick when. <div class="btns" style="margin-top:8px"><button class="btn sm go" data-more="reminders">Set up reminders</button><button class="btn sm" data-nohint>Not now</button></div></div>` : '';
-  return `<h1>${hi}, ${esc(first(d.me.name))}</h1>${remindHint}${clockCard()}
+  const pubHint = lead() && d.unpublished ? `<div class="hint"><b>${d.unpublished} schedule change${d.unpublished > 1 ? 's' : ''} not published yet.</b> The team can't see ${d.unpublished > 1 ? 'them' : 'it'} until you publish. <div class="btns" style="margin-top:8px"><button class="btn sm go" data-tab="schedule">Review & publish</button></div></div>` : '';
+  const pm = prepMine();
+  const prepCard = pm.length ? `<h2>Prep for your shift</h2><div class="card">${pm.map(prepRow).join('')}</div>` : '';
+  return `<h1>${hi}, ${esc(first(d.me.name))}</h1>${pubHint}${remindHint}${clockCard()}${prepCard}
     ${unread.length ? `<div class="card">${unread.slice(0, 3).map(annRow).join('')}</div>` : ''}
     ${chatN ? `<div class="card">${rowBtn('data-tab="chat"', `<div class="txt"><b>${chatN} unread message${chatN > 1 ? 's' : ''}</b></div><span>›</span>`)}</div>` : ''}
     <h2>Working today</h2><div class="card">${today.length ? today.map(s => `<div class="row ${s.name === d.me.name ? 'mine' : ''}"><div class="txt"><b>${esc(s.name)}</b><div class="sub">${t12(s.start)}–${t12(s.end)}${s.position ? ' · ' + esc(s.position) : ''}</div></div>${mgr() ? clockState(s) : ''}</div>`).join('') : '<div class="empty">Nobody scheduled today.</div>'}</div>
@@ -210,14 +219,45 @@ function clockState(s){       // managers: is this person clocked in for today's
 }
 
 /* ----- checklists ----- */
+const PREP = '__prep';
+const prepOpen = () => (data.prep || []).filter(x => !x.doneAt);
+const prepMine = () => prepOpen().filter(x => x.mine);
+function listSeg(cl){
+  const n = prepOpen().length;
+  return `<div class="seg">${cl.map(x => `<button data-list="${esc(x.list)}" aria-pressed="${x.list === listTab}">${esc(x.list)} ${x.done}/${x.total}</button>`).join('')}<button data-list="${PREP}" aria-pressed="${listTab === PREP}">Prep${n ? ' ' + n : ''}</button></div>`;
+}
+function prepRow(x){
+  const on = !!x.doneAt, canDel = x.by === data.me.name || lead();
+  return `<div class="row ${on ? 'done' : ''}"><button class="chk ${on ? 'on' : ''}" data-prepdone="${esc(x.id)}" data-on="${on ? 1 : 0}" aria-label="${on ? 'Undo' : 'Done'}: ${esc(x.item)}">${on ? '✓' : ''}</button>
+    <div class="txt"><b>${esc(x.item)}</b>${x.mine && !on ? ' <span class="pill warn">Your shift</span>' : ''}${x.details ? `<div class="sub">${esc(x.details)}</div>` : ''}
+      <div class="sub">For ${esc(x.label || 'next shift')}${x.for.length ? ' · ' + x.for.map(n => esc(first(n))).join(', ') : ''} · from ${esc(first(x.by))} ${ago(x.at)}</div>
+      ${on ? `<div class="sub">Done by ${esc(first(x.doneBy))} · ${timeOf(x.doneAt)}</div>` : ''}</div>
+    ${canDel ? `<button class="btn sm" data-prepdel="${esc(x.id)}" aria-label="Remove">✕</button>` : ''}</div>`;
+}
+function viewPrep(cl){
+  const items = data.prep || [], open = items.filter(x => !x.doneAt), done = items.filter(x => x.doneAt);
+  const opts = ['<option value="next">Next shift (whoever comes in next)</option>'].concat([0, 1, 2].flatMap(k => { const d = plus(T(), k);
+    return (data.presets || []).map(p => `<option value="${d}|${esc(p.name)}">${k === 0 ? 'Today' : k === 1 ? 'Tomorrow' : shortDay(d)} · ${esc(p.name)} (${t12(p.start)})</option>`); }));
+  return `<h1>Checklists</h1>${listSeg(cl)}
+    <div class="card"><form class="stack" data-form="prep">
+      <label class="f">What needs prepping<input name="item" maxlength="120" placeholder="e.g. Batch cold brew" autocomplete="off"></label>
+      <label class="f">Details (optional)<input name="details" maxlength="300" placeholder="e.g. 2 gallons, we're out of concentrate"></label>
+      <label class="f">For<select name="when">${opts.join('')}</select></label>
+      <label class="opt"><input type="checkbox" name="notify" checked> Email the people on that shift</label>
+      <button class="btn go">Send to the shift</button></form></div>
+    <h2>To prep</h2><div class="card">${open.map(prepRow).join('') || '<div class="empty">Nothing to prep.</div>'}</div>
+    ${done.length ? `<h2>Done recently</h2><div class="card">${done.map(prepRow).join('')}</div>` : ''}
+    <p class="sub">The people on that shift see it on their Today screen, and in their night-before reminder email.</p>`;
+}
 function viewLists(){
   const cl = data.checklists || [];
-  if (!cl.length) return '<h1>Checklists</h1><div class="card"><div class="empty">Nothing on the checklists today.</div></div>';
+  if (listTab === PREP) return viewPrep(cl);
+  if (!cl.length) return '<h1>Checklists</h1>' + listSeg(cl) + '<div class="card"><div class="empty">Nothing on the checklists today.</div></div>';
   if (!cl.some(c => c.list === listTab)) listTab = (cl.find(c => c.done < c.total) || cl[0]).list;
   const c = cl.find(x => x.list === listTab);
   const hist = lead() && data.history && data.history.length ? `<h2>Last 7 days</h2><div class="card">${data.history.map(h => { const miss = h.lists.reduce((n, l) => n + (l.total - l.done), 0);
       return `<div class="row"><div class="txt"><b>${dayName(h.date)}</b><div class="sub">${h.lists.map(l => esc(l.list) + ' ' + l.done + '/' + l.total).join(' · ')}</div>${miss ? `<details class="more"><summary>${miss} missed</summary><div class="sub">${h.lists.filter(l => l.missed.length).map(l => '<b>' + esc(l.list) + ':</b> ' + l.missed.map(esc).join(', ')).join('<br>')}</div></details>` : ''}</div><span class="pill ${miss ? 'warn' : 'ok'}">${miss ? 'Missed ' + miss : 'All done'}</span></div>`; }).join('')}</div>` : '';
-  return `<h1>Checklists</h1><div class="seg">${cl.map(x => `<button data-list="${esc(x.list)}" aria-pressed="${x.list === listTab}">${esc(x.list)} ${x.done}/${x.total}</button>`).join('')}</div>
+  return `<h1>Checklists</h1>${listSeg(cl)}
     <div class="card">${c.items.map((i, n) => { const k = 'c|' + c.list + '|' + i.task, on = busy[k] !== undefined ? busy[k] : !!i.by;
       const head = i.section && (n === 0 || c.items[n - 1].section !== i.section) ? `<div class="sec">${esc(i.section)}</div>` : '';
       return head + `<div class="row ${on ? 'done' : ''}"><button class="chk ${on ? 'on' : ''}" data-check="${esc(i.task)}" data-on="${on ? 1 : 0}" aria-label="${on ? 'Undo' : 'Done'}: ${esc(i.task)}">${on ? '✓' : ''}</button>
@@ -239,17 +279,19 @@ function viewSchedule(){
     const offs = mgr() ? (data.requests || []).filter(q => q.type === 'Time off' && q.date === d && q.status === 'Approved').map(q => first(q.from)) : [];
     return `<h2 ${d === T() ? 'id="todayh" class="today-h"' : ''}>${dayName(d)}${d !== T() && d !== plus(T(), 1) ? '' : ' · ' + shortDay(d)}</h2><div class="card">
       ${list.map(s => { const cf = mgr() ? conflicts(s) : [];
-        const inner = `<div class="txt"><b>${esc(s.name)}</b><div class="sub">${t12(s.start)}–${t12(s.end)} · ${hrs(mins(s.end) - mins(s.start))}${s.position ? ' · ' + esc(s.position) : ''}${s.notes ? ' · ' + esc(s.notes) : ''}</div>${cf.length ? `<div style="margin-top:4px">${cf.map(([c, t]) => `<span class="pill ${c}">${esc(t)}</span>`).join(' ')}</div>` : ''}</div>${mgr() ? '<span class="sub">Edit</span>' : ''}`;
+        const inner = `<div class="txt ${s.status === 'removed' ? 'gone' : ''}"><b>${esc(s.name)}</b> ${statusPill(s)}<div class="sub">${t12(s.start)}–${t12(s.end)} · ${hrs(mins(s.end) - mins(s.start))}${s.position ? ' · ' + esc(s.position) : ''}${s.notes ? ' · ' + esc(s.notes) : ''}</div>${cf.length ? `<div style="margin-top:4px">${cf.map(([c, t]) => `<span class="pill ${c}">${esc(t)}</span>`).join(' ')}</div>` : ''}</div>${mgr() ? '<span class="sub">Edit</span>' : ''}`;
         return mgr() ? rowBtn(`data-editshift="${esc(s.id)}" class="${s.name === data.me.name ? 'mine' : ''}"`, inner) : `<div class="row ${s.name === data.me.name ? 'mine' : ''}">${inner}</div>`; }).join('') || '<div class="empty" style="padding:14px">No shifts.</div>'}
       ${offs.length ? `<div class="row"><div class="txt sub">Off: ${offs.map(esc).join(', ')}</div></div>` : ''}
       ${mgr() ? rowBtn(`data-addshift="${d}"`, '<div class="txt accent"><b>+ Add shift</b></div>') : ''}</div>`;
   };
-  const totals = mgr() ? (() => { const t = {}; days.forEach(d => shiftsOn(d).forEach(s => { t[s.name] = (t[s.name] || 0) + mins(s.end) - mins(s.start); }));
+  const totals = mgr() ? (() => { const t = {}; days.forEach(d => shiftsOn(d).filter(notGone).forEach(s => { t[s.name] = (t[s.name] || 0) + mins(s.end) - mins(s.start); }));
     const L = labor(shiftItems(weekShifts(week)));
     const names = Object.keys(t).sort(); return names.length ? `<h2>Hours & estimated wages</h2><div class="card">${names.map(n => `<div class="row"><div class="txt">${esc(n)}${L.ot[n] ? ` <span class="pill warn">OT ${hrs(L.ot[n] * 60)}</span>` : ''}</div><b>${hrs(t[n])}</b><span class="money">${wageOf(n) ? money(L.byPerson[n] || 0) : '<span class="sub">no wage</span>'}</span></div>`).join('')}
       <div class="row"><div class="txt"><b>Total</b></div><b>${hrs(Object.values(t).reduce((a, b) => a + b, 0))}</b><span class="money"><b>${money(L.total)}</b></span></div></div>` : ''; })() : '';
-  const tools = mgr() ? `<div class="btns" style="margin:10px 0 4px"><button class="btn sm" data-copyweek>Copy last week here</button><button class="btn sm" data-clearweek>Clear this week</button><button class="btn sm" data-sendweek>Email this week to the team</button></div>` : '';
-  return `<h1>Schedule</h1>${nav}${mgr() ? '' : `<div class="seg"><button data-mine="0" aria-pressed="${!schedMine}">Everyone</button><button data-mine="1" aria-pressed="${schedMine}">My shifts</button></div>`}
+  const pend = weekPending(week).length;
+  const pubBtn = lead() ? (pend ? `<button class="btn sm go" data-publish>Publish week (${pend})</button>` : '<span class="pill ok">Published</span>') : '';
+  const tools = lead() ? `<div class="btns" style="margin:10px 0 4px">${pubBtn}${mgr() ? '<button class="btn sm" data-copyweek>Copy last week here</button><button class="btn sm" data-clearweek>Clear this week</button>' : ''}</div>` : '';
+  return `<h1>Schedule</h1>${nav}${lead() && pend ? '<p class="sub" style="margin:0 4px 6px">Drafts and changes stay hidden from the team until you publish.</p>' : ''}${mgr() ? '' : `<div class="seg"><button data-mine="0" aria-pressed="${!schedMine}">Everyone</button><button data-mine="1" aria-pressed="${schedMine}">My shifts</button></div>`}
     ${tools}${days.map(dayCard).join('')}${totals}
     <div class="btns" style="margin-top:14px"><button class="btn" data-more="requests">Time off & swaps</button><button class="btn" data-more="avail">My availability</button></div>`;
 }
@@ -260,37 +302,48 @@ function viewScheduleGrid(){
   const label = week === monday(T()) ? 'This week' : week === plus(monday(T()), 7) ? 'Next week' : week === plus(monday(T()), -7) ? 'Last week' : 'Week of ' + shortDay(week);
   const order = { Manager: 0, Lead: 1, Staff: 2 };
   const roster = (M ? (data.users || []).filter(u => u.active).map(u => ({ id: u.id, name: u.name, role: u.role, wage: u.wage })) : (data.people || []).map(p => ({ name: p.name, role: '' })));
-  const inWeek = (data.shifts || []).filter(s => days.includes(s.date));
+  const inWeek = (data.shifts || []).filter(s => days.includes(s.date)), inWeekLive = inWeek.filter(notGone);
   inWeek.forEach(s => { if (!roster.some(p => p.name === s.name)) roster.push({ name: s.name, role: 'Former' }); });
   roster.sort((a, b) => (order[a.role] ?? 3) - (order[b.role] ?? 3) || a.name.localeCompare(b.name));
-  const dayMins = d => inWeek.filter(s => s.date === d).reduce((n, s) => n + mins(s.end) - mins(s.start), 0);
-  const L = M ? labor(shiftItems(inWeek)) : null;
+  const dayMins = d => inWeekLive.filter(s => s.date === d).reduce((n, s) => n + mins(s.end) - mins(s.start), 0);
+  const L = M ? labor(shiftItems(inWeekLive)) : null;
   const cell = (p, d) => {
     const list = inWeek.filter(s => s.name === p.name && s.date === d);
     const off = approvedOff(p.name, d), ask = pendingOff(p.name, d), un = unavail(p.name, d);
     const note = off ? '<div class="cnote warn">Time off</div>' : ask ? '<div class="cnote">Asked off</div>' : un ? `<div class="cnote">${un.from ? 'Can\'t ' + t12(un.from) + '–' + t12(un.to) : 'Unavailable'}</div>` : '';
     const chips = list.map(s => { const cf = M ? conflicts(s) : [];
-      return `<button class="chip ${cf.some(c => c[0] === 'warn') ? 'bad' : ''} ${s.name === data.me.name ? 'me' : ''}" ${M ? `data-editshift="${esc(s.id)}" draggable="true" data-drag="${esc(s.id)}"` : 'tabindex="-1"'} title="${esc(cf.map(c => c[1]).join(', '))}">
-        <b>${t12(s.start)}–${t12(s.end)}</b>${s.position ? `<span>${esc(s.position)}</span>` : ''}${s.notes ? `<span class="n2">${esc(s.notes)}</span>` : ''}</button>`; }).join('');
+      const tip = cf.map(c => c[1]).concat(s.status === 'changed' && s.was ? ['Team still sees ' + (s.was.name !== s.name ? s.was.name + ' ' : '') + t12(s.was.start) + '–' + t12(s.was.end) + (s.was.date !== s.date ? ' on ' + shortDay(s.was.date) : '')] : []).join(' · ');
+      return `<button class="chip ${cf.some(c => c[0] === 'warn') ? 'bad' : ''} ${s.name === data.me.name ? 'me' : ''} st-${s.status || 'published'}" ${M ? `data-editshift="${esc(s.id)}" ${s.status === 'removed' ? '' : `draggable="true" data-drag="${esc(s.id)}"`}` : 'tabindex="-1"'} title="${esc(tip)}">
+        ${STATUS[s.status] ? `<i class="tag">${STATUS[s.status][1]}</i>` : ''}<b>${t12(s.start)}–${t12(s.end)}</b>${s.position ? `<span>${esc(s.position)}</span>` : ''}${s.notes ? `<span class="n2">${esc(s.notes)}</span>` : ''}</button>`; }).join('');
     return `<td class="${d === T() ? 'today' : ''} ${off ? 'off' : un && !un.from ? 'un' : ''}" ${M ? `data-cell="${esc(p.name)}|${d}"` : ''}>${note}${chips}${M ? `<button class="addc" data-addshift="${d}" data-who="${esc(p.name)}" aria-label="Add a shift for ${esc(p.name)} on ${shortDay(d)}">+</button>` : ''}</td>`;
   };
   const rows = roster.map(p => { const m = inWeek.filter(s => s.name === p.name).reduce((n, s) => n + mins(s.end) - mins(s.start), 0);
+    const m2 = inWeekLive.filter(s => s.name === p.name).reduce((n, s) => n + mins(s.end) - mins(s.start), 0);
     const wageIn = M && p.id ? `<label class="wagef"><span>$</span><input class="wage" inputmode="decimal" data-wage="${esc(p.id)}" value="${p.wage ? Number(p.wage).toFixed(2) : ''}" placeholder="wage" aria-label="${esc(p.name)} hourly wage"><span>/h</span></label>` : '';
-    return `<tr class="${p.name === data.me.name ? 'mine-row' : ''}"><th scope="row"><b>${esc(p.name)}</b><span class="sub">${esc(p.role || '')}</span>${wageIn}</th>${days.map(d => cell(p, d)).join('')}<td class="tot">${m ? hrs(m) : ''}${M && m ? `<div class="money">${p.wage ? money(L.byPerson[p.name] || 0) : '<span class="sub">no wage</span>'}</div>${L.ot[p.name] ? `<span class="pill warn">OT ${hrs(L.ot[p.name] * 60)}</span>` : ''}` : ''}</td></tr>`; }).join('');
-  const total = inWeek.reduce((n, s) => n + mins(s.end) - mins(s.start), 0);
+    return `<tr class="${p.name === data.me.name ? 'mine-row' : ''}"><th scope="row"><b>${esc(p.name)}</b><span class="sub">${esc(p.role || '')}</span>${wageIn}</th>${days.map(d => cell(p, d)).join('')}<td class="tot">${m2 ? hrs(m2) : ''}${M && m2 ? `<div class="money">${p.wage ? money(L.byPerson[p.name] || 0) : '<span class="sub">no wage</span>'}</div>${L.ot[p.name] ? `<span class="pill warn">OT ${hrs(L.ot[p.name] * 60)}</span>` : ''}` : ''}</td></tr>`; }).join('');
+  const total = inWeekLive.reduce((n, s) => n + mins(s.end) - mins(s.start), 0);
   return `<div class="gridhead"><h1 style="margin:0">Schedule</h1>
       <div class="weeknav" style="margin:0"><button class="btn sm" data-week="-7" ${week <= lo ? 'disabled' : ''} aria-label="Previous week">‹</button><div style="min-width:200px"><b>${label}</b><div class="sub">${shortDay(days[0])} – ${shortDay(days[6])}</div></div><button class="btn sm" data-week="7" ${week >= hi ? 'disabled' : ''} aria-label="Next week">›</button>${week !== monday(T()) ? '<button class="btn sm" data-thisweek>Today</button>' : ''}</div>
       ${M ? `<div class="labor"><span class="sub">Est. wages</span><b>${money(L.total)}</b><span class="sub">${hrs(total)}${data.pay && data.pay.extra ? ' · incl. ' + data.pay.extra + '% extra' : ''}</span></div>` : ''}
-      <div class="btns">${M ? '<button class="btn sm" data-copyweek>Copy last week</button><button class="btn sm" data-clearweek>Clear week</button><button class="btn sm go" data-sendweek>Email week to team</button>' : ''}<button class="btn sm" data-print>Print</button></div></div>
+      <div class="btns">${M ? '<button class="btn sm" data-copyweek>Copy last week</button><button class="btn sm" data-clearweek>Clear week</button>' : ''}${lead() ? (weekPending(week).length ? `<button class="btn sm go" data-publish>Publish week (${weekPending(week).length})</button>` : '<span class="pill ok">Published</span>') : ''}<button class="btn sm" data-print>Print</button></div></div>
     <div class="gridwrap"><table class="grid"><thead><tr><th class="corner">${M ? '<span class="sub">Click a box to add. Drag to move, Alt-drag to copy.</span>' : ''}</th>${days.map(d => `<th class="${d === T() ? 'today' : ''}"><b>${DOW[pd(d).getDay()]}</b> ${pd(d).getDate()}<span class="sub">${hrs(dayMins(d))}</span></th>`).join('')}<th class="tot">Hours</th></tr></thead>
       <tbody>${rows || `<tr><td colspan="9" class="empty">No one on the team yet.</td></tr>`}</tbody>
-      <tfoot><tr><th scope="row">Total${M ? '<span class="sub">Estimated wages</span>' : ''}</th>${days.map(d => `<td class="tot">${inWeek.filter(s => s.date === d).length} shift${inWeek.filter(s => s.date === d).length === 1 ? '' : 's'}${M ? `<div class="money">${money(L.byDay[d] || 0)}</div>` : ''}</td>`).join('')}<td class="tot"><b>${hrs(total)}</b>${M ? `<div class="money"><b>${money(L.total)}</b></div>` : ''}</td></tr></tfoot></table></div>
+      <tfoot><tr><th scope="row">Total${M ? '<span class="sub">Estimated wages</span>' : ''}</th>${days.map(d => `<td class="tot">${inWeekLive.filter(s => s.date === d).length} shift${inWeekLive.filter(s => s.date === d).length === 1 ? '' : 's'}${M ? `<div class="money">${money(L.byDay[d] || 0)}</div>` : ''}</td>`).join('')}<td class="tot"><b>${hrs(total)}</b>${M ? `<div class="money"><b>${money(L.total)}</b></div>` : ''}</td></tr></tfoot></table></div>
     ${M && L.missing.length ? `<p class="sub warn-t">No wage set for ${L.missing.map(n => esc(first(n))).join(', ')} – type it next to their name to include them.</p>` : ''}
     <p class="sub">Red outline = a problem (time off, unavailable or double-booked) – hover to see it. ${M && data.reminders && data.reminders.on ? 'People with an email get reminders before their shifts, and an email when a shift in the next 7 days changes.' : ''}</p>`;
 }
+function publishSheet(){
+  const list = weekPending(week), c = k => list.filter(s => s.status === k).length, people = [...new Set(list.map(s => s.name).concat(list.filter(s => s.was).map(s => s.was.name)))];
+  return `<div class="sheet" role="dialog" aria-label="Publish"><div class="sheet-in"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="margin:0">Publish the week</h1><button class="btn sm" data-closesheet>Close</button></div>
+    <p class="sub">${shortDay(week)} – ${shortDay(plus(week, 6))}</p>
+    <div class="card">${[['draft', 'new shifts'], ['changed', 'changed shifts'], ['removed', 'shifts to remove']].filter(([k]) => c(k)).map(([k, n]) => `<div class="row"><div class="txt">${n}</div><b>${c(k)}</b></div>`).join('')}
+      <div class="row"><div class="txt sub">Affects ${people.map(n => esc(first(n))).join(', ')}</div></div></div>
+    <form class="stack" data-form="publish" style="padding:0"><label class="opt"><input type="checkbox" name="notify" checked> Notify the team – email the people affected and post in Schedule & swaps</label>
+      <button class="btn go">Publish</button></form></div></div>`;
+}
 function shiftSheet(){
   const s = sheet, d = s.date, team = (data.users || []).filter(u => u.active).map(u => u.name);
-  const status = n => { if (approvedOff(n, d)) return ' – time off'; const u = unavail(n, d); if (u) return u.from ? ' – unavailable ' + t12(u.from) + '–' + t12(u.to) : ' – unavailable'; if (pendingOff(n, d)) return ' – asked for off'; const b = shiftsOn(d).filter(x => x.name === n && x.id !== s.id); return b.length ? ' – already ' + b.map(x => t12(x.start) + '–' + t12(x.end)).join(', ') : ''; };
+  const status = n => { if (approvedOff(n, d)) return ' – time off'; const u = unavail(n, d); if (u) return u.from ? ' – unavailable ' + t12(u.from) + '–' + t12(u.to) : ' – unavailable'; if (pendingOff(n, d)) return ' – asked for off'; const b = shiftsOn(d).filter(x => notGone(x) && x.name === n && x.id !== s.id); return b.length ? ' – already ' + b.map(x => t12(x.start) + '–' + t12(x.end)).join(', ') : ''; };
   return `<div class="sheet" role="dialog" aria-label="Shift"><div class="sheet-in"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="margin:0">${s.id ? 'Edit shift' : 'New shift'}</h1><button class="btn sm" data-closesheet>Close</button></div>
     <p class="sub">${/^(Today|Tomorrow|Yesterday)$/.test(dayName(d)) ? dayName(d) + ' · ' + shortDay(d) : dayName(d)}</p>
     <form class="stack" data-form="shift" style="padding:0">
@@ -301,7 +354,8 @@ function shiftSheet(){
       <label class="f">Notes<input name="notes" maxlength="200" value="${esc(s.notes || '')}"></label>
       <label class="f">Date<input name="date" type="date" value="${esc(d)}"></label>
       <div class="est" id="est" aria-live="polite"></div>
-      <div class="btns"><button class="btn go">${s.id ? 'Save' : 'Add shift'}</button>${s.id ? `<button type="button" class="btn" data-delshift="${esc(s.id)}">Delete</button>` : ''}</div></form></div></div>`;
+      <p class="sub" style="margin:0">${!s.id || s.status === 'draft' ? 'Draft – the team sees it after you publish the week.' : s.status === 'changed' && s.was ? 'Not published – the team still sees ' + esc(s.was.name) + ' ' + t12(s.was.start) + '–' + t12(s.was.end) + ' on ' + shortDay(s.was.date) + '.' : s.status === 'removed' ? 'This shift will be removed when you publish. The team still sees it until then.' : 'Published. Changes stay hidden from the team until you publish again.'}</p>
+      <div class="btns">${s.status === 'removed' ? `<button type="button" class="btn go" data-restore="${esc(s.id)}">Keep this shift</button>` : `<button class="btn go">${s.id ? 'Save' : 'Add shift'}</button>${s.id ? `<button type="button" class="btn" data-delshift="${esc(s.id)}">Delete</button>` : ''}`}</div></form></div></div>`;
 }
 
 /* ----- availability ----- */
@@ -569,7 +623,7 @@ function render(){
   const gate = mustRead();
   if (gate.length){ $('#tabs').hidden = true; $('#overlay').innerHTML = ''; $('#main').innerHTML = viewMustRead(gate[0], gate.length); return; }
   const chatN = (data.channels || []).reduce((n, c) => n + c.unread, 0);
-  const badge = { chat: chatN, more: (mgr() ? (data.requests || []).filter(q => q.status === 'Pending' && q.from !== data.me.name).length : 0) + (data.announcements || []).filter(a => !a.read).length };
+  const badge = { lists: prepMine().length, chat: chatN, more: (mgr() ? (data.requests || []).filter(q => q.status === 'Pending' && q.from !== data.me.name).length : 0) + (data.announcements || []).filter(a => !a.read).length };
   $('#tabs').hidden = false;
   $('#tabs').innerHTML = TABS.map(([k, n, ic]) => `<button data-tab="${k}" ${tab === k ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}${badge[k] ? `<span class="n">${badge[k]}</span>` : ''}</button>`).join('');
   const ae = document.activeElement, keepWage = ae && ae.dataset && ae.dataset.wage ? [ae.dataset.wage, ae.value, ae.selectionStart] : null;
@@ -578,7 +632,7 @@ function render(){
   document.body.classList.toggle('wide', wide() && tab === 'schedule');
   $('#main').innerHTML = tab === 'lists' ? viewLists() : tab === 'schedule' ? viewSchedule() : tab === 'chat' ? viewChat() : tab === 'more' ? viewMore() : viewToday();
   if (draft !== null){ const t = $('.composer textarea'); if (t){ t.value = draft; t.focus(); } }
-  $('#overlay').innerHTML = viewer ? viewViewer() : sheet ? (sheet.kind === 'shift' ? shiftSheet() : sheet.kind === 'punch' ? punchSheet() : pickSheet(sheet.kind)) : '';
+  $('#overlay').innerHTML = viewer ? viewViewer() : sheet ? (sheet.kind === 'shift' ? shiftSheet() : sheet.kind === 'publish' ? publishSheet() : sheet.kind === 'punch' ? punchSheet() : pickSheet(sheet.kind)) : '';
   document.body.classList.toggle('noscroll', !!(viewer || sheet));
   if (keepWage){ const el = document.querySelector(`[data-wage="${keepWage[0]}"]`); if (el){ el.value = keepWage[1]; el.focus(); try { el.setSelectionRange(keepWage[2], keepWage[2]); } catch (_) {} } }
   const sf = document.querySelector('form[data-form=shift]'), est = $('#est'); if (sf && est) est.innerHTML = shiftEstimate(sf);
@@ -605,6 +659,8 @@ document.addEventListener('click', async e => {
   if (d.golist){ listTab = d.golist; tab = 'lists'; save('pt-tab', tab); window.scrollTo(0, 0); render(); return; }
   if (d.more !== undefined){ tab = 'more'; moreView = d.more; editUser = null; if (d.more !== 'time') tsPerson = ''; if (d.more === 'time' && b.textContent.includes('Back')) tsPerson = ''; window.scrollTo(0, 0); render(); return; }
   if (d.list){ listTab = d.list; render(); return; }
+  if (d.prepdone){ const x = (data.prep || []).find(p => p.id === d.prepdone), on = d.on !== '1'; if (x){ x.doneAt = on ? new Date().toISOString() : ''; x.doneBy = on ? data.me.name : ''; } render(); act('donePrep', { id: d.prepdone, done: on ? '1' : '0' }); return; }
+  if (d.prepdel){ if (!confirm('Remove this prep item?')) return; data.prep = (data.prep || []).filter(p => p.id !== d.prepdel); render(); act('delPrep', { id: d.prepdel }); return; }
   if (d.theme){ setTheme(d.theme); render(); return; }
   if (d.mine !== undefined){ schedMine = d.mine === '1'; save('pt-mine', schedMine ? '1' : '0'); render(); return; }
   if (d.week){ week = plus(week, Number(d.week)); render(); window.scrollTo(0, 0); scrollToday(); return; }
@@ -642,7 +698,11 @@ document.addEventListener('click', async e => {
   if (d.cancelreq){ act('cancelRequest', { id: d.cancelreq }); return; }
   if (d.addshift){ sheet = { kind: 'shift', date: d.addshift, name: d.who || '', start: (data.presets[0] || {}).start, end: (data.presets[0] || {}).end }; render(); return; }
   if (d.editshift){ const s = data.shifts.find(x => x.id === d.editshift); if (s) { sheet = Object.assign({ kind: 'shift' }, s); render(); } return; }
-  if (d.delshift){ if (!confirm('Delete this shift?')) return; data.shifts = data.shifts.filter(s => s.id !== d.delshift); sheet = null; render(); act('deleteShift', { id: d.delshift }); return; }
+  if (d.delshift){ if (!confirm('Delete this shift?')) return; const x = data.shifts.find(s => s.id === d.delshift);
+    if (x && x.status && x.status !== 'draft') x.status = 'removed'; else data.shifts = data.shifts.filter(s => s.id !== d.delshift);
+    sheet = null; render(); act('deleteShift', { id: d.delshift }); return; }
+  if (d.restore){ const x = data.shifts.find(s => s.id === d.restore); if (x) x.status = 'changed'; sheet = null; render(); act('restoreShift', { id: d.restore }); return; }
+  if (d.publish !== undefined){ sheet = { kind: 'publish' }; render(); return; }
   if (d.sendweek !== undefined){ if (!confirm('Email everyone working the week of ' + shortDay(week) + ' their shifts?')) return; b.disabled = true;
     act('sendWeek', { from: week }).then(r => { if (r && r.result) toast('Sent to ' + r.result.sent + (r.result.noEmail.length ? ' · no email for ' + r.result.noEmail.map(first).join(', ') : '')); }); return; }
   if (d.testmail !== undefined){ b.disabled = true; act('testReminder').then(r => { if (r) toast('Sent – check your inbox (and spam)'); }); return; }
@@ -688,9 +748,14 @@ document.addEventListener('submit', async e => {
   if (kind === 'shift'){ if (!v('name')){ toast('Pick who is working'); return; } const p = { id: sheet && sheet.id || '', name: v('name'), date: v('date'), start: v('start'), end: v('end'), position: v('position'), notes: v('notes') };
     if (p.end <= p.start){ toast('The end has to be after the start'); return; }
     const ex = p.id && (data.shifts || []).find(x => x.id === p.id);
-    if (ex) Object.assign(ex, p); else data.shifts.push(Object.assign({}, p, { id: 'tmp' + Date.now() }));
+    if (ex) Object.assign(ex, p, { status: ex.status === 'draft' ? 'draft' : 'changed' }); else data.shifts.push(Object.assign({}, p, { id: 'tmp' + Date.now(), status: 'draft' }));
     data.shifts.sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
     sheet = null; render(); act('saveShift', p).then(r => { if (r) toast(p.id ? 'Shift saved' : 'Shift added'); }); return; }
+  if (kind === 'publish'){ const notify = f.elements.namedItem('notify').checked ? '1' : '0'; sheet = null; render();
+    act('publish', { from: week, to: plus(week, 6), notify }).then(r => { if (r && r.result) toast('Published' + (notify === '1' ? ' · emailed ' + r.result.emailed + (r.result.noEmail.length ? ' · no email: ' + r.result.noEmail.map(first).join(', ') : '') : '')); }); return; }
+  if (kind === 'prep'){ if (!v('item')){ toast('What needs prepping?'); return; } const notify = f.elements.namedItem('notify').checked ? '1' : '0';
+    btn.disabled = true; act('addPrep', { item: v('item'), details: v('details'), when: v('when'), notify }).then(r => { if (r && r.result){ const x = r.result;
+      toast(x.names.length ? 'Sent to ' + x.label + ' · ' + x.names.map(first).join(', ') + (x.emailed ? ' (emailed ' + x.emailed + ')' : '') : 'Added – nobody is scheduled for that shift yet'); } }); f.reset(); return; }
   if (kind === 'punch'){ const p = { id: sheet && sheet.id || '', name: v('name'), date: v('date'), in: v('in'), out: v('out'), note: v('note') }; sheet = null; act('savePunch', p).then(r => { if (r) toast('Saved'); }); return; }
   if (kind === 'reminders'){ const mode = (f.querySelector('input[name=mode]:checked') || {}).value || '';
     act('myReminders', { email: v('email'), mode }).then(r => { if (r) toast(mode === 'Off' ? 'Reminders off' : v('email') ? 'Saved' : 'Saved – add an email to get them'); }); return; }
@@ -719,7 +784,7 @@ document.addEventListener('drop', e => {
   const [name, date] = td.dataset.cell.split('|'), copy = e.altKey;
   if (!copy && name === s.name && date === s.date) return render();
   const p = { id: copy ? '' : s.id, name, date, start: s.start, end: s.end, position: s.position, notes: s.notes };
-  if (copy) data.shifts.push(Object.assign({}, s, { id: 'tmp' + Date.now(), name, date })); else Object.assign(s, { name, date });
+  if (copy) data.shifts.push(Object.assign({}, s, { id: 'tmp' + Date.now(), name, date, status: 'draft' })); else Object.assign(s, { name, date, status: s.status === 'draft' ? 'draft' : 'changed', was: s.was || (s.status === 'published' || !s.status ? { date: s.date, start: s.start, end: s.end, name: s.name } : s.was) });
   render(); act('saveShift', p).then(r => { if (r) toast(copy ? 'Copied to ' + first(name) + ', ' + shortDay(date) : 'Moved to ' + first(name) + ', ' + shortDay(date)); });
 });
 WIDE.addEventListener && WIDE.addEventListener('change', () => { if (data) render(); });
