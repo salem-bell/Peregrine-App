@@ -1,6 +1,6 @@
 // Keeps the app shell on the phone so it opens instantly and works offline.
 // Bump VERSION whenever app files change so phones pick up the new version.
-const VERSION = 'pt-2.2.0';
+const VERSION = 'pt-2.2.1';
 const SHELL = ['./', 'index.html', 'app.css', 'app.js', 'config.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'brand/bird-gold.png', 'brand/falcon.png', 'brand/branch.png'];
 
 self.addEventListener('install', e => {
@@ -14,7 +14,10 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== self.location.origin) return;
+  // A 404 or server error (e.g. while GitHub Pages is down) falls back to the saved copy too, so installed phones keep working.
+  const saved = () => caches.match(e.request).then(r => r || caches.match('index.html'));
   e.respondWith(fetch(e.request).then(res => {
+    if (!res.ok) return saved().then(r => r || res);
     const copy = res.clone(); caches.open(VERSION).then(c => c.put(e.request, copy)); return res;
-  }).catch(() => caches.match(e.request).then(r => r || caches.match('index.html'))));
+  }).catch(saved));
 });
