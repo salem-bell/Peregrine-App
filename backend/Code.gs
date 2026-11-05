@@ -11,12 +11,12 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '3.1';
+const VERSION = '3.2';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Off'];
 
 const TABS = {
-  'Users':         ['Name', 'Role', 'Code', 'Active', 'Phone', 'Email', 'User ID (do not edit)', 'Sign-in version (do not edit)', 'Added', 'Reminders (blank = default)', 'Hourly wage (managers only)', 'On schedule (blank = yes)', 'Schedule order', 'Notifications (blank = all on)'],
+  'Users':         ['Name', 'Role', 'Code', 'Active', 'Phone', 'Email', 'User ID (do not edit)', 'Sign-in version (do not edit)', 'Added', 'Reminders (blank = default)', 'Hourly wage (managers only)', 'On schedule (blank = yes)', 'Schedule order', 'Notifications (blank = all on)', 'Last active'],
   'Checklists':    ['List', 'Task', 'Order', 'Active', 'Notes', 'Days (blank = every day)', 'Section'],
   'Checklist log': ['Date', 'List', 'Task', 'Done by', 'Done at'],
   'Announcements': ['ID', 'Posted', 'From', 'Title', 'Message', 'Pinned', 'Active', 'Must acknowledge'],
@@ -283,7 +283,28 @@ function who_(ss, token) {
   if (!r || !truthy_(r[3]) || sig_(r, issued) !== sig) throw new Error('signin: please sign in');
   const days = Number(setting_(ss, 'Ask for the code again every') || 60);
   if (days > 0 && Date.now() - Number(issued) > days * 864e5) throw new Error('signin: it has been ' + days + ' days – please sign in again');
+  touch_(ss, id, i + 2);
   return { name: String(r[0]), role: role_(r[1]), id, row: i + 2 };
+}
+
+/* ----- "last active": kept in the script cache (cheap, every request) and written to Users › Last active at most every 10 minutes ----- */
+function touch_(ss, id, row) {
+  try {
+    const c = CacheService.getScriptCache(), now = Date.now();
+    if (now - Number(c.get('seen_' + id) || 0) < 30000) return;
+    c.put('seen_' + id, String(now), 21600);
+    if (now - Number(c.get('seenp_' + id) || 0) < 600000) return;
+    c.put('seenp_' + id, String(now), 21600);
+    const sh = ss.getSheetByName('Users'); if (sh.getLastColumn() < TABS.Users.length) buildTab_(ss, 'Users');
+    sh.getRange(row, 15).setValue(new Date(now));
+  } catch (e) {}
+}
+/** id → last-active time (ms) for everyone who hasn't hidden it. You always see your own. */
+function activeMap_(ss, users, me) {
+  const live = users.filter(r => truthy_(r[3]) && r[6]), out = {};
+  let c = {}; try { c = CacheService.getScriptCache().getAll(live.map(r => 'seen_' + r[6])); } catch (e) {}
+  live.forEach(r => { const id = String(r[6]); if (id !== me.id && !pushPrefs_(r).active) return; const ms = Math.max(Number(c['seen_' + id] || 0), toMs_(r[14])); if (ms) out[id] = ms; });
+  return out;
 }
 
 function api_(token, p) {
@@ -322,6 +343,7 @@ function state_(ss, me, slim) {
   const out = { ok: true, version: VERSION, today, updated: new Date().toISOString(), name: setting_(ss, 'Shop name') || 'Team', me: { name: me.name, role: me.role, id: me.id, email: String(users.find(r => String(r[6]) === me.id)[5] || ''), reminders: remindMode_(ss, users.find(r => String(r[6]) === me.id)), cal: calKey_(users.find(r => String(r[6]) === me.id)) },
     reminders: { on: !/^off$/i.test(setting_(ss, 'Shift reminder emails')), night: setting_(ss, 'Night-before reminder at') || '19:00', hours: Number(setting_(ss, 'Hours-before reminder')) || 2 }, team: active,
     people: users.filter(r => truthy_(r[3]) && r[6]).map(r => ({ id: String(r[6]), name: String(r[0]), role: role_(r[1]), onSchedule: onSched_(r), order: Number(r[12]) || 0 })) };
+  out.active = activeMap_(ss, users, me);
   out.push = { key: setting_(ss, 'Push public key'), ready: !!(setting_(ss, 'Push service address') && setting_(ss, 'Push public key')),
     prefs: pushPrefs_(users.find(r => String(r[6]) === me.id)), devices: rv_(ss, 'Push').filter(r => String(r[0]) === me.id).map(r => String(r[2])) };
 
@@ -761,8 +783,8 @@ function act_(ss, me, p, touched) {
       const sh = tab('Users'), v = vals_(sh), i = v.findIndex(r => String(r[6]) === me.id); if (i < 0) return;
       const P = Object.assign(pushPrefs_(v[i]), {});
       if (/^(all|direct|off)$/.test(String(p.msg || ''))) P.msg = String(p.msg);
-      ['schedule', 'prep', 'remind', 'news'].forEach(k => { if (p[k] === '1' || p[k] === '0') P[k] = p[k] === '1'; });
-      sh.getRange(i + 2, 14).setValue('msg=' + P.msg + ';' + ['schedule', 'prep', 'remind', 'news'].map(k => k + '=' + (P[k] ? 1 : 0)).join(';'));
+      ['schedule', 'prep', 'remind', 'news', 'active'].forEach(k => { if (p[k] === '1' || p[k] === '0') P[k] = p[k] === '1'; });
+      sh.getRange(i + 2, 14).setValue('msg=' + P.msg + ';' + ['schedule', 'prep', 'remind', 'news', 'active'].map(k => k + '=' + (P[k] ? 1 : 0)).join(';'));
       return;
     }
     case 'pushTest': {
@@ -889,7 +911,7 @@ function chat_(token, channel, text, photo, opt) {
       reply: rt ? (orig ? snip(orig) : { id: rt, from: '', text: 'Older message', photo: 0 }) : null, acks: acks.map(x => byId[x]), ackMine: acks.indexOf(me.id) >= 0 ? 1 : 0 }; });
   const active = {}; users.filter(r => truthy_(r[3])).forEach(r => { active[String(r[6])] = 1; });
   const seen = rv_(ss, 'Chat reads').filter(r => String(r[1]) === channel && String(r[0]) !== me.id && active[String(r[0])]).map(r => ({ name: byId[String(r[0])], at: toIso_(r[2]) }));
-  return { ok: true, channel, me: me.id, messages: msgs, seen, more: from > 0 ? 1 : 0, channels: channels_(ss, me, users) };
+  return { ok: true, channel, me: me.id, messages: msgs, seen, more: from > 0 ? 1 : 0, channels: channels_(ss, me, users), active: activeMap_(ss, users, me) };
 }
 /** Search the recent messages (last 3,000) in every conversation this person can see. */
 function chatSearch_(token, q) {
@@ -1121,7 +1143,7 @@ function sendShiftReminders() {
 
 /* ----- push notifications: the Sheet decides who gets what; the Cloudflare Worker does the sending ----- */
 function pushPrefs_(r) {
-  const P = { msg: 'all', schedule: true, prep: true, remind: true, news: true };
+  const P = { msg: 'all', schedule: true, prep: true, remind: true, news: true, active: true };
   String(r && r[13] || '').split(';').forEach(kv => { const [k, v] = kv.split('='); if (k === 'msg' && /^(all|direct|off)$/.test(v)) P.msg = v; else if (k in P && k !== 'msg') P[k] = v === '1'; });
   return P;
 }

@@ -570,8 +570,23 @@ function punchSheet(){
 const AV = ['#1E5662', '#2B7A8A', '#9A6514', '#5E6666'];
 const initials = n => { const w = String(n || '?').trim().split(/\s+/); return ((w[0] || '?')[0] + (w.length > 1 ? w[w.length - 1][0] : '')).toUpperCase(); };
 const avColor = k => { let h = 0; for (const ch of String(k)) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return AV[h % AV.length]; };
+/* "Last active": the server knows when each person last used the app (to within a minute or so). Under 5 minutes counts as active now. */
+const otherId = c => c && c.kind === 'dm' ? String(c.id).split('-').slice(1).find(x => x !== data.meId) : c && !c.kind ? c.id : '';
+const activeMs = id => Number((data.active || {})[id] || 0);
+const isActive = id => !!id && id !== data.meId && Date.now() - activeMs(id) < 5 * 60000;
+function activeLabel(id){
+  const ms = activeMs(id); if (!ms || id === data.meId) return ''; const m = Math.floor((Date.now() - ms) / 60000);
+  if (m < 5) return 'Active now'; if (m < 60) return `Active ${m} min ago`; if (m < 24 * 60 && ymdOf(new Date(ms)) === T()) return `Active ${Math.floor(m / 60)} h ago`;
+  if (ymdOf(new Date(ms)) === plus(T(), -1)) return 'Active yesterday'; if (m < 7 * 1440) return 'Active ' + new Date(ms).toLocaleDateString([], { weekday: 'long' });
+  return m < 60 * 1440 ? 'Active ' + new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric' }) : '';
+}
 function avatar(c, size){
   const st = `style="--av:${avColor(c.id || c.name)}${size ? ';--sz:' + size + 'px' : ''}"`;
+  if (isActive(otherId(c))) return avatar0(c, size).replace('class="av', 'class="av on');
+  return avatar0(c, size, st);
+}
+function avatar0(c, size, st){
+  st = st || `style="--av:${avColor(c.id || c.name)}${size ? ';--sz:' + size + 'px' : ''}"`;
   if (c.kind === 'channel') return `<span class="av ch" ${st} aria-hidden="true">#</span>`;
   if (c.kind === 'group') return `<span class="av grp" ${st} aria-hidden="true"><svg viewBox="0 0 24 24" width="55%" height="55%" fill="currentColor"><circle cx="9" cy="8" r="3.2"/><circle cx="16.5" cy="9" r="2.6"/><path d="M2.5 19c.4-3.6 3.1-5.6 6.5-5.6s6.1 2 6.5 5.6z"/><path d="M15.2 13.6c2.9-.3 5.6 1.3 6.3 5.4h-4.4c-.2-2.2-.9-4-1.9-5.4z"/></svg></span>`;
   return `<span class="av" ${st} aria-hidden="true">${esc(initials(c.name))}</span>`;
@@ -616,7 +631,7 @@ function viewChat(){
     <div class="clist">${body}</div>`;
 }
 function convName(){ const c = (data.channels || []).find(x => x.id === chat.open); if (c) return c.name; const other = chat.open.split('-').slice(1).find(x => x !== data.meId), p = (data.people || []).find(x => x.id === other); return p ? p.name : chat.dmName || 'Message'; }
-function convSub(c){ if (!c) return ''; if (c.kind === 'channel') return c.who === 'Everyone' ? '' : c.who; if (c.kind === 'group') return c.members.map(first).join(', '); return ''; }
+function convSub(c){ if (!c) return ''; if (c.kind === 'channel') return c.who === 'Everyone' ? '' : c.who; if (c.kind === 'group') { const on = (c.memberIds || []).filter(isActive).map(id => first(((data.people || []).find(p => p.id === id) || {}).name)); return c.members.map(first).join(', ') + (on.length ? ' · ' + on.join(', ') + ' active now' : ''); } return activeLabel(otherId(c)); }
 function viewConversation(){
   const msgs = chat.msgs || [], c = curChat() || { id: chat.open, name: convName(), kind: 'dm' }, multi = c.kind !== 'dm';
   const gap = (a, b) => Math.abs(new Date(b.at) - new Date(a.at)) / 6e4;
@@ -666,7 +681,7 @@ async function openChat(id, name, text, photo, opt){
     const r = await post(Object.assign({ fn: 'chat', token: TOKEN, channel: id, text }, photo ? { photo } : {}, opt || {}));
     if (photo){ const mine = r.messages.filter(m => m.fromId === r.me && m.photo).pop(); if (mine && !picCache[mine.id]){ picCache[mine.id] = photo; idbPut(mine.id, photo); } }
     if (chat.open !== id) return;
-    chat.msgs = r.messages; chat.seen = r.seen || []; chat.me = r.me; chat.loaded = id; data.channels = r.channels; save('pt-cache', JSON.stringify(data));
+    chat.msgs = r.messages; chat.seen = r.seen || []; chat.me = r.me; chat.loaded = id; data.channels = r.channels; if (r.active) data.active = r.active; save('pt-cache', JSON.stringify(data));
     const near = isNearBottom(); render(); if (opt && opt.find) jumpTo(opt.find); else if (near || text !== undefined) scrollChat();
   } catch (e) { const m = String(e.message || e); if (/^signin/.test(m)) return signOut(m.replace(/^signin:\s*/, '')); if (text !== undefined) { chat.compose = text; if (photo) chat.photo = photo; if (opt && opt.replyTo && opt.reply) chat.reply = opt.reply; chat.msgs = (chat.msgs || []).filter(x => x.id !== 'tmp'); toast('Not sent: ' + m); render(); } }
   clearTimeout(chat.timer); chat.timer = setTimeout(() => { if (chat.open === id && tab === 'chat' && !document.hidden) openChat(id); }, 7000);
@@ -742,7 +757,7 @@ const scrollChat = () => { const m = $('#msgs'); if (m) m.scrollTop = m.scrollHe
 function pickSheet(kind){
   const people = (data.people || []).filter(p => p.id !== data.meId);
   return `<div class="sheet" role="dialog"><div class="sheet-in"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="margin:0">${kind === 'dm' ? 'New message' : kind === 'group' ? 'New group' : 'New channel'}</h1><button class="btn sm" data-closesheet>Close</button></div>
-    ${kind === 'dm' ? `<div class="card"><button class="row rb" data-newgroup><span class="av grp sm" style="--av:#2B7A8A" aria-hidden="true">+</span><div class="txt"><b>New group</b></div><span>›</span></button>${lead() ? '<button class="row rb" data-newchannel><span class="av ch sm" style="--av:#1E5662" aria-hidden="true">#</span><div class="txt"><b>New channel</b></div><span>›</span></button>' : ''}</div><h2>People</h2><div class="card">${people.map(p => rowBtn(`data-dm="${esc(p.id)}" data-dmname="${esc(p.name)}"`, `${avatar({ id: p.id, name: p.name }, 36)}<div class="txt"><b>${esc(p.name)}</b></div><span>›</span>`)).join('')}</div>`
+    ${kind === 'dm' ? `<div class="card"><button class="row rb" data-newgroup><span class="av grp sm" style="--av:#2B7A8A" aria-hidden="true">+</span><div class="txt"><b>New group</b></div><span>›</span></button>${lead() ? '<button class="row rb" data-newchannel><span class="av ch sm" style="--av:#1E5662" aria-hidden="true">#</span><div class="txt"><b>New channel</b></div><span>›</span></button>' : ''}</div><h2>People</h2><div class="card">${people.map(p => rowBtn(`data-dm="${esc(p.id)}" data-dmname="${esc(p.name)}"`, `${avatar({ id: p.id, name: p.name }, 36)}<div class="txt"><b>${esc(p.name)}</b>${activeLabel(p.id) ? `<div class="sub">${activeLabel(p.id)}</div>` : ''}</div><span>›</span>`)).join('')}</div>`
       : `<form class="stack" data-form="${kind}" style="padding:0"><label class="f">Name<input name="name" maxlength="40" placeholder="${kind === 'group' ? 'e.g. Weekend crew' : 'e.g. Catering'}"></label>
         ${kind === 'group' ? `<div class="card">${people.map(p => `<label class="row" style="gap:10px"><input type="checkbox" name="m" value="${esc(p.id)}" style="width:auto;min-height:0"> ${esc(p.name)}</label>`).join('')}</div>`
           : `<label class="f">Who sees it<select name="who"><option>Everyone</option><option>Leads and managers</option><option>Managers</option></select></label>`}
@@ -810,7 +825,8 @@ function viewPush(){
       ${tog('prep', 'Prep', 'When someone asks your shift to prep something')}
       ${tog('remind', 'Shift reminders', 'At the times you picked under Shift reminders')}
       ${tog('news', 'Announcements', 'New posts from managers and leads')}</div>
-      <p class="sub">These apply to every device you've turned notifications on (${n} so far).</p>` : ''}`;
+      <p class="sub">These apply to every device you've turned notifications on (${n} so far).</p>` : ''}
+    <h2>Privacy</h2><div class="card">${tog('active', 'Show when I\'m active', 'Others see "Active now" or "Active 20 min ago" next to your name in Messages')}</div>`;
 }
 /** Open the screen a notification (or a ?go= link) points at. */
 function goTo(go){
