@@ -547,12 +547,23 @@ function viewChat(){
     <div class="btns"><button class="btn go" data-newdm>New message</button><button class="btn" data-newgroup>New group</button>${lead() ? '<button class="btn" data-newchannel>New channel</button>' : ''}</div>`;
 }
 function convName(){ const c = (data.channels || []).find(x => x.id === chat.open); if (c) return (c.kind === 'channel' ? '# ' : '') + c.name; const other = chat.open.split('-').slice(1).find(x => x !== data.meId), p = (data.people || []).find(x => x.id === other); return p ? p.name : chat.dmName || 'Message'; }
+function curChat(){ return (data.channels || []).find(x => x.id === chat.open); }
+function canEditChat(){ const c = curChat(); return !!c && Number(data.version) >= 2.9 && (c.kind === 'group' || (c.kind === 'channel' && lead())); }
+function editChatSheet(){
+  const c = curChat(); if (!c) return '';
+  const people = (data.people || []).filter(p => p.id !== data.meId), ids = c.memberIds || [];
+  return `<div class="sheet" role="dialog"><div class="sheet-in"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="margin:0">${c.kind === 'group' ? 'Edit group' : 'Edit channel'}</h1><button class="btn sm" data-closesheet>Close</button></div>
+    <form class="stack" data-form="editchat" style="padding:0"><label class="f">Name<input name="name" maxlength="40" value="${esc(c.name)}"></label>
+      ${c.kind === 'group' ? `<h2 style="margin:4px 0 0">People</h2><div class="card">${people.map(p => `<label class="row" style="gap:10px"><input type="checkbox" name="m" value="${esc(p.id)}" ${ids.indexOf(p.id) >= 0 ? 'checked' : ''} style="width:auto;min-height:0"> ${esc(p.name)}</label>`).join('')}</div>`
+        : `<label class="f">Who sees it<select name="who">${['Everyone', 'Leads and managers', 'Managers'].map(o => `<option ${o === c.who ? 'selected' : ''}>${o}</option>`).join('')}</select></label>`}
+      <button class="btn go">Save</button></form></div></div>`;
+}
 function viewConversation(){
   const msgs = chat.msgs || [];
   let lastDay = '';
   const body = msgs.map(m => { const day = ymdOf(new Date(m.at)), mine = m.fromId === chat.me; const sep = day !== lastDay ? `<div class="daysep">${dayName(day)}</div>` : ''; lastDay = day;
     return sep + `<div class="bub ${mine ? 'me' : ''}">${mine ? '' : `<div class="from">${esc(m.from)}</div>`}${m.photo ? picTag(m) : m.expired ? '<div class="sub"><i>Photo expired</i></div>' : ''}${m.text ? `<div class="msg">${esc(m.text)}</div>` : ''}<div class="when">${timeOf(m.at)}${mgr() ? ` · <button class="lnk" data-delmsg="${esc(m.id)}">Delete</button>` : ''}</div></div>`; }).join('');
-  return `<div class="convo"><div class="weeknav" style="margin-bottom:8px"><button class="btn sm" data-closechat>‹ Back</button><div><b>${esc(convName())}</b></div><span style="width:44px"></span></div>
+  return `<div class="convo"><div class="weeknav" style="margin-bottom:8px"><button class="btn sm" data-closechat>‹ Back</button><div><b>${esc(convName())}</b></div>${canEditChat() ? '<button class="btn sm" data-editchat>Edit</button>' : '<span style="width:44px"></span>'}</div>
     <div class="msgs" id="msgs">${body || '<div class="empty">Say hello 👋</div>'}</div>
     ${chat.photo ? `<div class="pv"><img src="${chat.photo}" alt="Photo to send"><button type="button" class="pvx" data-unphoto aria-label="Remove photo">×</button></div>` : ''}
     <form class="composer" data-form="send">${Number(data.version) >= 2.7 ? `<label class="btn picbtn" title="Add a photo" aria-label="Add a photo"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><input type="file" accept="image/*" data-photo hidden onchange="pickPhoto(this)"></label>` : ''}<textarea name="text" rows="1" maxlength="2000" placeholder="${chat.photo ? 'Add a caption' : 'Message'}" aria-label="Message">${esc(chat.compose)}</textarea><button class="btn go" ${chat.sending ? 'disabled' : ''}>Send</button></form></div>`;
@@ -934,7 +945,7 @@ function render(){
   $('#main').innerHTML = tab === 'tests' ? viewTests() : tab === 'lists' ? viewLists() : tab === 'schedule' ? viewSchedule() : tab === 'chat' ? viewChat() : tab === 'more' ? viewMore() : viewToday();
   if (same && tab !== 'chat'){ const g2 = $('.gridwrap'); if (keep && g2){ g2.scrollTop = keep[0]; g2.scrollLeft = keep[1]; } if (window.scrollY !== wy) window.scrollTo(0, wy); }   // a save or refresh redraws the page; stay where you were
   if (draft !== null){ const t = $('.composer textarea'); if (t){ t.value = draft; t.focus(); } }
-  $('#overlay').innerHTML = runner ? viewRunner() : viewer ? viewViewer() : sheet ? (sheet.kind === 'shift' ? shiftSheet() : sheet.kind === 'publish' ? publishSheet() : sheet.kind === 'punch' ? punchSheet() : pickSheet(sheet.kind)) : '';
+  $('#overlay').innerHTML = runner ? viewRunner() : viewer ? viewViewer() : sheet ? (sheet.kind === 'shift' ? shiftSheet() : sheet.kind === 'publish' ? publishSheet() : sheet.kind === 'punch' ? punchSheet() : sheet.kind === 'editchat' ? editChatSheet() : pickSheet(sheet.kind)) : '';
   document.body.classList.toggle('noscroll', !!(viewer || sheet || runner));
   if (keepWage){ const el = document.querySelector(keepWage[0]); if (el){ el.value = keepWage[1]; el.focus(); try { el.setSelectionRange(keepWage[2], keepWage[2]); } catch (_) {} } }
   const sf = document.querySelector('form[data-form=shift]'), est = $('#est'); if (sf && est) est.innerHTML = shiftEstimate(sf);
@@ -988,6 +999,7 @@ document.addEventListener('click', async e => {
   if (d.closechat !== undefined){ stopChat(); render(); return; }
   if (d.newdm !== undefined){ sheet = { kind: 'dm' }; render(); return; }
   if (d.newgroup !== undefined){ sheet = { kind: 'group' }; render(); return; }
+  if (d.editchat !== undefined){ sheet = { kind: 'editchat' }; render(); return; }
   if (d.newchannel !== undefined){ sheet = { kind: 'channel' }; render(); return; }
   if (d.dm){ sheet = null; const id = 'dm-' + [data.meId, d.dm].sort().join('-'); chat.msgs = []; openChat(id, d.dmname); return; }
   if (d.preset){ const [s, en] = d.preset.split('|'), f = b.closest('form'); f.elements.namedItem('start').value = s; f.elements.namedItem('end').value = en; const e2 = $('#est'); if (e2) e2.innerHTML = shiftEstimate(f); return; }
@@ -1089,6 +1101,12 @@ document.addEventListener('submit', async e => {
     act('myReminders', { email: v('email'), mode }).then(r => { if (r) toast(mode === 'Off' ? 'Reminders off' : v('email') ? 'Saved' : 'Saved – add an email to get them'); }); return; }
   if (kind === 'avail'){ const day = v('day') === 'date' ? v('date') : v('day'); if (!day){ toast('Pick a date'); return; }
     (data.availability = data.availability || []).push({ id: 'tmp' + Date.now(), name: data.me.name, day, from: v('from'), to: v('to'), note: v('note') }); render(); act('addAvail', { day, from: v('from'), to: v('to'), note: v('note') }).then(r => { if (r) toast('Added'); }); f.reset(); return; }
+  if (kind === 'editchat'){ const c = curChat(); if (!c) { sheet = null; render(); return; } if (!v('name')){ toast('Give it a name'); return; }
+    const p = { id: c.id, name: v('name') };
+    if (c.kind === 'group'){ const m = [...f.querySelectorAll('input[name=m]:checked')].map(x => x.value); if (!m.length){ toast('Pick at least one other person'); return; } p.members = m.concat(data.meId).join(','); }
+    else p.who = v('who');
+    c.name = p.name; if (p.who) c.who = p.who; sheet = null; render();
+    act('editChannel', p).then(r => { if (r) { toast('Saved'); if (chat.open === c.id) openChat(c.id); } }); return; }
   if (kind === 'group'){ const members = [...f.querySelectorAll('input[name=m]:checked')].map(x => x.value).join(','); sheet = null; act('newChannel', { kind: 'group', name: v('name'), members }).then(r => { if (r) toast('Group made'); }); return; }
   if (kind === 'channel'){ sheet = null; act('newChannel', { kind: 'channel', name: v('name'), who: v('who') }).then(r => { if (r) toast('Channel made'); }); return; }
   if (kind === 'announce'){ if (!v('title')){ toast('Add a title'); return; } act('announce', { title: v('title'), message: f.elements.namedItem('message').value, pinned: v('pinned'), mustAck: v('mustAck') }).then(r => { if (r) toast('Posted'); }); f.reset(); return; }

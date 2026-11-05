@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '2.8';
+const VERSION = '2.9';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Off'];
 
@@ -721,6 +721,24 @@ function act_(ss, me, p, touched) {
       if (kind === 'group') { if (members.indexOf(me.id) < 0) members.push(me.id); if (members.length < 2) throw new Error('Pick at least one other person'); } else members = [];
       tab('Channels').appendRow(['c' + newId_(8), name, kind, members.join(','), kind === 'channel' && /lead|manager/i.test(p.who || '') ? String(p.who) : 'Everyone', me.name, new Date()]); return;
     }
+    case 'editChannel': {                             // rename a channel or group (and change who's in it)
+      const sh = tab('Channels'), r = findRow_(sh, p.id); if (!r) throw new Error('That conversation was removed');
+      const row = sh.getRange(r, 1, 1, 5).getValues()[0], kind = String(row[2] || 'channel'), old = String(row[1]);
+      if (kind === 'channel') { if (!isLead) throw new Error('Only leads and managers can edit channels'); }
+      else if (String(row[3] || '').split(',').indexOf(me.id) < 0) throw new Error('Only people in this group can edit it');
+      const name = clean_(p.name, 40); if (!name) throw new Error('Give it a name');
+      let members = null;                             // check everything before writing anything
+      if (kind === 'group' && p.members !== undefined) {
+        const ids = vals_(tab('Users')).filter(x => truthy_(x[3])).map(x => String(x[6]));
+        members = String(p.members || '').split(',').filter((x, i, a) => ids.indexOf(x) >= 0 && a.indexOf(x) === i);
+        if (members.length < 2) throw new Error('A group needs at least two people');
+      }
+      sh.getRange(r, 2).setValue(name);
+      if (members) sh.getRange(r, 4).setValue(members.join(','));
+      if (kind === 'channel' && p.who !== undefined) sh.getRange(r, 5).setValue(/lead|manager/i.test(p.who || '') ? String(p.who) : 'Everyone');
+      if (name !== old) audit('Renamed ' + kind + ' "' + old + '" to "' + name + '"');
+      return;
+    }
     case 'pushSub': {                                 // this phone wants push notifications
       let sub; try { sub = JSON.parse(String(p.sub || '')); } catch (e) {}
       if (!sub || !/^https:\/\//.test(String(sub.endpoint || '')) || !sub.keys || !sub.keys.p256dh || !sub.keys.auth) throw new Error('This phone didn\'t give a usable notification address');
@@ -813,6 +831,7 @@ function channels_(ss, me, users) {
     const seen = reads[c.id] || 0;
     return { id: c.id, name: c.kind === 'group' && !c.name ? c.members.map(x => byId[x]).join(', ') : c.name, kind: c.kind, who: c.who,
       members: c.kind === 'channel' ? [] : c.members.map(x => byId[x]).filter(Boolean),
+      memberIds: c.kind === 'group' ? c.members.filter(x => byId[x]) : [],
       unread: ms.filter(m => toMs_(m[4]) > seen && String(m[2]) !== me.id).length,
       last: last ? { from: String(last[3]), text: String(last[5]).slice(0, 80) || (last[6] ? '📷 Photo' : ''), at: toIso_(last[4]) } : null };
   }).sort((a, b) => (a.kind === 'channel' ? 0 : 1) - (b.kind === 'channel' ? 0 : 1) || String((b.last || {}).at || '').localeCompare(String((a.last || {}).at || '')));
