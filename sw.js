@@ -1,6 +1,6 @@
 // Keeps the app shell on the phone so it opens instantly and works offline.
 // Bump VERSION whenever app files change so phones pick up the new version.
-const VERSION = 'pt-2.8.1';
+const VERSION = 'pt-2.9.0';
 const SHELL = ['./', 'index.html', 'app.css', 'app.js', 'config.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'brand/bird-gold.png', 'brand/falcon.png', 'brand/branch.png'];
 
 self.addEventListener('install', e => {
@@ -20,4 +20,20 @@ self.addEventListener('fetch', e => {
     if (!res.ok) return saved().then(r => r || res);
     const copy = res.clone(); caches.open(VERSION).then(c => c.put(e.request, copy)); return res;
   }).catch(saved));
+});
+
+// Push notifications (sent by the shop's Cloudflare Worker). Tapping one opens the right screen.
+self.addEventListener('push', e => {
+  let d = {}; try { d = e.data ? e.data.json() : {}; } catch (_) { d = { body: e.data ? e.data.text() : '' }; }
+  e.waitUntil(self.registration.showNotification(d.title || 'Peregrine', { body: d.body || '', tag: d.tag || undefined, renotify: !!d.tag,
+    icon: 'icons/icon-192.png', data: { go: String(d.url || '').replace(/^\?go=/, '') } }));
+});
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const go = (e.notification.data && e.notification.data.go) || '';
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+    const c = list.find(x => x.url.indexOf(self.registration.scope) === 0);
+    if (c) { c.postMessage({ go }); return c.focus(); }
+    return self.clients.openWindow(self.registration.scope + (go ? '?go=' + encodeURIComponent(go) : ''));
+  }));
 });

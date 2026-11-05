@@ -85,7 +85,7 @@ async function refresh(p){
     if (isAct && !pending) setTimeout(() => refresh(), 300);
     render(); return null;
   }
-  data = got; offline = false; save('pt-cache', JSON.stringify(data)); render(); return got;
+  data = got; offline = false; save('pt-cache', JSON.stringify(data)); render(); pushCheck(); if (pendingGo){ const g = pendingGo; pendingGo = ''; goTo(g); } return got;
 }
 function saving(){ const el = $('#saving'); if (el) el.hidden = !pending; }
 function signOut(msg){ TOKEN = ''; data = null; save('pt-token', null); save('pt-cache', null); stopChat(); render(); if (msg) toast(msg.charAt(0).toUpperCase() + msg.slice(1)); }
@@ -249,7 +249,10 @@ function viewToday(){
   const pubHint = lead() && d.unpublished ? `<div class="hint"><b>${d.unpublished} schedule change${d.unpublished > 1 ? 's' : ''} not published yet.</b> The team can't see ${d.unpublished > 1 ? 'them' : 'it'} until you publish. <div class="btns" style="margin-top:8px"><button class="btn sm go" data-tab="schedule">Review & publish</button></div></div>` : '';
   const pm = prepMine();
   const prepCard = pm.length ? `<h2>Prep for your shift</h2><div class="card">${pm.map(prepRow).join('')}</div>` : '';
-  return `<h1>${hi}, ${esc(first(d.me.name))}</h1>${pubHint}${remindHint}${clockCard()}${prepCard}
+  const pushHint = d.push && d.push.ready && !pushOn_() && load('pt-nopush') !== '1' && (pushNeedsHome() || (pushOK() && Notification.permission !== 'denied'))
+    ? `<div class="hint"><b>Get notifications on this ${deviceKind()}.</b> ${pushNeedsHome() ? 'On iPhone, add the app to your Home Screen first, then turn them on.' : 'New messages, schedule changes and prep for your shift.'}
+      <div class="btns" style="margin-top:8px">${pushNeedsHome() ? '<button class="btn sm go" data-more="push">Show me how</button>' : '<button class="btn sm go" data-pushon>Turn on</button>'}<button class="btn sm" data-nopush>Not now</button></div></div>` : '';
+  return `<h1>${hi}, ${esc(first(d.me.name))}</h1>${pubHint}${pushHint}${remindHint}${clockCard()}${prepCard}
     ${unread.length ? `<div class="card">${unread.slice(0, 3).map(annRow).join('')}</div>` : ''}
     ${chatN ? `<div class="card">${rowBtn('data-tab="chat"', `<div class="txt"><b>${chatN} unread message${chatN > 1 ? 's' : ''}</b></div><span>›</span>`)}</div>` : ''}
     <h2>Working today</h2><div class="card">${today.length ? today.map(s => `<div class="row ${s.name === d.me.name ? 'mine' : ''}"><div class="txt"><b>${esc(s.name)}</b><div class="sub">${t12(s.start)}–${t12(s.end)}${s.position ? ' · ' + esc(s.position) : ''}</div></div>${mgr() ? clockState(s) : ''}</div>`).join('') : '<div class="empty">Nobody scheduled today.</div>'}</div>
@@ -633,6 +636,78 @@ function pickSheet(kind){
 
 
 /* ----- reminders ----- */
+/* ---------- push notifications ---------- */
+const pushOK = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const pushNeedsHome = () => isIOS() && !standalone();
+const deviceKind = () => /iphone/i.test(navigator.userAgent) ? 'iPhone' : /ipad/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) ? 'iPad' : /android/i.test(navigator.userAgent) ? 'phone' : 'computer';
+const deviceName = () => { const ua = navigator.userAgent; return (/iphone/i.test(ua) ? 'iPhone' : /ipad/i.test(ua) ? 'iPad' : /android/i.test(ua) ? 'Android' : /mac/i.test(ua) ? 'Mac' : /windows/i.test(ua) ? 'Windows' : 'Device') + ' · ' + (/edg\//i.test(ua) ? 'Edge' : /chrome|crios/i.test(ua) ? 'Chrome' : /firefox|fxios/i.test(ua) ? 'Firefox' : /safari/i.test(ua) ? 'Safari' : 'Browser') + (standalone() ? ' app' : ''); };
+const b64u8 = b => { b = String(b).replace(/-/g, '+').replace(/_/g, '/'); while (b.length % 4) b += '='; return Uint8Array.from(atob(b), c => c.charCodeAt(0)); };
+let pushSub = null, pushChecked = false;
+const pushOn_ = () => !!(pushSub && pushOK() && Notification.permission === 'granted');
+/** After the data loads: find this device's subscription, and make sure the server has it (covers renewed subscriptions). */
+async function pushCheck(){
+  if (pushChecked || !pushOK() || !data || !data.push) return; pushChecked = true;
+  try {
+    const reg = await navigator.serviceWorker.getRegistration(); pushSub = reg ? await reg.pushManager.getSubscription() : null;
+    if (pushSub && data.push.ready && Notification.permission === 'granted' && (data.push.devices || []).indexOf(pushSub.endpoint) < 0) act('pushSub', { sub: JSON.stringify(pushSub), device: deviceName() });
+    render();
+  } catch (_) {}
+}
+async function pushTurnOn(){
+  if (pushNeedsHome()){ moreView = 'push'; tab = 'more'; render(); return; }
+  if (!pushOK()){ toast('This browser can\'t get notifications'); return; }
+  const perm = await Notification.requestPermission();   // first thing in the tap, so the browser allows the prompt
+  if (perm !== 'granted'){ toast(perm === 'denied' ? 'Notifications are blocked – allow them in Settings for this app' : 'Notifications not turned on'); render(); return; }
+  try {
+    const reg = await navigator.serviceWorker.ready, key = b64u8(data.push.key);
+    let sub = await reg.pushManager.getSubscription();
+    if (sub && sub.options && sub.options.applicationServerKey){ const old = new Uint8Array(sub.options.applicationServerKey); if (old.length !== key.length || old.some((x, i) => x !== key[i])){ await sub.unsubscribe(); sub = null; } }
+    sub = sub || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    pushSub = sub; render();
+    const r = await act('pushSub', { sub: JSON.stringify(sub), device: deviceName() });
+    if (r) toast('Notifications on');
+  } catch (e) { toast('Couldn\'t turn on notifications: ' + (e.message || e)); }
+}
+async function pushTurnOff(){
+  const sub = pushSub; pushSub = null; render();
+  if (sub){ act('pushUnsub', { endpoint: sub.endpoint }); try { await sub.unsubscribe(); } catch (_) {} }
+  toast('Notifications off on this ' + deviceKind());
+}
+function viewPush(){
+  const P = data.push || {}, pr = P.prefs || {}, on = pushOn_(), back = '<button class="btn sm" data-more="">‹ More</button>';
+  let top;
+  if (!P.ready) top = `<div class="empty">Push notifications aren't set up for the shop yet.${mgr() ? ' Fill in the Push settings in the sheet.' : ' Ask a manager.'}</div>`;
+  else if (pushNeedsHome()) top = `<div class="row"><div class="txt"><b>First, add the app to your Home Screen</b><div class="sub">iPhones only send notifications to apps on the Home Screen.<br>1. Tap the Share button <b>⎋</b> at the bottom of Safari.<br>2. Tap <b>Add to Home Screen</b>, then <b>Add</b>.<br>3. Open Peregrine from your Home Screen and come back here.</div></div></div>`;
+  else if (!pushOK()) top = '<div class="empty">This browser can\'t get notifications. On iPhone you need iOS 16.4 or newer.</div>';
+  else if (Notification.permission === 'denied') top = `<div class="row"><div class="txt"><b>Notifications are blocked</b><div class="sub">${isIOS() ? 'Open iPhone Settings › Notifications › Peregrine and allow them, then come back.' : 'Allow notifications for this site in the browser\'s site settings, then reload.'}</div></div></div>`;
+  else top = on ? `<div class="row"><div class="txt"><b>On for this ${deviceKind()}</b><div class="sub">${esc(deviceName())}</div></div><span class="pill ok">On</span></div>
+      <div class="row"><div class="btns" style="margin:0"><button class="btn sm" data-pushtest>Send a test</button><button class="btn sm" data-pushoff>Turn off here</button></div></div>`
+    : `<div class="row"><div class="txt"><b>Off on this ${deviceKind()}</b><div class="sub">Get notified about new messages, schedule changes and prep, even when the app is closed.</div></div></div>
+      <div class="row"><button class="btn go" data-pushon>Turn on notifications</button></div>`;
+  const tog = (k, label, sub) => `<div class="row"><div class="txt"><b>${label}</b><div class="sub">${sub}</div></div><button class="btn sm ${pr[k] !== false ? 'go' : ''}" data-pushpref="${k}" data-v="${pr[k] !== false ? 0 : 1}" aria-pressed="${pr[k] !== false}">${pr[k] !== false ? 'On' : 'Off'}</button></div>`;
+  const n = (P.devices || []).length;
+  return `<div class="weeknav" style="margin-bottom:8px">${back}<b>Notifications</b><span style="width:60px"></span></div>
+    <div class="card">${top}</div>
+    ${P.ready ? `<h2>What to send me</h2><div class="card">
+      <div class="row"><div class="txt"><b>Messages</b><div class="sub">Direct only = DMs and groups, not channels</div></div></div>
+      <div class="row"><div class="seg" style="flex:1;margin:0">${[['all', 'All'], ['direct', 'Direct only'], ['off', 'Off']].map(([k, l]) => `<button data-pushpref="msg" data-v="${k}" aria-pressed="${(pr.msg || 'all') === k}">${l}</button>`).join('')}</div></div>
+      ${tog('schedule', 'Schedule', 'When a schedule you\'re on is posted or changed')}
+      ${tog('prep', 'Prep', 'When someone asks your shift to prep something')}
+      ${tog('remind', 'Shift reminders', 'At the times you picked under Shift reminders')}
+      ${tog('news', 'Announcements', 'New posts from managers and leads')}</div>
+      <p class="sub">These apply to every device you've turned notifications on (${n} so far).</p>` : ''}`;
+}
+/** Open the screen a notification (or a ?go= link) points at. */
+function goTo(go){
+  go = String(go || ''); if (!go || !data) return;
+  const [where, arg] = go.split(':'); sheet = null; viewer = null;
+  if (where === 'chat'){ tab = 'chat'; save('pt-tab', tab); if (arg) openChat(arg); else render(); return; }
+  stopChat();
+  if (where === 'more'){ tab = 'more'; moreView = arg || ''; }
+  else if (where === 'lists'){ tab = 'lists'; if (arg === 'prep') listTab = PREP; }
+  else if (/^(schedule|today|tests)$/.test(where)) tab = where;
+  save('pt-tab', tab); window.scrollTo(0, 0); render();
+}
 function viewReminders(){
   const me = data.me, R = data.reminders || {}, cal = API && me.cal ? API + '?cal=' + encodeURIComponent(me.cal) : '';
   const webcal = cal.replace(/^https?:/, 'webcal:');
@@ -814,7 +889,7 @@ function viewTeam(){
 }
 
 function viewMore(){
-  const views = { reminders: viewReminders, requests: viewRequests, avail: viewAvail, time: viewTime, news: viewNews, resources: viewResources, team: () => mgr() ? viewTeam() : viewMoreList() };
+  const views = { push: viewPush, reminders: viewReminders, requests: viewRequests, avail: viewAvail, time: viewTime, news: viewNews, resources: viewResources, team: () => mgr() ? viewTeam() : viewMoreList() };
   return views[moreView] ? views[moreView]() : viewMoreList();
 }
 function viewMoreList(){
@@ -827,6 +902,7 @@ function viewMoreList(){
       ${item('time', mgr() ? 'Time sheets' : 'My time', mgr() ? 'Hours, late arrivals, missed punches' : 'Your hours vs. the schedule')}
       ${item('requests', 'Time off & swaps', '', pill(pendN))}
       ${item('avail', 'Availability', 'When you can\'t work')}
+      ${data.push && data.push.ready ? item('push', 'Notifications', pushOn_() ? 'On for this ' + deviceKind() : 'Off on this ' + deviceKind()) : ''}
       ${item('reminders', 'Shift reminders', data.me.reminders === 'Off' || !data.me.email ? 'Off' : data.me.reminders + ' · ' + esc(data.me.email))}
       ${item('resources', 'Resources', 'Recipes, guides, handbooks')}
       ${mgr() ? item('team', 'Team & sign-in codes') : ''}</div>
@@ -949,6 +1025,11 @@ document.addEventListener('click', async e => {
   if (d.delavail){ data.availability = data.availability.filter(a => a.id !== d.delavail); render(); act('delAvail', { id: d.delavail }); return; }
   if (d.editpunch !== undefined){ sheet = { kind: 'punch', id: d.editpunch, date: d.pdate, name: d.pname || tsPerson, start: d.pstart, end: d.pend }; render(); return; }
   if (d.delpunch){ if (!confirm('Delete this punch?')) return; sheet = null; act('deletePunch', { id: d.delpunch }); return; }
+  if (d.pushon !== undefined){ pushTurnOn(); return; }
+  if (d.pushoff !== undefined){ pushTurnOff(); return; }
+  if (d.nopush !== undefined){ save('pt-nopush', '1'); render(); return; }
+  if (d.pushtest !== undefined){ const r = await act('pushTest'); const x = r && r.result; if (x) toast(x.sent ? 'Sent – it should arrive in a few seconds' : x.off ? 'Push isn\'t set up in the sheet yet' : 'Nothing was sent – try turning notifications off and on'); return; }
+  if (d.pushpref){ const P = data.push.prefs = data.push.prefs || {}; const v = d.v; if (d.pushpref === 'msg') P.msg = v; else P[d.pushpref] = v === '1'; render(); act('pushPrefs', { [d.pushpref]: v }); return; }
   if (d.pic){ const m = (chat.msgs || []).find(x => x.id === d.pic), src = (m && m.local) || picCache[d.pic]; if (src) zoomPic(src); else loadPic(d.pic); return; }
   if (d.unphoto !== undefined){ const t = $('.composer textarea'); if (t) chat.compose = t.value; chat.photo = ''; render(); return; }
   if (d.delmsg){ if (!confirm('Delete this message?')) return; chat.msgs = chat.msgs.filter(m => m.id !== d.delmsg); render(); await act('deleteMessage', { id: d.delmsg }); openChat(chat.open); return; }
@@ -1070,5 +1151,8 @@ window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); instal
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 
 if (theme() !== 'auto') setTheme(theme());
+let pendingGo = new URLSearchParams(location.search).get('go') || '';
+if (pendingGo) history.replaceState(null, '', location.pathname);
+if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', e => { if (e.data && e.data.go !== undefined) goTo(e.data.go); });
 render();
 if (TOKEN) refresh();

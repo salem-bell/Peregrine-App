@@ -11,12 +11,12 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '2.7';
+const VERSION = '2.8';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Off'];
 
 const TABS = {
-  'Users':         ['Name', 'Role', 'Code', 'Active', 'Phone', 'Email', 'User ID (do not edit)', 'Sign-in version (do not edit)', 'Added', 'Reminders (blank = default)', 'Hourly wage (managers only)', 'On schedule (blank = yes)', 'Schedule order'],
+  'Users':         ['Name', 'Role', 'Code', 'Active', 'Phone', 'Email', 'User ID (do not edit)', 'Sign-in version (do not edit)', 'Added', 'Reminders (blank = default)', 'Hourly wage (managers only)', 'On schedule (blank = yes)', 'Schedule order', 'Notifications (blank = all on)'],
   'Checklists':    ['List', 'Task', 'Order', 'Active', 'Notes', 'Days (blank = every day)', 'Section'],
   'Checklist log': ['Date', 'List', 'Task', 'Done by', 'Done at'],
   'Announcements': ['ID', 'Posted', 'From', 'Title', 'Message', 'Pinned', 'Active', 'Must acknowledge'],
@@ -32,6 +32,7 @@ const TABS = {
   'Links':         ['Name', 'Link', 'Who sees it', 'Order'],
   'Audit':         ['When', 'Who', 'What'],
   'Reminder log':  ['Key', 'Name', 'Kind', 'Sent'],
+  'Push':          ['User ID', 'Name', 'Endpoint', 'Keys (do not edit)', 'Device', 'Added', 'Last sent'],
   'Prep':          ['ID', 'Item', 'Details', 'For date', 'For', 'For people', 'Added by', 'Added at', 'Done by', 'Done at'],
 };
 
@@ -58,6 +59,9 @@ const SETTINGS = [
   ['Labor cost extra (%)',         '0',                         'Optional. Added on top of wages in estimates, e.g. 10 for employer payroll taxes.'],
   ['Inventory sheet',              'https://docs.google.com/spreadsheets/d/1sSGRYl669jFxZ7-3dLYgNNNnR2QXvwgpBJ28o160szU/edit', 'The Peregrine Inventory & Reorder sheet. Leads and managers count it in the app (Lists › Inventory).'],
   ['Inventory tabs',               'Coffee, In-house, Costco, Paper goods, Other', 'The tabs in that sheet that hold items (same columns: Item, Category, Vendor, Unit, On hand, Par, Case size, Counted on…).'],
+  ['Push service address',         '',                          'Your Cloudflare Worker address (https://peregrine-push….workers.dev). Blank = no push notifications.'],
+  ['Push service secret',          '',                          'Must match SECRET in the Worker. Don\'t share it.'],
+  ['Push public key',              '',                          'Must match VAPID_PUBLIC in the Worker.'],
   ['Delete chat photos after (days)', '60',                     'Photos sent in Messages are deleted from Drive after this many days. The message stays, marked "Photo expired".'],
   ['Test results sheet',           'https://docs.google.com/spreadsheets/d/1dl8gi2SkPfYOjBzX0syp2WkWssg7t-rpZChpeZNm5QQ/edit', 'The sheet the tests write results to. The app shows each person their own results.'],
 ];
@@ -89,7 +93,7 @@ function setup() {
   if (!hadShifts) props.setProperty('DRAFTS_V', '1');
   dirty_('*');
   ['Start Here', 'Settings', 'Users'].forEach((n, i) => move_(ss, n, i + 1));
-  ['Checklist log', 'Reads', 'Audit', 'Messages', 'Chat reads', 'Reminder log'].forEach(n => { const s = ss.getSheetByName(n); if (s) { move_(ss, n, ss.getSheets().length); s.setTabColor('#bbbbbb'); } });
+  ['Checklist log', 'Reads', 'Audit', 'Messages', 'Chat reads', 'Reminder log', 'Push'].forEach(n => { const s = ss.getSheetByName(n); if (s) { move_(ss, n, ss.getSheets().length); s.setTabColor('#bbbbbb'); } });
   const blank = ss.getSheetByName('Sheet1'); if (blank && blank.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(blank);
   if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'sendShiftReminders')) ScriptApp.newTrigger('sendShiftReminders').timeBased().everyMinutes(15).create();
   ss.setActiveSheet(ss.getSheetByName('Start Here'));
@@ -314,6 +318,8 @@ function state_(ss, me, slim) {
   const out = { ok: true, version: VERSION, today, updated: new Date().toISOString(), name: setting_(ss, 'Shop name') || 'Team', me: { name: me.name, role: me.role, id: me.id, email: String(users.find(r => String(r[6]) === me.id)[5] || ''), reminders: remindMode_(ss, users.find(r => String(r[6]) === me.id)), cal: calKey_(users.find(r => String(r[6]) === me.id)) },
     reminders: { on: !/^off$/i.test(setting_(ss, 'Shift reminder emails')), night: setting_(ss, 'Night-before reminder at') || '19:00', hours: Number(setting_(ss, 'Hours-before reminder')) || 2 }, team: active,
     people: users.filter(r => truthy_(r[3]) && r[6]).map(r => ({ id: String(r[6]), name: String(r[0]), role: role_(r[1]), onSchedule: onSched_(r), order: Number(r[12]) || 0 })) };
+  out.push = { key: setting_(ss, 'Push public key'), ready: !!(setting_(ss, 'Push service address') && setting_(ss, 'Push public key')),
+    prefs: pushPrefs_(users.find(r => String(r[6]) === me.id)), devices: rv_(ss, 'Push').filter(r => String(r[0]) === me.id).map(r => String(r[2])) };
 
   if (slim) out.partial = true;
   // Checklists (today, plus the last 7 days for leads and managers)
@@ -430,6 +436,8 @@ function act_(ss, me, p, touched) {
       if (!isLead) throw new Error('Only leads and managers can post announcements');
       const title = clean_(p.title, 150); if (!title) throw new Error('Add a title');
       const sh = tab('Announcements'); put_(sh, [nextId_(sh, 'a'), new Date(), me.name, title, clean_(p.message, 3000), p.pinned === '1', true, p.mustAck === '1']);
+      SpreadsheetApp.flush();
+      try { push_(ss, vals_(tab('Users')).filter(r => truthy_(r[3]) && r[6] && String(r[6]) !== me.id).map(r => ({ uid: String(r[6]), kind: 'news', title: '📣 ' + title, body: clean_(p.message, 160) || 'New announcement from ' + me.name.split(' ')[0], url: '?go=more:news', tag: 'news' }))); } catch (e) {}
       return;
     }
     case 'unannounce': {
@@ -544,6 +552,7 @@ function act_(ss, me, p, touched) {
       let emailed = 0;
       if (p.notify !== '0') {
         const users = vals_(tab('Users')).filter(r => truthy_(r[3]));
+        try { push_(ss, tgt.names.filter(n => n !== me.name).map(n => { const u = users.find(r => String(r[0]).trim() === n); return u && u[6] ? { uid: String(u[6]), kind: 'prep', title: '🧾 Prep for your shift', body: item + (tgt.label ? ' · ' + tgt.label : ''), url: '?go=lists:prep', tag: 'prep' } : null; }).filter(Boolean)); } catch (e) {}
         tgt.names.filter(n => n !== me.name).forEach(n => {
           const u = users.find(r => String(r[0]).trim() === n); if (!u || !/@/.test(String(u[5])) || remindMode_(ss, u) === 'Off') return;
           if (mail_(ss, String(u[5]).trim(), 'Prep for your shift: ' + item, 'Hi ' + n.split(' ')[0] + ',', me.name + ' asked your shift (' + tgt.label + ') to prep:', [item + (p.details ? ' – ' + clean_(p.details, 300) : '')])) emailed++;
@@ -601,6 +610,11 @@ function act_(ss, me, p, touched) {
             if (mail_(ss, String(u[5]).trim(), (hadBefore ? 'Schedule updated: ' : 'Schedule posted: ') + range, 'Hi ' + n.split(' ')[0] + ',', 'The schedule for ' + range + (hadBefore ? ' was updated.' : ' is posted.'), lines)) emailed++;
           });
         }
+        // Push: everyone affected
+        try {
+          const us = vals_(tab('Users'));
+          push_(ss, Object.keys(affected).map(n => { const u = us.find(r => String(r[0]).trim() === n && truthy_(r[3])); return u && u[6] ? { uid: String(u[6]), kind: 'schedule', title: hadBefore ? '📅 Schedule updated' : '📅 Schedule posted', body: range + (hadBefore ? ' – your shifts changed. Tap to see them.' : ' – tap to see your shifts.'), url: '?go=schedule', tag: 'schedule' } : null; }).filter(Boolean));
+        } catch (e) {}
         // In the app: a note in the schedule channel, so everyone gets an unread badge.
         const ch = vals_(tab('Channels')).find(r => String(r[0]) === 'schedule') || vals_(tab('Channels')).find(r => /schedule/i.test(String(r[1])) && String(r[2] || 'channel') === 'channel');
         if (ch) tab('Messages').appendRow([newId_(12), String(ch[0]), me.id, me.name, new Date(), '📅 The schedule for ' + range + (hadBefore ? ' was updated' : ' is posted') + '. Check the Schedule tab.' + (hadBefore ? ' (' + Object.keys(affected).length + (Object.keys(affected).length === 1 ? ' person' : ' people') + ' affected)' : '')]);
@@ -704,6 +718,31 @@ function act_(ss, me, p, touched) {
       if (kind === 'group') { if (members.indexOf(me.id) < 0) members.push(me.id); if (members.length < 2) throw new Error('Pick at least one other person'); } else members = [];
       tab('Channels').appendRow(['c' + newId_(8), name, kind, members.join(','), kind === 'channel' && /lead|manager/i.test(p.who || '') ? String(p.who) : 'Everyone', me.name, new Date()]); return;
     }
+    case 'pushSub': {                                 // this phone wants push notifications
+      let sub; try { sub = JSON.parse(String(p.sub || '')); } catch (e) {}
+      if (!sub || !/^https:\/\//.test(String(sub.endpoint || '')) || !sub.keys || !sub.keys.p256dh || !sub.keys.auth) throw new Error('This phone didn\'t give a usable notification address');
+      const sh = tab('Push'), v = vals_(sh), i = v.findIndex(r => String(r[2]) === sub.endpoint);
+      const row = [me.id, me.name, sub.endpoint, JSON.stringify(sub.keys), clean_(p.device, 60), new Date(), i >= 0 ? v[i][6] : ''];
+      if (i >= 0) sh.getRange(i + 2, 1, 1, 7).setValues([row]); else sh.appendRow(row);
+      return;
+    }
+    case 'pushUnsub': {
+      const sh = tab('Push'), v = vals_(sh);
+      for (let i = v.length - 1; i >= 0; i--) if (String(v[i][2]) === String(p.endpoint || '') && String(v[i][0]) === me.id) sh.deleteRow(i + 2);
+      return;
+    }
+    case 'pushPrefs': {                               // msg=all|direct|off; schedule, prep, remind, news = 1 or 0
+      const sh = tab('Users'), v = vals_(sh), i = v.findIndex(r => String(r[6]) === me.id); if (i < 0) return;
+      const P = Object.assign(pushPrefs_(v[i]), {});
+      if (/^(all|direct|off)$/.test(String(p.msg || ''))) P.msg = String(p.msg);
+      ['schedule', 'prep', 'remind', 'news'].forEach(k => { if (p[k] === '1' || p[k] === '0') P[k] = p[k] === '1'; });
+      sh.getRange(i + 2, 14).setValue('msg=' + P.msg + ';' + ['schedule', 'prep', 'remind', 'news'].map(k => k + '=' + (P[k] ? 1 : 0)).join(';'));
+      return;
+    }
+    case 'pushTest': {
+      SpreadsheetApp.flush();
+      return push_(ss, [{ uid: me.id, kind: 'test', title: 'Notifications are on', body: 'This is how Peregrine Team messages will show up.', url: '?go=more:push', tag: 'test' }]);
+    }
     case 'deleteMessage': {
       const sh = tab('Messages'), r = findRow_(sh, p.id); if (!r) return;
       if (!isMgr) throw new Error('Only managers can delete messages');   // the chat is the shop's record
@@ -797,6 +836,7 @@ function chat_(token, channel, text, photo) {
     dirty_(['Chat reads', 'Messages']);
     SpreadsheetApp.flush();
   } finally { lock.releaseLock(); }
+  if ((text !== undefined && String(text).trim()) || pid) { try { pushChat_(ss, me, users, channel, String(text || '').trim(), !!pid); } catch (e) {} }
   const msgs = rv_(ss, 'Messages', 3000).filter(m => String(m[1]) === channel).slice(-150)
     .map(m => { const ph = String(m[6] || ''); return { id: String(m[0]), fromId: String(m[2]), from: String(m[3]), at: toIso_(m[4]), text: String(m[5]), photo: ph && ph !== 'expired' ? 1 : 0, expired: ph === 'expired' ? 1 : 0 }; });
   return { ok: true, channel, me: me.id, messages: msgs, channels: channels_(ss, me, users) };
@@ -995,9 +1035,10 @@ function sendShiftReminders() {
   const log = ss.getSheetByName('Reminder log') || (buildTab_(ss, 'Reminder log'), ss.getSheetByName('Reminder log'));
   const sent = {}; vals_(log).forEach(r => { sent[String(r[0])] = 1; });
   const shifts = vals_(ss.getSheetByName('Shifts')).map(r => pubObj_(r, tz)).filter(x => x && x.name && (x.date === today || x.date === addDays_(today, 1)));
-  const rows = [];
+  const rows = [], pushes = [], pushers = {}; try { vals_(ss.getSheetByName('Push')).forEach(r => { pushers[String(r[0])] = 1; }); } catch (e) {}
   shifts.forEach(x => {
-    const u = users.find(r => String(r[0]).trim() === x.name); if (!u || !/@/.test(String(u[5]))) return;
+    const u = users.find(r => String(r[0]).trim() === x.name); if (!u) return;
+    const hasMail = /@/.test(String(u[5])), hasPush = !!(pushers[String(u[6])] && pushPrefs_(u).remind); if (!hasMail && !hasPush) return;
     const mode = remindMode_(ss, u); if (mode === 'Off') return;
     const startAt = atLocal_(x.date, x.start, tz).getTime(), left = (startAt - now.getTime()) / 36e5;
     const want = [];
@@ -1009,11 +1050,55 @@ function sendShiftReminders() {
       const when = kind === 'night' ? 'tomorrow' : 'today';
       const prep = vals_(ss.getSheetByName('Prep')).filter(r => r[1] && !r[9] && ymd_(r[3], tz) === x.date && String(r[5] || '').split(',').map(n => n.trim()).indexOf(x.name) >= 0).map(r => '• ' + r[1] + (r[2] ? ' – ' + r[2] : ''));
       const lines = [longDay_(x.date) + ':  ' + t12_(x.start) + '–' + t12_(x.end) + (x.position ? '  (' + x.position + ')' : '')].concat(x.notes ? ['Note: ' + x.notes] : []).concat(crew.length ? ['Working with: ' + crew.join(', ')] : []).concat(prep.length ? ['', 'Prep asked for your shift:'].concat(prep) : []);
-      if (mail_(ss, String(u[5]).trim(), 'Reminder: you work ' + when + ' at ' + t12_(x.start), 'Hi ' + x.name.split(' ')[0] + ',', 'A reminder that you work ' + when + '.', lines)) { rows.push([key, x.name, kind, new Date()]); sent[key] = 1; }
+      if (hasPush) pushes.push({ uid: String(u[6]), kind: 'remind', title: '☕ You work ' + when + ' at ' + t12_(x.start), body: t12_(x.start) + '–' + t12_(x.end) + (x.position ? ' · ' + x.position : '') + (crew.length ? ' · with ' + crew.join(', ') : '') + (prep.length ? ' · ' + prep.length + ' prep item' + (prep.length === 1 ? '' : 's') : ''), url: '?go=today', tag: 'remind' });
+      if (hasPush && !hasMail) { rows.push([key, x.name, kind, new Date()]); sent[key] = 1; return; }
+      if (mail_(ss, String(u[5]).trim(), 'Reminder: you work ' + when + ' at ' + t12_(x.start), 'Hi ' + x.name.split(' ')[0] + ',', 'A reminder that you work ' + when + '.', lines) || hasPush) { rows.push([key, x.name, kind, new Date()]); sent[key] = 1; }
     });
   });
   if (rows.length) log.getRange(log.getLastRow() + 1, 1, rows.length, 4).setValues(rows);
+  if (pushes.length) try { push_(ss, pushes); } catch (e) {}
   const v = vals_(log); if (v.length > 2000) log.deleteRows(2, v.length - 1500);   // keep the log small
+}
+
+/* ----- push notifications: the Sheet decides who gets what; the Cloudflare Worker does the sending ----- */
+function pushPrefs_(r) {
+  const P = { msg: 'all', schedule: true, prep: true, remind: true, news: true };
+  String(r && r[13] || '').split(';').forEach(kv => { const [k, v] = kv.split('='); if (k === 'msg' && /^(all|direct|off)$/.test(v)) P.msg = v; else if (k in P && k !== 'msg') P[k] = v === '1'; });
+  return P;
+}
+/** items: [{uid, kind, title, body, url, tag}] – kind is checked against each person's settings. Returns { sent, failed }. */
+function push_(ss, items) {
+  const addr = setting_(ss, 'Push service address'), secret = setting_(ss, 'Push service secret');
+  if (!addr || !secret || !items || !items.length) return { sent: 0, failed: 0, off: !addr };
+  const sh = ss.getSheetByName('Push'); if (!sh) return { sent: 0, failed: 0 };
+  const subs = vals_(sh), users = vals_(ss.getSheetByName('Users')), out = [], rows = [];
+  items.forEach(it => {
+    const u = users.find(r => String(r[6]) === it.uid); if (!u || !truthy_(u[3])) return;
+    const P = pushPrefs_(u);
+    if (it.kind === 'msg' ? (P.msg === 'off' || (P.msg === 'direct' && !it.direct)) : it.kind !== 'test' && P[it.kind] === false) return;
+    subs.forEach((s, i) => { if (String(s[0]) !== it.uid) return; let keys; try { keys = JSON.parse(String(s[3])); } catch (e) { return; }
+      out.push({ sub: { endpoint: String(s[2]), keys }, data: { title: String(it.title).slice(0, 120), body: String(it.body || '').slice(0, 240), url: it.url || '', tag: it.tag || '' }, urgency: it.kind === 'msg' || it.kind === 'remind' ? 'high' : 'normal' }); rows.push(i); });
+  });
+  if (!out.length) return { sent: 0, failed: 0, none: true };
+  const res = UrlFetchApp.fetch(addr, { method: 'post', contentType: 'application/json', payload: JSON.stringify({ secret, pushes: out }), muteHttpExceptions: true });
+  if (res.getResponseCode() !== 200) throw new Error('Push service answered ' + res.getResponseCode() + ' – check Settings › Push service address and secret');
+  const r = JSON.parse(res.getContentText()).results || [];
+  const dead = [], now = new Date(); let sent = 0;
+  r.forEach(x => { const row = rows[x.i]; if (x.status >= 200 && x.status < 300) { sent++; sh.getRange(row + 2, 7).setValue(now); } else if (x.status === 404 || x.status === 410) dead.push(row); });
+  dead.sort((a, b) => b - a).forEach(row => sh.deleteRow(row + 2));   // phones that turned notifications off or reinstalled
+  if (dead.length || sent) dirty_('Push');
+  return { sent, failed: r.length - sent - dead.length, expired: dead.length };
+}
+/** A chat message → everyone else who can see that conversation. */
+function pushChat_(ss, me, users, channel, text, photo) {
+  const c = channels_(ss, me, users).find(x => x.id === channel); if (!c) return;
+  const active = users.filter(r => truthy_(r[3]) && r[6] && String(r[6]) !== me.id);
+  let ids;
+  if (/^dm-/.test(channel)) ids = channel.split('-').slice(1).filter(x => x !== me.id);
+  else if (c.kind === 'channel') ids = active.filter(r => tierOk_({ role: role_(r[1]) }, c.who)).map(r => String(r[6]));
+  else { const row = rv_(ss, 'Channels').find(r => String(r[0]) === channel); ids = String(row && row[3] || '').split(',').filter(x => x && x !== me.id); }
+  const direct = c.kind !== 'channel', who = me.name.split(' ')[0];
+  push_(ss, ids.map(uid => ({ uid, kind: 'msg', direct, title: direct ? (c.kind === 'group' ? who + ' · ' + c.name : me.name) : '# ' + c.name + ' · ' + who, body: text ? text.slice(0, 200) : '📷 Photo', url: '?go=chat:' + channel, tag: 'chat-' + channel })));
 }
 
 /** A private calendar address per person. A new sign-in code changes it, so an old address stops working. */
