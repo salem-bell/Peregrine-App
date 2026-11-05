@@ -991,6 +991,7 @@ function viewMoreList(){
       ${item('avail', 'Availability', 'When you can\'t work')}
       ${data.push && data.push.ready ? item('push', 'Notifications', pushOn_() ? 'On for this ' + deviceKind() : 'Off on this ' + deviceKind()) : ''}
       ${item('reminders', 'Shift reminders', data.me.reminders === 'Off' || !data.me.email ? 'Off' : data.me.reminders + ' · ' + esc(data.me.email))}
+      ${rowBtn('data-tab="tests" class="mobonly"', '<div class="txt"><b>Tests</b><div class="sub">Training & certification</div></div><span>›</span>')}
       ${item('resources', 'Resources', 'Recipes, guides, handbooks')}
       ${mgr() ? item('team', 'Team & sign-in codes') : ''}</div>
     <h2>Look</h2><div class="seg">${[['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']].map(([k, n]) => `<button data-theme="${k}" aria-pressed="${theme() === k}">${n}</button>`).join('')}</div>
@@ -998,7 +999,9 @@ function viewMoreList(){
     <p class="sub" style="text-align:center">Peregrine Team · server ${esc(data.version || '')}</p>`;
 }
 
-const TABS = [['today', 'Today', '☀︎'], ['schedule', 'Schedule', '▦'], ['chat', 'Chat', '✉︎'], ['lists', 'Lists', '✓'], ['tests', 'Tests', '✎'], ['more', 'More', '☰']];
+// Phone: Schedule · Chat · [Today] · Lists · More (Today raised in the middle; Tests lives under More).
+// Desktop sidebar: Today first, Tests shown (see .home / .deskonly in app.css).
+const TABS = [['schedule', 'Schedule', '▦'], ['chat', 'Chat', '✉︎'], ['today', 'Today', '☀︎', 'home'], ['lists', 'Lists', '✓'], ['tests', 'Tests', '✎', 'deskonly'], ['more', 'More', '☰']];
 let lastView = '';
 function render(){
   if (rowDrag){ rowDrag.later = true; return; }       // don't redraw under a finger mid-drag
@@ -1011,7 +1014,7 @@ function render(){
   const chatN = (data.channels || []).reduce((n, c) => n + c.unread, 0);
   const badge = { lists: prepMine().length, chat: chatN, more: (mgr() ? (data.requests || []).filter(q => q.status === 'Pending' && q.from !== data.me.name).length : 0) + (data.announcements || []).filter(a => !a.read).length };
   $('#tabs').hidden = false;
-  $('#tabs').innerHTML = TABS.map(([k, n, ic]) => `<button data-tab="${k}" ${tab === k ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}${badge[k] ? `<span class="n">${badge[k]}</span>` : ''}</button>`).join('');
+  $('#tabs').innerHTML = TABS.map(([k, n, ic, cls]) => `<button data-tab="${k}" class="${cls || ''}${k === 'more' && tab === 'tests' ? ' cur-m' : ''}" ${tab === k ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}${badge[k] ? `<span class="n">${badge[k]}</span>` : ''}</button>`).join('');
   const ae = document.activeElement, keepWage = ae && ae.dataset && (ae.dataset.wage || ae.dataset.invf) ? [ae.dataset.wage ? `[data-wage="${ae.dataset.wage}"]` : `[data-invf="${ae.dataset.invf}"][data-invk="${ae.dataset.invk}"]`, ae.value, ae.selectionStart] : null;
   const typingIn = document.activeElement && document.activeElement.closest && document.activeElement.closest('.composer');
   const draft = typingIn ? document.activeElement.value : null;
@@ -1046,7 +1049,7 @@ document.addEventListener('click', async e => {
   if (b.id === 'refresh'){ if (chat.open) { openChat(chat.open); return; } refresh().then(r => { if (r) toast('Up to date'); }); return; }
   if (d.install !== undefined && installEvt){ installEvt.prompt(); installEvt = null; return; }
   if (d.ack){ const a = data.announcements.find(x => x.id === d.ack); if (a) a.read = true; render(); act('read', { id: d.ack }); return; }
-  if (d.tab){ tab = d.tab; save('pt-tab', tab); if (tab === 'more') moreView = ''; if (tab !== 'chat') stopChat(); window.scrollTo(0, 0); render(); if (tab === 'schedule') scrollToday(); return; }
+  if (d.tab){ tab = d.tab; save('pt-tab', tab); sheet = null; viewer = null; editUser = null; tsPerson = ''; if (tab === 'more') moreView = ''; stopChat(); window.scrollTo(0, 0); /* a tab always opens on its main screen: backs out of a DM, a More page, etc. */ render(); if (tab === 'schedule') scrollToday(); return; }
   if (d.golist){ listTab = d.golist; tab = 'lists'; save('pt-tab', tab); window.scrollTo(0, 0); render(); return; }
   if (d.more !== undefined){ tab = 'more'; moreView = d.more; editUser = null; if (d.more !== 'time') tsPerson = ''; if (d.more === 'time' && b.textContent.includes('Back')) tsPerson = ''; window.scrollTo(0, 0); render(); return; }
   if (d.list){ listTab = d.list; if (d.list === INV) loadInv(); render(); return; }

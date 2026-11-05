@@ -84,6 +84,12 @@ details.more summary{cursor:pointer;color:var(--muted);font-size:.85rem;padding:
 .tabs button{all:unset;flex:1;cursor:pointer;display:grid;justify-items:center;gap:3px;padding:4px 0;font:400 .68rem/1 var(--head);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);position:relative}
 .tabs button .ic{font-size:1.25rem;line-height:1.1}
 .tabs button[aria-current=page]{color:var(--accent)}
+/* Today: raised, larger button in the middle (phone) */
+.tabs button.home{flex:1.2;color:var(--ink)}
+.tabs button.home .ic{width:54px;height:54px;margin:-32px 0 0;border-radius:50%;display:grid;place-items:center;font-size:1.65rem;line-height:1;background:var(--accent-soft);color:var(--accent);box-shadow:0 0 0 4px var(--card),0 3px 10px rgba(35,31,32,.18)}
+.tabs button.home[aria-current=page]{color:var(--accent)}
+.tabs button.home[aria-current=page] .ic{background:var(--go-bg);color:var(--go-fg)}
+.tabs .deskonly{display:none!important} .tabs button.cur-m{color:var(--accent)}
 .tabs .n{position:absolute;top:-1px;left:calc(50% + 6px);background:var(--gold);color:#231F20;border-radius:999px;font:600 .62rem/1 var(--body);padding:3px 5px}
 
 .hint{background:var(--accent-soft);border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-size:.9rem;margin-bottom:12px}
@@ -202,6 +208,9 @@ table.grid{border-collapse:separate;border-spacing:0;width:100%;min-width:980px;
   .tabs button{flex:none;display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:10px;font-size:.84rem}
   .tabs button:hover{background:var(--soft)} .tabs button[aria-current=page]{background:var(--accent-soft)}
   .tabs .n{position:static;margin-left:auto}
+  .tabs button.home{order:-1;color:var(--muted)} .tabs button.home .ic{width:auto;height:auto;margin:0;display:inline;font-size:1.25rem;line-height:1.1;background:none;color:inherit;box-shadow:none}
+  .tabs button.home[aria-current=page] .ic{background:none;color:inherit}
+  .tabs .deskonly{display:flex!important} .tabs button.cur-m{color:var(--muted)} .mobonly{display:none!important}
   main{margin-left:220px;max-width:none;padding:22px 28px 40px} main > *{max-width:760px;margin-left:auto;margin-right:auto}
   body.wide main > *{max-width:none}
   .toast{bottom:28px;left:calc(50% + 110px)}
