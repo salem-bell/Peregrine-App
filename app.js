@@ -770,7 +770,8 @@ function viewRequests(){
 function viewResources(){
   const tiers = ['Everyone', 'Leads and managers', 'Managers'], ls = data.links || [];
   return `${back()}<h1>Resources</h1>${tiers.map(t => { const xs = ls.filter(l => l.tier === t); return xs.length ? `<h2>${t === 'Everyone' ? 'Everyone' : t}</h2><div class="card">${xs.map(l =>
-    l.file ? rowBtn(`data-pdf="${esc(l.id)}"`, `<div class="txt"><b>${esc(l.name)}</b><div class="sub">Opens in the app</div></div><span>›</span>`) : `<a class="row" href="${esc(l.url)}" target="_blank" rel="noopener" style="text-decoration:none"><div class="txt"><b>${esc(l.name)}</b></div><span>↗</span></a>`).join('')}</div>` : ''; }).join('') || '<div class="card"><div class="empty">No resources yet.</div></div>'}`;
+    l.file && !/\/spreadsheets\//.test(l.url) ? rowBtn(`data-pdf="${esc(l.id)}"`, `<div class="txt"><b>${esc(l.name)}</b><div class="sub">Opens in the app</div></div><span>›</span>`)
+      : `<a class="row" href="${esc(l.url)}" target="_blank" rel="noopener" style="text-decoration:none"><div class="txt"><b>${esc(l.name)}</b>${/\/spreadsheets\//.test(l.url) ? '<div class="sub">Opens in Google Sheets</div>' : ''}</div><span>↗</span></a>`).join('')}</div>` : ''; }).join('') || '<div class="card"><div class="empty">No resources yet.</div></div>'}`;
 }
 async function openPdf(id){
   const l = (data.links || []).find(x => x.id === id); if (!l) return;
