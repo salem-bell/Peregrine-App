@@ -538,7 +538,7 @@ function punchSheet(){
 }
 
 /* ----- chat ----- */
-const AV = ['#1E5662', '#9A6514', '#3D7A47', '#7A4B8A', '#B5462B', '#2B7A8A', '#5E6666'];
+const AV = ['#1E5662', '#2B7A8A', '#9A6514', '#5E6666'];
 const initials = n => { const w = String(n || '?').trim().split(/\s+/); return ((w[0] || '?')[0] + (w.length > 1 ? w[w.length - 1][0] : '')).toUpperCase(); };
 const avColor = k => { let h = 0; for (const ch of String(k)) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return AV[h % AV.length]; };
 function avatar(c, size){
@@ -560,7 +560,7 @@ function viewChat(){
     <div class="clist">${ch.map(row).join('') || '<div class="empty">No conversations yet. Tap the pencil to start one.</div>'}</div>`;
 }
 function convName(){ const c = (data.channels || []).find(x => x.id === chat.open); if (c) return c.name; const other = chat.open.split('-').slice(1).find(x => x !== data.meId), p = (data.people || []).find(x => x.id === other); return p ? p.name : chat.dmName || 'Message'; }
-function convSub(c){ if (!c) return ''; if (c.kind === 'channel') return c.who === 'Everyone' ? 'Channel · everyone' : 'Channel · ' + c.who.toLowerCase(); if (c.kind === 'group') return c.members.map(first).join(', '); return ''; }
+function convSub(c){ if (!c) return ''; if (c.kind === 'channel') return c.who === 'Everyone' ? '' : c.who; if (c.kind === 'group') return c.members.map(first).join(', '); return ''; }
 function viewConversation(){
   const msgs = chat.msgs || [], c = curChat() || { id: chat.open, name: convName(), kind: 'dm' }, multi = c.kind !== 'dm';
   const gap = (a, b) => Math.abs(new Date(b.at) - new Date(a.at)) / 6e4;
@@ -574,11 +574,11 @@ function viewConversation(){
     const meta = chat.meta === m.id ? `<div class="meta ${mine ? 'me' : ''}">${timeOf(m.at)}${mgr() && m.id !== 'tmp' ? ` · <button class="lnk" data-delmsg="${esc(m.id)}">Delete</button>` : ''}</div>` : '';
     return (sep ? `<div class="daysep"><b>${dayName(ymdOf(new Date(m.at)))}</b> ${timeOf(m.at)}</div>` : '')
       + (multi && !mine && firstR ? `<div class="from">${esc(first(m.from))}</div>` : '')
-      + `<div class="mrow ${mine ? 'me' : ''} ${multi && !mine ? 'av-slot' : ''} ${lastR ? 'last' : ''}">${multi && !mine && lastR ? avatar({ id: m.fromId, name: m.from }, 28) : ''}`
+      + `<div class="mrow ${mine ? 'me' : ''} ${lastR ? 'last' : ''}">`
       + `<div class="bub ${mine ? 'me' : ''} ${firstR ? 'first' : ''} ${lastR ? 'last' : ''} ${m.photo ? 'photo' : ''} ${m.id === 'tmp' ? 'tmp' : ''}" data-bub="${esc(m.id)}">${pic}${m.text ? `<div class="msg">${esc(m.text)}</div>` : ''}</div></div>` + meta;
   }).join('');
   return `<div class="convo"><div class="chatbar"><button class="iconbtn back" data-closechat aria-label="Back"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
-      <div class="who">${avatar(c, 34)}<div class="wtxt"><b>${esc(convName())}</b>${convSub(c) ? `<span>${esc(convSub(c))}</span>` : ''}</div></div>
+      <div class="who">${avatar(c, 32)}<div class="wtxt"><b>${esc(convName())}</b>${convSub(c) ? `<span>${esc(convSub(c))}</span>` : ''}</div></div>
       ${canEditChat() ? '<button class="lnk edit" data-editchat>Edit</button>' : '<span class="edit"></span>'}</div>
     <div class="msgs" id="msgs">${body || `<div class="hello">${avatar(c, 64)}<b>${esc(convName())}</b><span>No messages yet. Say hello 👋</span></div>`}</div>
     ${chat.photo ? `<div class="pv"><img src="${chat.photo}" alt="Photo to send"><button type="button" class="pvx" data-unphoto aria-label="Remove photo">×</button></div>` : ''}
