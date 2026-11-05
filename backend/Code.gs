@@ -79,6 +79,9 @@ function onOpen() {
 }
 
 function setup() {
+  // Google lets people untick permissions on the consent screen; this asks again for any that are missing
+  // (Drive for chat photos, external requests for push), instead of failing later inside the app.
+  try { ScriptApp.requireAllScopes(ScriptApp.AuthMode.FULL); } catch (e) { if (/authoriz|permission/i.test(String(e))) throw e; }
   const ss = SpreadsheetApp.getActive();
   const props = PropertiesService.getScriptProperties();
   const isCopy = props.getProperty('SHEET_ID') !== ss.getId();
