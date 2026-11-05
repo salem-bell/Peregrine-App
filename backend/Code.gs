@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '3.0';
+const VERSION = '3.1';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Off'];
 
@@ -380,6 +380,10 @@ function state_(ss, me, slim) {
     .map(r => ({ id: String(r[0]), name: String(r[1]).trim(), date: ymd_(r[2], tz), in: toIso_(r[3]), out: toIso_(r[4]), shift: String(r[5] || ''), inPlace: String(r[6] || ''), outPlace: String(r[7] || ''), note: String(r[8] || ''), edited: String(r[9] || '') }))
     .filter(x => x.date >= first).sort((a, b) => String(a.in).localeCompare(String(b.in)));
   out.open = out.punches.find(x => x.name === me.name && x.in && !x.out && Date.now() - new Date(x.in) < 16 * 36e5) || null;   // older ones are missed clock-outs for a manager to fix
+
+  // Labor now (leads + managers): who is on the clock and what today's labor has cost so far.
+  // Managers get each person's cost; leads get names, times and the running total only (no one's wage).
+  if (isLead) out.floor = floor_(ss, users, today, tz, isMgr);
 
   // Prep requests for upcoming shifts
   out.prep = prepList_(ss, me, tz);
@@ -1192,6 +1196,32 @@ function calendar_(key) {
 }
 
 /** Clocked in, not out, within the last 16 hours. An older open punch is a forgotten clock-out and doesn't block a new clock-in. */
+/** Today's time clock for leads and managers: open punches (on the clock now), finished punches, and wage cost so far.
+ *  cost = dollars accrued as of `at`; rate = dollars per hour being added right now (so the app can tick it forward). */
+function floor_(ss, users, today, tz, isMgr) {
+  const wage = {}, roleOf = {};
+  users.forEach(r => { const n = String(r[0]).trim(); wage[n] = Number(r[10]) || 0; roleOf[n] = role_(r[1]); });
+  const extra = 1 + (Number(setting_(ss, 'Labor cost extra (%)')) || 0) / 100, now = Date.now();
+  const out = { at: new Date(now).toISOString(), on: [], done: [], cost: 0, rate: 0, missing: [], extra: Math.round((extra - 1) * 100) };
+  rv_(ss, 'Time clock').forEach(r => {
+    if (!r[0] || !r[1] || !r[3]) return;
+    const n = String(r[1]).trim(), open = openPunch_(r);
+    if (!open && ymd_(r[2], tz) !== today) return;
+    const inMs = toMs_(r[3]), outMs = open ? now : toMs_(r[4]);
+    if (!outMs) return;                                   // stale missed clock-out: left for the time sheet
+    const h = Math.max(0, outMs - inMs) / 36e5, w = wage[n] || 0, c = h * w * extra;
+    if (!w && out.missing.indexOf(n) < 0) out.missing.push(n);
+    out.cost += c; if (open) out.rate += w * extra;
+    const x = { name: n, role: roleOf[n] || '', in: toIso_(r[3]), shift: String(r[5] || '') };
+    if (!open) x.out = toIso_(r[4]);
+    if (isMgr) { x.cost = Math.round(c * 100) / 100; x.wage = w; }
+    (open ? out.on : out.done).push(x);
+  });
+  out.cost = Math.round(out.cost * 100) / 100; out.rate = Math.round(out.rate * 100) / 100;
+  out.on.sort((a, b) => a.in.localeCompare(b.in)); out.done.sort((a, b) => a.in.localeCompare(b.in));
+  if (!isMgr) out.missing = out.missing.length;        // leads: how many, not who
+  return out;
+}
 function openPunch_(r) { return r[3] && !r[4] && Date.now() - toMs_(r[3]) < 16 * 36e5; }
 function put_(sh, row) {
   const n = Math.max(sh.getLastRow(), 1), col = sh.getRange(1, 1, n, 1).getValues();

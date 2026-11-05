@@ -224,6 +224,7 @@ table.grid{border-collapse:separate;border-spacing:0;width:100%;min-width:980px;
 }
 
 /* wages */
+.laborcard .lc-top{justify-content:space-around;text-align:center} .lc-stat{display:grid;gap:2px;justify-items:center} .lc-stat b{font:400 1.5rem/1.1 var(--head);letter-spacing:.03em;font-variant-numeric:tabular-nums}
 .money{min-width:72px;text-align:right;font-variant-numeric:tabular-nums;color:var(--ink)}
 .grid .tot .money{margin-top:2px;color:var(--ink)} .grid .tot .pill{margin-top:4px}
 .wagef{display:flex;align-items:center;gap:3px;margin-top:6px;font-size:.78rem;color:var(--muted)}

@@ -236,6 +236,35 @@ function clockCard(){
   return `<div class="card clock"><div class="row"><div class="txt"><b>${soon ? 'Your shift today · ' + t12(next.start) + '–' + t12(next.end) : 'Not clocked in'}</b><div class="sub">${soon ? esc(next.position || '') : next ? 'Next: ' + dayName(next.date) + ' ' + t12(next.start) : 'No shifts coming up'}</div></div><button class="btn go" data-clock="in">Clock in</button></div></div>`;
 }
 
+/* ---------- Labor now (leads + managers): who is on the clock and today's running wage cost ---------- */
+function laborCard(){
+  const F = data.floor; if (!F || !lead()) return '';
+  const M = mgr(), k = 1 + (Number(F.extra) || 0) / 100, now = new Date(), cur = now.getHours() * 60 + now.getMinutes();
+  const todays = shiftsOn(T()).filter(live), shiftFor = x => todays.find(s => s.id === x.shift) || todays.find(s => s.name === x.name && mins(s.start) <= cur + 60 && mins(s.end) >= mins(hmOf(x.in)));
+  const punched = new Set(F.on.concat(F.done).map(x => x.name));
+  const notIn = todays.filter(s => !punched.has(s.name) && cur > mins(s.start) + (data.lateAfter || 5) && cur < mins(s.end));
+  const onRow = x => { const s = shiftFor(x), over = s && cur > mins(s.end) + 10;
+    return `<div class="row"><div class="txt"><b>${esc(x.name)}</b><div class="sub">In ${timeOf(x.in)} · <span data-hsince="${esc(x.in)}">${hrs((now - new Date(x.in)) / 6e4)}</span>${s ? ' · until ' + t12(s.end) : ' · no shift today'}</div></div>${over ? '<span class="pill warn">Past end</span>' : ''}${M ? `<span class="money">${x.wage ? `<span data-psince="${esc(x.in)}" data-pw="${x.wage * k}">${money((now - new Date(x.in)) / 36e5 * x.wage * k, true)}</span>` : '<span class="sub">no wage</span>'}</span>` : ''}</div>`; };
+  const doneLine = F.done.length ? `<div class="row"><div class="txt"><b>Clocked out today</b><div class="sub">${F.done.map(x => `${esc(first(x.name))} ${hrs((new Date(x.out) - new Date(x.in)) / 6e4)}${M && x.wage ? ' · ' + money(x.cost, true) : ''}`).join(' &nbsp;·&nbsp; ')}</div></div></div>` : '';
+  const miss = M ? (F.missing || []).length : (F.missing || 0);
+  return `<h2>Labor now</h2><div class="card laborcard">
+    <div class="row lc-top"><div class="lc-stat"><b>${F.on.length}</b><span class="sub">on the clock</span></div>
+      <div class="lc-stat"><b data-labor>${money(F.cost + F.rate * Math.max(0, now - new Date(F.at)) / 36e5, true)}</b><span class="sub">labor today</span></div>
+      <div class="lc-stat"><b>${money(F.rate, true)}</b><span class="sub">per hour now</span></div></div>
+    ${F.on.map(onRow).join('') || '<div class="empty">Nobody is clocked in.</div>'}
+    ${notIn.length ? `<div class="row"><div class="txt"><b>Scheduled, not clocked in</b><div class="sub">${notIn.map(s => `${esc(first(s.name))} (${t12(s.start)})`).join(', ')}</div></div><span class="pill warn">${notIn.length}</span></div>` : ''}
+    ${doneLine}</div>
+  <p class="sub">Estimate: hours × wage${k > 1 ? ' + ' + Math.round((k - 1) * 100) + '% extra' : ''}, no overtime. Payroll decides.${miss ? ` ${M ? 'No wage set for ' + F.missing.map(first).map(esc).join(', ') + '.' : miss + (miss > 1 ? ' people have' : ' person has') + ' no wage set, so the total is low.'}` : ''}</p>`;
+}
+function tickLabor(){       // keep the running numbers moving between refreshes, without redrawing the page
+  const F = data && data.floor; if (!F || tab !== 'today') return;
+  const now = Date.now(), el = document.querySelector('[data-labor]');
+  if (el) el.textContent = money(F.cost + F.rate * Math.max(0, now - new Date(F.at)) / 36e5, true);
+  document.querySelectorAll('[data-hsince]').forEach(e => { e.textContent = hrs((now - new Date(e.dataset.hsince)) / 6e4); });
+  document.querySelectorAll('[data-psince]').forEach(e => { e.textContent = money((now - new Date(e.dataset.psince)) / 36e5 * Number(e.dataset.pw), true); });
+}
+setInterval(tickLabor, 15000);
+
 function viewToday(){
   const d = data, today = shiftsOn(T()).filter(live), next = myNextShift();
   const unread = (d.announcements || []).filter(a => !a.read);
@@ -252,7 +281,7 @@ function viewToday(){
   const pushHint = d.push && d.push.ready && !pushOn_() && load('pt-nopush') !== '1' && (pushNeedsHome() || (pushOK() && Notification.permission !== 'denied'))
     ? `<div class="hint"><b>Get notifications on this ${deviceKind()}.</b> ${pushNeedsHome() ? 'On iPhone, add the app to your Home Screen first, then turn them on.' : 'New messages, schedule changes and prep for your shift.'}
       <div class="btns" style="margin-top:8px">${pushNeedsHome() ? '<button class="btn sm go" data-more="push">Show me how</button>' : '<button class="btn sm go" data-pushon>Turn on</button>'}<button class="btn sm" data-nopush>Not now</button></div></div>` : '';
-  return `<h1>${hi}, ${esc(first(d.me.name))}</h1>${pubHint}${pushHint}${remindHint}${clockCard()}${prepCard}
+  return `<h1>${hi}, ${esc(first(d.me.name))}</h1>${pubHint}${pushHint}${remindHint}${clockCard()}${laborCard()}${prepCard}
     ${unread.length ? `<div class="card">${unread.slice(0, 3).map(annRow).join('')}</div>` : ''}
     ${chatN ? `<div class="card">${rowBtn('data-tab="chat"', `<div class="txt"><b>${chatN} unread message${chatN > 1 ? 's' : ''}</b></div><span>›</span>`)}</div>` : ''}
     <h2>Working today</h2><div class="card">${today.length ? today.map(s => `<div class="row ${s.name === d.me.name ? 'mine' : ''}"><div class="txt"><b>${esc(s.name)}</b><div class="sub">${t12(s.start)}–${t12(s.end)}${s.position ? ' · ' + esc(s.position) : ''}</div></div>${mgr() ? clockState(s) : ''}</div>`).join('') : '<div class="empty">Nobody scheduled today.</div>'}</div>
