@@ -552,7 +552,7 @@ function viewConversation(){
   return `<div class="convo"><div class="weeknav" style="margin-bottom:8px"><button class="btn sm" data-closechat>‹ Back</button><div><b>${esc(convName())}</b></div><span style="width:44px"></span></div>
     <div class="msgs" id="msgs">${body || '<div class="empty">Say hello 👋</div>'}</div>
     ${chat.photo ? `<div class="pv"><img src="${chat.photo}" alt="Photo to send"><button type="button" class="pvx" data-unphoto aria-label="Remove photo">×</button></div>` : ''}
-    <form class="composer" data-form="send">${Number(data.version) >= 2.7 ? `<label class="btn picbtn" title="Add a photo" aria-label="Add a photo"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><input type="file" accept="image/*" data-photo hidden></label>` : ''}<textarea name="text" rows="1" maxlength="2000" placeholder="${chat.photo ? 'Add a caption' : 'Message'}" aria-label="Message">${esc(chat.compose)}</textarea><button class="btn go" ${chat.sending ? 'disabled' : ''}>Send</button></form></div>`;
+    <form class="composer" data-form="send">${Number(data.version) >= 2.7 ? `<label class="btn picbtn" title="Add a photo" aria-label="Add a photo"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><input type="file" accept="image/*" data-photo hidden onchange="pickPhoto(this)"></label>` : ''}<textarea name="text" rows="1" maxlength="2000" placeholder="${chat.photo ? 'Add a caption' : 'Message'}" aria-label="Message">${esc(chat.compose)}</textarea><button class="btn go" ${chat.sending ? 'disabled' : ''}>Send</button></form></div>`;
 }
 async function openChat(id, name, text, photo){
   chat.open = id; chat.dmName = name || chat.dmName; if (text === undefined) { chat.msgs = chat.msgs && chat.loaded === id ? chat.msgs : []; }
@@ -610,12 +610,15 @@ function zoomPic(src){
   box.addEventListener('click', () => box.remove()); document.addEventListener('keydown', function k(e){ if (e.key === 'Escape'){ box.remove(); document.removeEventListener('keydown', k); } });
   document.body.appendChild(box);
 }
-document.addEventListener('change', async e => {
-  const inp = e.target.closest && e.target.closest('input[data-photo]'); if (!inp || !inp.files || !inp.files[0]) return;
+// The handler sits on the input itself: the chat redraws every few seconds, and a redraw while the photo picker is open
+// swaps out the input, so a page-level listener would never hear about the photo that was picked.
+async function pickPhoto(inp){
+  if (!inp || !inp.files || !inp.files[0]) return;
   const file = inp.files[0]; inp.value = '';
   const t = $('.composer textarea'); if (t) chat.compose = t.value;
   try { chat.photo = await shrinkPhoto(file); render(); const t2 = $('.composer textarea'); if (t2) t2.focus(); scrollChat(); } catch (err) { toast(err.message); }
-});
+}
+window.pickPhoto = pickPhoto;
 const isNearBottom = () => { const m = $('#msgs'); return !m || m.scrollHeight - m.scrollTop - m.clientHeight < 80; };
 const scrollChat = () => { const m = $('#msgs'); if (m) m.scrollTop = m.scrollHeight; };
 function pickSheet(kind){
