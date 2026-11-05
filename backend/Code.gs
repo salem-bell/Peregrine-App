@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '2.5';
+const VERSION = '2.6';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Off'];
 
@@ -277,20 +277,33 @@ function who_(ss, token) {
 }
 
 function api_(token, p) {
-  const ss = SpreadsheetApp.getActive(), me = who_(ss, token);
-  if (p.action) {
+  const t0 = Date.now(), ss = SpreadsheetApp.getActive(), me = who_(ss, token);
+  // Several edits can arrive in one request (the app batches quick changes): one lock, one rebuild of the data.
+  const batch = Array.isArray(p.actions), list = batch ? p.actions.slice(0, 50) : p.action ? [p] : [];
+  if (list.length) {
     const lock = LockService.getScriptLock(); lock.waitLock(20000);
-    const touched = [];
-    let res; try { res = act_(ss, me, p, touched); SpreadsheetApp.flush(); } finally { dirty_(touched); lock.releaseLock(); }
-    const out = state_(ss, who_(ss, token)); if (res !== undefined) out.result = res; return out;
+    const touched = [], ids = {}, results = [];
+    try {
+      list.forEach(a0 => {
+        const a = Object.assign({}, a0);
+        if (a.id && ids[a.id]) a.id = ids[a.id];                      // an edit to a shift added earlier in this batch
+        try { const r = act_(ss, me, a, touched); if (a.cid && r && r.id) ids[a.cid] = r.id; results.push(r === undefined ? null : r); }
+        catch (e) { if (!batch) throw e; results.push({ error: String(e && e.message || e).replace(/^Error:\s*/, '') }); }
+      });
+      SpreadsheetApp.flush();
+    } finally { dirty_(touched); lock.releaseLock(); }
+    const out = state_(ss, who_(ss, token), batch && p.slim);
+    if (batch) out.results = results; else if (results[0] !== null) out.result = results[0];
+    out.ms = Date.now() - t0; return out;
   } else { const lock = LockService.getScriptLock(); if (lock.tryLock(1500)) lock.releaseLock(); }   // don't make readers wait long for someone else's save
-  return state_(ss, who_(ss, token));
+  const out = state_(ss, who_(ss, token)); out.ms = Date.now() - t0; return out;
 }
 
 /* ============================================================
    Reading
    ============================================================ */
-function state_(ss, me) {
+/** slim = schedule edits: skip checklists, announcements, time clock, prep, chat and links (the app keeps what it had). */
+function state_(ss, me, slim) {
   const tz = ss.getSpreadsheetTimeZone(), today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
   const isMgr = me.role === 'Manager', isLead = me.role === 'Lead' || isMgr;
   if (isMgr && rv_(ss, 'Users').some(r => String(r[0]).trim() && (!r[6] || !/^\d{4}$/.test(String(r[2]))))) { fixUsers_(ss, false); dirty_('Users'); }
@@ -300,7 +313,9 @@ function state_(ss, me) {
     reminders: { on: !/^off$/i.test(setting_(ss, 'Shift reminder emails')), night: setting_(ss, 'Night-before reminder at') || '19:00', hours: Number(setting_(ss, 'Hours-before reminder')) || 2 }, team: active,
     people: users.filter(r => truthy_(r[3]) && r[6]).map(r => ({ id: String(r[6]), name: String(r[0]), role: role_(r[1]), onSchedule: onSched_(r), order: Number(r[12]) || 0 })) };
 
+  if (slim) out.partial = true;
   // Checklists (today, plus the last 7 days for leads and managers)
+  if (!slim) {
   const lists = splitList_(setting_(ss, 'Checklist lists'));
   const tasks = rv_(ss, 'Checklists').filter(r => r[0] && r[1] && truthy_(r[3])).map(r => ({ list: String(r[0]).trim(), task: String(r[1]).trim(), order: Number(r[2]) || 0, notes: String(r[4] || ''), days: dayset_(r[5]), section: String(r[6] || '').trim() }));
   const log = rv_(ss, 'Checklist log', 2500).map(r => ({ date: ymd_(r[0], tz), list: String(r[1]), task: String(r[2]), by: String(r[3] || ''), at: toIso_(r[4]) }));
@@ -324,6 +339,7 @@ function state_(ss, me) {
     return a;
   }).sort((a, b) => (b.pinned - a.pinned) || String(b.posted).localeCompare(String(a.posted))).slice(0, 40);
 
+  }
   // Schedule
   const days = Math.min(Math.max(Number(setting_(ss, 'Schedule days shown')) || 14, 1), 60);
   const first = addDays_(today, -21), last = addDays_(today, isLead ? 56 : days - 1);   // the past three weeks feed the time sheets
@@ -344,6 +360,7 @@ function state_(ss, me) {
     .map(r => ({ id: String(r[0]), name: String(r[1]).trim(), day: /^\d{4}-/.test(ymd_(r[2], tz)) ? ymd_(r[2], tz) : String(r[2] || '').trim().slice(0, 3), from: hhmm_(r[3], tz), to: hhmm_(r[4], tz), note: String(r[5] || '') }))
     .filter(a => !/^\d{4}-/.test(a.day) || a.day >= addDays_(today, -1));
 
+  if (!slim) {
   // Time clock
   out.lateAfter = Number(setting_(ss, 'Late after (minutes)')) || 5;
   out.geo = /\d/.test(setting_(ss, 'Shop location (lat, lng)'));
@@ -359,16 +376,19 @@ function state_(ss, me) {
   out.channels = channels_(ss, me, users);
 
 
+  }
   // Requests
   const reqs = rv_(ss, 'Requests').filter(r => r[0]).map(r => ({ id: String(r[0]), created: toIso_(r[1]), from: String(r[2] || ''), type: String(r[3] || ''), date: ymd_(r[4], tz) || String(r[4] || ''),
     details: String(r[5] || ''), status: String(r[6] || 'Pending'), by: String(r[7] || ''), at: toIso_(r[8]), note: String(r[9] || '') }));
   out.requests = reqs.filter(q => isMgr || q.from === me.name || (isLead && q.type === 'Time off' && (q.status === 'Approved' || q.status === 'Pending'))).filter(q => q.status === 'Pending' || !q.date || q.date >= addDays_(today, -14)).sort((a, b) => String(b.created).localeCompare(String(a.created)));
 
   // Links
+  if (!slim) {
   const can = w => /^manager/i.test(w) ? isMgr : /lead/i.test(w) ? isLead : true;
   out.links = rv_(ss, 'Links').map((r, i) => ({ r, i })).filter(({ r }) => r[0] && /^https?:\/\//.test(String(r[1])) && can(String(r[2] || 'Everyone')))
     .map(({ r, i }) => ({ id: 'L' + (i + 2), name: String(r[0]), url: String(r[1]), tier: /^manager/i.test(String(r[2])) ? 'Managers' : /lead/i.test(String(r[2])) ? 'Leads and managers' : 'Everyone',
       file: !!driveId_(r[1]), order: Number(r[3]) || 0 })).sort((a, b) => a.order - b.order);
+  }
 
   // Team (managers)
   if (isMgr) out.users = users.map(r => ({ id: String(r[6] || ''), name: String(r[0]), role: role_(r[1]), code: String(r[2] || ''), active: truthy_(r[3]), phone: String(r[4] || ''), email: String(r[5] || ''), reminders: remindMode_(ss, r), wage: Number(r[10]) || 0, onSchedule: onSched_(r), order: Number(r[12]) || 0 }));
@@ -500,12 +520,12 @@ function act_(ss, me, p, touched) {
       if (!vals_(tab('Users')).some(r => String(r[0]) === name && truthy_(r[3]))) throw new Error('Pick someone on the team');
       const sh = tab('Shifts'), row = [p.date, p.start, p.end, name, clean_(p.position, 40), clean_(p.notes, 200)];
       const after = { date: p.date, start: p.start, end: p.end, name, position: row[4], notes: row[5] };
-      if (p.id) {
+      if (p.id && !/^tmp/.test(String(p.id))) {
         const v = vals_(sh), i = v.findIndex(r => String(r[6]) === String(p.id)); if (i < 0) throw new Error('That shift was removed');
         sh.getRange(i + 2, 1, 1, 6).setValues([row]); if (truthy_(v[i][8])) sh.getRange(i + 2, 9).setValue(false);
         return;   // the team sees it once it's published
       }
-      sh.getRange(sh.getLastRow() + 1, 1, 1, 9).setValues([row.concat([newId_(10), '', false])]); return;
+      const nid = newId_(10); sh.getRange(sh.getLastRow() + 1, 1, 1, 9).setValues([row.concat([nid, '', false])]); return { id: nid };
     }
     case 'deleteShift': {
       needLead();

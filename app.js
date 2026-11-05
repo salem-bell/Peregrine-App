@@ -28,6 +28,46 @@ async function post(body){
 }
 // Answers can arrive out of order: show only the newest, and never let a background refresh overwrite a change that is still saving.
 let seqStarted = 0, seqShown = 0, pending = 0, lastAct = 0;
+// Batched saves (server 2.6+): edits queue up while one request is out, then go together in one request.
+// New shifts carry their temporary id (cid) so later edits to them work before the server has answered.
+let queue = [], flying = false, flushT = null;
+const idMap = {}, SLIM = /^(saveShift|addShift|deleteShift|restoreShift|copyWeek|clearWeek|scheduleOrder|setOnSchedule|setWage)$/;
+const canBatch = () => !!(data && Number(data.version) >= 2.6);
+function act(action, params){
+  if (!canBatch()){ const pr = refresh(Object.assign({ action }, params || {})); saving(); pr.finally(saving); return pr; }
+  return new Promise(res => {
+    queue.push({ p: Object.assign({ action }, params || {}), res }); pending++; saving();
+    if (!flying){ clearTimeout(flushT); flushT = setTimeout(flush, 120); }
+  });
+}
+async function flush(){
+  if (flying || !queue.length || !TOKEN) return;
+  const batch = queue.splice(0), actions = batch.map(b => { const a = Object.assign({}, b.p); if (a.id && idMap[a.id]) a.id = idMap[a.id]; return a; });
+  flying = true;
+  let got = null, err = null;
+  try { got = await post({ fn: 'api', token: TOKEN, p: { actions, slim: actions.every(a => SLIM.test(a.action)) } }); } catch (e) { err = e; }
+  flying = false; pending -= batch.length;
+  if (err){
+    const m = String(err.message || err);
+    batch.forEach(b => b.res(null));
+    if (/^signin/.test(m)){ queue = []; pending = 0; saving(); signOut(m.replace(/^signin:\s*/, '')); return; }
+    toast(m === 'timeout' ? 'That took too long – check it saved' : m);
+    if (queue.length) flush(); else { saving(); setTimeout(() => refresh(), 300); }
+    return;
+  }
+  const res = got.results || [];
+  actions.forEach((a, i) => { if (a.cid && res[i] && res[i].id) idMap[a.cid] = res[i].id; });
+  const bad = res.find(x => x && x.error); if (bad) toast(bad.error);
+  if (typeof got.ms === 'number') console.info('[Peregrine] saved ' + batch.length + ' change' + (batch.length === 1 ? '' : 's') + ' – server ' + (got.ms / 1000).toFixed(1) + 's');
+  if (!queue.length){   // nothing newer waiting: show the server's copy (a newer edit would otherwise be wiped from the screen)
+    seqShown = ++seqStarted; busy = {}; offline = false;
+    const keep = data; data = got.partial ? Object.assign({}, keep, got) : got; delete data.results; delete data.partial;
+    save('pt-cache', JSON.stringify(data)); render();
+  }
+  batch.forEach((b, i) => b.res(res[i] && res[i].error ? null : Object.assign({}, data, { result: res[i] })));
+  saving();
+  if (queue.length) flush();
+}
 async function refresh(p){
   if (!TOKEN){ data = null; render(); return; }
   const isAct = !!(p && p.action), seq = ++seqStarted;
@@ -47,7 +87,6 @@ async function refresh(p){
   }
   data = got; offline = false; save('pt-cache', JSON.stringify(data)); render(); return got;
 }
-const act = (action, params) => { const pr = refresh(Object.assign({ action }, params || {})); saving(); pr.finally(saving); return pr; };
 function saving(){ const el = $('#saving'); if (el) el.hidden = !pending; }
 function signOut(msg){ TOKEN = ''; data = null; save('pt-token', null); save('pt-cache', null); stopChat(); render(); if (msg) toast(msg.charAt(0).toUpperCase() + msg.slice(1)); }
 
@@ -898,7 +937,7 @@ document.addEventListener('submit', async e => {
   if (kind === 'shift'){ if (!v('name')){ toast('Pick who is working'); return; } const p = { id: sheet && sheet.id || '', name: v('name'), date: v('date'), start: v('start'), end: v('end'), position: v('position'), notes: v('notes') };
     if (p.end <= p.start){ toast('The end has to be after the start'); return; }
     const ex = p.id && (data.shifts || []).find(x => x.id === p.id);
-    if (ex) Object.assign(ex, p, { status: ex.status === 'draft' ? 'draft' : 'changed' }); else data.shifts.push(Object.assign({}, p, { id: 'tmp' + Date.now(), status: 'draft' }));
+    if (ex) Object.assign(ex, p, { status: ex.status === 'draft' ? 'draft' : 'changed' }); else { p.cid = 'tmp' + Date.now() + Math.random().toString(36).slice(2, 5); data.shifts.push(Object.assign({}, p, { id: p.cid, status: 'draft' })); }
     data.shifts.sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
     sheet = null; render(); act('saveShift', p).then(r => { if (r) toast(p.id ? 'Shift saved' : 'Shift added'); }); return; }
   if (kind === 'publish'){ const notify = f.elements.namedItem('notify').checked ? '1' : '0'; sheet = null; render();
@@ -963,7 +1002,7 @@ document.addEventListener('drop', e => {
   const [name, date] = td.dataset.cell.split('|'), copy = e.altKey;
   if (!copy && name === s.name && date === s.date) return render();
   const p = { id: copy ? '' : s.id, name, date, start: s.start, end: s.end, position: s.position, notes: s.notes };
-  if (copy) data.shifts.push(Object.assign({}, s, { id: 'tmp' + Date.now(), name, date, status: 'draft' })); else Object.assign(s, { name, date, status: s.status === 'draft' ? 'draft' : 'changed', was: s.was || (s.status === 'published' || !s.status ? { date: s.date, start: s.start, end: s.end, name: s.name } : s.was) });
+  if (copy){ p.cid = 'tmp' + Date.now() + Math.random().toString(36).slice(2, 5); data.shifts.push(Object.assign({}, s, { id: p.cid, name, date, status: 'draft' })); } else Object.assign(s, { name, date, status: s.status === 'draft' ? 'draft' : 'changed', was: s.was || (s.status === 'published' || !s.status ? { date: s.date, start: s.start, end: s.end, name: s.name } : s.was) });
   render(); act('saveShift', p).then(r => { if (r) toast(copy ? 'Copied to ' + first(name) + ', ' + shortDay(date) : 'Moved to ' + first(name) + ', ' + shortDay(date)); });
 });
 WIDE.addEventListener && WIDE.addEventListener('change', () => { if (data) render(); });
