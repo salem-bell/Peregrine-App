@@ -548,23 +548,74 @@ function viewConversation(){
   const msgs = chat.msgs || [];
   let lastDay = '';
   const body = msgs.map(m => { const day = ymdOf(new Date(m.at)), mine = m.fromId === chat.me; const sep = day !== lastDay ? `<div class="daysep">${dayName(day)}</div>` : ''; lastDay = day;
-    return sep + `<div class="bub ${mine ? 'me' : ''}">${mine ? '' : `<div class="from">${esc(m.from)}</div>`}<div class="msg">${esc(m.text)}</div><div class="when">${timeOf(m.at)}${mgr() ? ` · <button class="lnk" data-delmsg="${esc(m.id)}">Delete</button>` : ''}</div></div>`; }).join('');
+    return sep + `<div class="bub ${mine ? 'me' : ''}">${mine ? '' : `<div class="from">${esc(m.from)}</div>`}${m.photo ? picTag(m) : m.expired ? '<div class="sub"><i>Photo expired</i></div>' : ''}${m.text ? `<div class="msg">${esc(m.text)}</div>` : ''}<div class="when">${timeOf(m.at)}${mgr() ? ` · <button class="lnk" data-delmsg="${esc(m.id)}">Delete</button>` : ''}</div></div>`; }).join('');
   return `<div class="convo"><div class="weeknav" style="margin-bottom:8px"><button class="btn sm" data-closechat>‹ Back</button><div><b>${esc(convName())}</b></div><span style="width:44px"></span></div>
     <div class="msgs" id="msgs">${body || '<div class="empty">Say hello 👋</div>'}</div>
-    <form class="composer" data-form="send"><textarea name="text" rows="1" maxlength="2000" placeholder="Message" aria-label="Message">${esc(chat.compose)}</textarea><button class="btn go" ${chat.sending ? 'disabled' : ''}>Send</button></form></div>`;
+    ${chat.photo ? `<div class="pv"><img src="${chat.photo}" alt="Photo to send"><button type="button" class="pvx" data-unphoto aria-label="Remove photo">×</button></div>` : ''}
+    <form class="composer" data-form="send">${Number(data.version) >= 2.7 ? `<label class="btn picbtn" title="Add a photo" aria-label="Add a photo"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><input type="file" accept="image/*" data-photo hidden></label>` : ''}<textarea name="text" rows="1" maxlength="2000" placeholder="${chat.photo ? 'Add a caption' : 'Message'}" aria-label="Message">${esc(chat.compose)}</textarea><button class="btn go" ${chat.sending ? 'disabled' : ''}>Send</button></form></div>`;
 }
-async function openChat(id, name, text){
+async function openChat(id, name, text, photo){
   chat.open = id; chat.dmName = name || chat.dmName; if (text === undefined) { chat.msgs = chat.msgs && chat.loaded === id ? chat.msgs : []; }
   render(); scrollChat();
   try {
-    const r = await post({ fn: 'chat', token: TOKEN, channel: id, text });
+    const r = await post(Object.assign({ fn: 'chat', token: TOKEN, channel: id, text }, photo ? { photo } : {}));
+    if (photo){ const mine = r.messages.filter(m => m.fromId === r.me && m.photo).pop(); if (mine && !picCache[mine.id]){ picCache[mine.id] = photo; idbPut(mine.id, photo); } }
     if (chat.open !== id) return;
     chat.msgs = r.messages; chat.me = r.me; chat.loaded = id; data.channels = r.channels; save('pt-cache', JSON.stringify(data));
     const near = isNearBottom(); render(); if (near || text !== undefined) scrollChat();
-  } catch (e) { const m = String(e.message || e); if (/^signin/.test(m)) return signOut(m.replace(/^signin:\s*/, '')); if (text !== undefined) { chat.compose = text; toast('Not sent: ' + m); render(); } }
+  } catch (e) { const m = String(e.message || e); if (/^signin/.test(m)) return signOut(m.replace(/^signin:\s*/, '')); if (text !== undefined) { chat.compose = text; if (photo) chat.photo = photo; chat.msgs = (chat.msgs || []).filter(x => x.id !== 'tmp'); toast('Not sent: ' + m); render(); } }
   clearTimeout(chat.timer); chat.timer = setTimeout(() => { if (chat.open === id && tab === 'chat' && !document.hidden) openChat(id); }, 7000);
 }
 function stopChat(){ clearTimeout(chat.timer); chat.open = ''; }
+
+/* ---------- chat photos: shrunk on the phone before sending, cached on each phone after the first load ---------- */
+const picCache = {}, picLoading = {};
+let picQueue = [], picActive = 0;
+const idb = (() => { let p = null; return () => p || (p = new Promise((res, rej) => { const q = indexedDB.open('pt-photos', 1); q.onupgradeneeded = () => q.result.createObjectStore('p'); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); })); })();
+async function idbGet(k){ try { const db = await idb(); return await new Promise(res => { const q = db.transaction('p').objectStore('p').get(k); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); }); } catch (_) { return null; } }
+async function idbPut(k, v){ try { const db = await idb(); db.transaction('p', 'readwrite').objectStore('p').put(v, k); } catch (_) {} }
+function picTag(m){
+  const src = m.local || picCache[m.id];
+  if (!src && m.id !== 'tmp') loadPic(m.id);
+  return `<button type="button" class="pic ${src ? '' : 'loading'}" data-pic="${esc(m.id)}" aria-label="Open photo">${src ? `<img src="${src}" alt="Photo from ${esc(m.from)}">` : '<span>Loading photo…</span>'}</button>`;
+}
+function showPic(id, src){ document.querySelectorAll(`[data-pic="${CSS.escape(id)}"]`).forEach(b => { const near = isNearBottom(); b.classList.remove('loading'); b.innerHTML = `<img src="${src}" alt="Photo">`; const img = b.querySelector('img'); if (near && img) img.onload = scrollChat; }); }
+function loadPic(id){
+  if (picLoading[id] || picCache[id]) return; picLoading[id] = 1;
+  idbGet(id).then(hit => { if (hit){ picCache[id] = hit; showPic(id, hit); return; } picQueue.push(id); pumpPics(); });
+}
+function pumpPics(){
+  while (picActive < 2 && picQueue.length){
+    const id = picQueue.shift(); picActive++;
+    post({ fn: 'photo', token: TOKEN, id }).then(r => { const src = 'data:' + r.mime + ';base64,' + r.data; picCache[id] = src; idbPut(id, src); showPic(id, src); })
+      .catch(e => { delete picLoading[id]; document.querySelectorAll(`[data-pic="${CSS.escape(id)}"] span`).forEach(x => { x.textContent = /expired|gone/i.test(String(e.message)) ? 'Photo expired' : 'Couldn\'t load – tap to retry'; }); })
+      .finally(() => { picActive--; pumpPics(); });
+  }
+}
+/** Shrink a picked photo to fit 1600px and re-encode as JPEG (about 200–500 KB). */
+function shrinkPhoto(file){
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => { const k = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight)), c = document.createElement('canvas');
+      c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+      const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url); res(c.toDataURL('image/jpeg', 0.82)); };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('That photo couldn\'t be opened – try a JPEG or PNG')); };
+    img.src = url;
+  });
+}
+function zoomPic(src){
+  const box = document.createElement('div'); box.className = 'lightbox'; box.setAttribute('role', 'dialog'); box.setAttribute('aria-label', 'Photo');
+  box.innerHTML = `<img src="${src}" alt="Photo"><button type="button" class="btn sm">Close</button>`;
+  box.addEventListener('click', () => box.remove()); document.addEventListener('keydown', function k(e){ if (e.key === 'Escape'){ box.remove(); document.removeEventListener('keydown', k); } });
+  document.body.appendChild(box);
+}
+document.addEventListener('change', async e => {
+  const inp = e.target.closest && e.target.closest('input[data-photo]'); if (!inp || !inp.files || !inp.files[0]) return;
+  const file = inp.files[0]; inp.value = '';
+  const t = $('.composer textarea'); if (t) chat.compose = t.value;
+  try { chat.photo = await shrinkPhoto(file); render(); const t2 = $('.composer textarea'); if (t2) t2.focus(); scrollChat(); } catch (err) { toast(err.message); }
+});
 const isNearBottom = () => { const m = $('#msgs'); return !m || m.scrollHeight - m.scrollTop - m.clientHeight < 80; };
 const scrollChat = () => { const m = $('#msgs'); if (m) m.scrollTop = m.scrollHeight; };
 function pickSheet(kind){
@@ -895,6 +946,8 @@ document.addEventListener('click', async e => {
   if (d.delavail){ data.availability = data.availability.filter(a => a.id !== d.delavail); render(); act('delAvail', { id: d.delavail }); return; }
   if (d.editpunch !== undefined){ sheet = { kind: 'punch', id: d.editpunch, date: d.pdate, name: d.pname || tsPerson, start: d.pstart, end: d.pend }; render(); return; }
   if (d.delpunch){ if (!confirm('Delete this punch?')) return; sheet = null; act('deletePunch', { id: d.delpunch }); return; }
+  if (d.pic){ const m = (chat.msgs || []).find(x => x.id === d.pic), src = (m && m.local) || picCache[d.pic]; if (src) zoomPic(src); else loadPic(d.pic); return; }
+  if (d.unphoto !== undefined){ const t = $('.composer textarea'); if (t) chat.compose = t.value; chat.photo = ''; render(); return; }
   if (d.delmsg){ if (!confirm('Delete this message?')) return; chat.msgs = chat.msgs.filter(m => m.id !== d.delmsg); render(); await act('deleteMessage', { id: d.delmsg }); openChat(chat.open); return; }
   if (d.newcode){ if (!confirm('Give ' + d.name + ' a new code? Their old code stops working and they are signed out everywhere.')) return; showCode[d.newcode] = true; act('newCode', { id: d.newcode }).then(r => { if (r) toast('New code made – tell ' + first(d.name)); }); return; }
   if (d.active){ if (d.to === '0' && !confirm('Turn off ' + d.name + '? They are signed out right away and cannot sign in.')) return; act('setActive', { id: d.active, active: d.to }); return; }
@@ -931,9 +984,9 @@ document.addEventListener('submit', async e => {
     catch (err) { btn.disabled = false; btn.textContent = 'Sign in'; toast(String(err.message || err) === 'timeout' ? 'The server took too long – try again' : String(err.message || err)); }
     return;
   }
-  if (kind === 'send'){ const text = f.elements.namedItem('text').value.trim(); if (!text) return;
-    chat.compose = ''; chat.msgs = (chat.msgs || []).concat({ id: 'tmp', fromId: chat.me || data.meId, from: data.me.name, at: new Date().toISOString(), text }); render(); scrollChat();
-    const t = $('.composer textarea'); if (t) t.focus(); openChat(chat.open, null, text); return; }
+  if (kind === 'send'){ const text = f.elements.namedItem('text').value.trim(), photo = chat.photo || ''; if (!text && !photo) return;
+    chat.compose = ''; chat.photo = ''; chat.msgs = (chat.msgs || []).concat({ id: 'tmp', fromId: chat.me || data.meId, from: data.me.name, at: new Date().toISOString(), text, photo: photo ? 1 : 0, local: photo }); render(); scrollChat();
+    const t = $('.composer textarea'); if (t) t.focus(); openChat(chat.open, null, text, photo || undefined); return; }
   if (kind === 'shift'){ if (!v('name')){ toast('Pick who is working'); return; } const p = { id: sheet && sheet.id || '', name: v('name'), date: v('date'), start: v('start'), end: v('end'), position: v('position'), notes: v('notes') };
     if (p.end <= p.start){ toast('The end has to be after the start'); return; }
     const ex = p.id && (data.shifts || []).find(x => x.id === p.id);

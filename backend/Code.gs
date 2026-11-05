@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '2.6';
+const VERSION = '2.7';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Off'];
 
@@ -25,7 +25,7 @@ const TABS = {
   'Availability':  ['ID', 'Name', 'Day or date', 'From', 'To', 'Note', 'Updated'],
   'Time clock':    ['ID', 'Name', 'Date', 'In', 'Out', 'Shift ID', 'Clock-in place', 'Clock-out place', 'Note', 'Edited by'],
   'Channels':      ['ID', 'Name', 'Kind', 'Members (user IDs; blank = everyone)', 'Who sees it', 'Created by', 'Created'],
-  'Messages':      ['ID', 'Channel ID', 'From ID', 'From', 'Sent', 'Text'],
+  'Messages':      ['ID', 'Channel ID', 'From ID', 'From', 'Sent', 'Text', 'Photo (Drive file)'],
   'Chat reads':    ['User ID', 'Channel ID', 'Read at'],
   'Tests':         ['Test', 'Link (full address, or ?level=… to add to Settings › Test portal)', 'Results tab', 'Must have passed first', 'Who sees it', 'Order'],
   'Requests':      ['ID', 'Created', 'From', 'Type', 'Date', 'Details', 'Status', 'Decided by', 'Decided at', 'Note'],
@@ -58,6 +58,7 @@ const SETTINGS = [
   ['Labor cost extra (%)',         '0',                         'Optional. Added on top of wages in estimates, e.g. 10 for employer payroll taxes.'],
   ['Inventory sheet',              'https://docs.google.com/spreadsheets/d/1sSGRYl669jFxZ7-3dLYgNNNnR2QXvwgpBJ28o160szU/edit', 'The Peregrine Inventory & Reorder sheet. Leads and managers count it in the app (Lists › Inventory).'],
   ['Inventory tabs',               'Coffee, In-house, Costco, Paper goods, Other', 'The tabs in that sheet that hold items (same columns: Item, Category, Vendor, Unit, On hand, Par, Case size, Counted on…).'],
+  ['Delete chat photos after (days)', '60',                     'Photos sent in Messages are deleted from Drive after this many days. The message stays, marked "Photo expired".'],
   ['Test results sheet',           'https://docs.google.com/spreadsheets/d/1dl8gi2SkPfYOjBzX0syp2WkWssg7t-rpZChpeZNm5QQ/edit', 'The sheet the tests write results to. The app shows each person their own results.'],
 ];
 
@@ -222,7 +223,8 @@ function doPost(e) {
     if (body.fn === 'info') return json_(info_());
     if (body.fn === 'signIn') return json_(signIn_(body.name, body.code));
     if (body.fn === 'api') return json_(api_(body.token, body.p || {}));
-    if (body.fn === 'chat') return json_(chat_(body.token, body.channel, body.text));
+    if (body.fn === 'chat') return json_(chat_(body.token, body.channel, body.text, body.photo));
+    if (body.fn === 'photo') return json_(photo_(body.token, body.id));
     if (body.fn === 'file') return json_(file_(body.token, body.id));
     if (body.fn === 'inventory') return json_(inventory_(body.token, body.counts));
     if (body.fn === 'tests') { const ss = SpreadsheetApp.getActive(), me = who_(ss, body.token); return json_({ ok: true, tests: tests_(ss, me), results: me.role === 'Manager' ? setting_(ss, 'Test results sheet') : '' }); }
@@ -705,6 +707,7 @@ function act_(ss, me, p, touched) {
     case 'deleteMessage': {
       const sh = tab('Messages'), r = findRow_(sh, p.id); if (!r) return;
       if (!isMgr) throw new Error('Only managers can delete messages');   // the chat is the shop's record
+      const ph = String(sh.getRange(r, 7).getValue() || ''); if (ph && ph !== 'expired') { try { DriveApp.getFileById(ph).setTrashed(true); } catch (e) {} }
       sh.deleteRow(r); return;
     }
   }
@@ -769,11 +772,11 @@ function channels_(ss, me, users) {
     return { id: c.id, name: c.kind === 'group' && !c.name ? c.members.map(x => byId[x]).join(', ') : c.name, kind: c.kind, who: c.who,
       members: c.kind === 'channel' ? [] : c.members.map(x => byId[x]).filter(Boolean),
       unread: ms.filter(m => toMs_(m[4]) > seen && String(m[2]) !== me.id).length,
-      last: last ? { from: String(last[3]), text: String(last[5]).slice(0, 80), at: toIso_(last[4]) } : null };
+      last: last ? { from: String(last[3]), text: String(last[5]).slice(0, 80) || (last[6] ? '📷 Photo' : ''), at: toIso_(last[4]) } : null };
   }).sort((a, b) => (a.kind === 'channel' ? 0 : 1) - (b.kind === 'channel' ? 0 : 1) || String((b.last || {}).at || '').localeCompare(String((a.last || {}).at || '')));
 }
 /** Opens a channel (and marks it read), optionally sending a message first. Light: doesn't rebuild the whole app state. */
-function chat_(token, channel, text) {
+function chat_(token, channel, text, photo) {
   const ss = SpreadsheetApp.getActive(), me = who_(ss, token), users = rv_(ss, 'Users').filter(r => String(r[0]).trim());
   channel = String(channel || '');
   let ok = channels_(ss, me, users).some(c => c.id === channel);
@@ -782,10 +785,12 @@ function chat_(token, channel, text) {
     ok = ids.length === 2 && ids.indexOf(me.id) >= 0 && ids.every(x => act.indexOf(x) >= 0) && channel === 'dm-' + ids.slice().sort().join('-');
   }
   if (!ok) throw new Error('You can\'t see that conversation');
+  const pid = photo ? savePhoto_(photo, channel) : '';   // Drive upload happens before the lock, so it never holds anyone else up
   const lock = LockService.getScriptLock(); lock.waitLock(15000);
   try {
-    if (text !== undefined && String(text).trim()) {
-      const sh = ss.getSheetByName('Messages'); sh.appendRow([newId_(12), channel, me.id, me.name, new Date(), clean_(text, 2000)]);
+    if ((text !== undefined && String(text).trim()) || pid) {
+      if (pid) buildTab_(ss, 'Messages');            // adds the Photo column to older sheets
+      const sh = ss.getSheetByName('Messages'); sh.appendRow([newId_(12), channel, me.id, me.name, new Date(), clean_(text || '', 2000)].concat(pid ? [pid] : []));
     }
     const rs = ss.getSheetByName('Chat reads'), rv = vals_(rs), i = rv.findIndex(r => String(r[0]) === me.id && String(r[1]) === channel);
     if (i >= 0) rs.getRange(i + 2, 3).setValue(new Date()); else rs.appendRow([me.id, channel, new Date()]);
@@ -793,8 +798,42 @@ function chat_(token, channel, text) {
     SpreadsheetApp.flush();
   } finally { lock.releaseLock(); }
   const msgs = rv_(ss, 'Messages', 3000).filter(m => String(m[1]) === channel).slice(-150)
-    .map(m => ({ id: String(m[0]), fromId: String(m[2]), from: String(m[3]), at: toIso_(m[4]), text: String(m[5]) }));
+    .map(m => { const ph = String(m[6] || ''); return { id: String(m[0]), fromId: String(m[2]), from: String(m[3]), at: toIso_(m[4]), text: String(m[5]), photo: ph && ph !== 'expired' ? 1 : 0, expired: ph === 'expired' ? 1 : 0 }; });
   return { ok: true, channel, me: me.id, messages: msgs, channels: channels_(ss, me, users) };
+}
+
+/* ----- chat photos: one per message, kept in a private Drive folder, deleted after the set number of days ----- */
+function photoFolder_() {
+  const pr = PropertiesService.getScriptProperties(), id = pr.getProperty('PHOTO_FOLDER');
+  if (id) { try { const f = DriveApp.getFolderById(id); if (!f.isTrashed()) return f; } catch (e) {} }
+  const f = DriveApp.createFolder('Peregrine Team photos'); f.setDescription('Photos sent in the Peregrine Team app. Deleted automatically (Settings › Delete chat photos after).');
+  pr.setProperty('PHOTO_FOLDER', f.getId()); return f;
+}
+function savePhoto_(dataUrl, channel) {
+  const m = String(dataUrl).match(/^data:(image\/(jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/); if (!m) throw new Error('That photo couldn\'t be read – try another');
+  const bytes = Utilities.base64Decode(m[3]); if (bytes.length > 5 * 1024 * 1024) throw new Error('That photo is too big');
+  const name = 'chat ' + channel + ' ' + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HHmmss') + '.' + (m[2] === 'jpeg' ? 'jpg' : m[2]);
+  return photoFolder_().createFile(Utilities.newBlob(bytes, m[1], name)).getId();
+}
+/** A message's photo, only for people who can see that conversation. */
+function photo_(token, id) {
+  const ss = SpreadsheetApp.getActive(), me = who_(ss, token), users = rv_(ss, 'Users').filter(r => String(r[0]).trim());
+  const m = rv_(ss, 'Messages', 3000).find(x => String(x[0]) === String(id)); if (!m) throw new Error('That message is gone');
+  if (!channels_(ss, me, users).some(c => c.id === String(m[1]))) throw new Error('You can\'t see that conversation');
+  const ph = String(m[6] || ''); if (!ph || ph === 'expired') throw new Error('That photo has expired');
+  const b = DriveApp.getFileById(ph).getBlob();
+  return { ok: true, id: String(id), mime: b.getContentType(), data: Utilities.base64Encode(b.getBytes()) };
+}
+/** Once a day (from the reminder check): delete photos older than the setting and mark their messages. */
+function cleanPhotos_(ss) {
+  const tz = ss.getSpreadsheetTimeZone(), today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd'), pr = PropertiesService.getScriptProperties();
+  if (pr.getProperty('PHOTO_CLEANED') === today) return; pr.setProperty('PHOTO_CLEANED', today);
+  const days = Number(setting_(ss, 'Delete chat photos after (days)')) || 60, cut = Date.now() - days * 864e5;
+  const sh = ss.getSheetByName('Messages'); if (!sh || sh.getLastColumn() < 7) return;
+  const v = vals_(sh); let n = 0;
+  v.forEach((r, i) => { const ph = String(r[6] || ''); if (ph && ph !== 'expired' && toMs_(r[4]) && toMs_(r[4]) < cut) { try { DriveApp.getFileById(ph).setTrashed(true); } catch (e) {} sh.getRange(i + 2, 7).setValue('expired'); n++; } });
+  try { const it = photoFolder_().getFiles(); while (it.hasNext()) { const f = it.next(); if (f.getDateCreated().getTime() < cut) f.setTrashed(true); } } catch (e) {}   // strays from unsent messages
+  if (n) dirty_('Messages');
 }
 
 /** Each test with this person's latest result (from the results sheet) and whether it's unlocked. */
@@ -946,7 +985,9 @@ function mail_(ss, to, subject, hello, intro, lines) {
 
 /** Runs every 15 minutes (set up by Team › 1. Set up). Night-before and hours-before emails, each sent once per shift and time. */
 function sendShiftReminders() {
-  const ss = SpreadsheetApp.getActive(); if (/^off$/i.test(setting_(ss, 'Shift reminder emails'))) return;
+  const ss = SpreadsheetApp.getActive();
+  try { cleanPhotos_(ss); } catch (e) {}
+  if (/^off$/i.test(setting_(ss, 'Shift reminder emails'))) return;
   const tz = ss.getSpreadsheetTimeZone(), now = new Date(), today = Utilities.formatDate(now, tz, 'yyyy-MM-dd'), hm = Utilities.formatDate(now, tz, 'HH:mm');
   const night = /^\d{1,2}:\d{2}$/.test(setting_(ss, 'Night-before reminder at')) ? hhmm_(setting_(ss, 'Night-before reminder at'), tz) : '19:00';
   const hours = Number(setting_(ss, 'Hours-before reminder')) || 2;
