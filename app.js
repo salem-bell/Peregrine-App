@@ -538,15 +538,52 @@ function punchSheet(){
 }
 
 /* ----- chat ----- */
+const AV = ['#1E5662', '#9A6514', '#3D7A47', '#7A4B8A', '#B5462B', '#2B7A8A', '#5E6666'];
+const initials = n => { const w = String(n || '?').trim().split(/\s+/); return ((w[0] || '?')[0] + (w.length > 1 ? w[w.length - 1][0] : '')).toUpperCase(); };
+const avColor = k => { let h = 0; for (const ch of String(k)) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return AV[h % AV.length]; };
+function avatar(c, size){
+  const st = `style="--av:${avColor(c.id || c.name)}${size ? ';--sz:' + size + 'px' : ''}"`;
+  if (c.kind === 'channel') return `<span class="av ch" ${st} aria-hidden="true">#</span>`;
+  if (c.kind === 'group') return `<span class="av grp" ${st} aria-hidden="true"><svg viewBox="0 0 24 24" width="55%" height="55%" fill="currentColor"><circle cx="9" cy="8" r="3.2"/><circle cx="16.5" cy="9" r="2.6"/><path d="M2.5 19c.4-3.6 3.1-5.6 6.5-5.6s6.1 2 6.5 5.6z"/><path d="M15.2 13.6c2.9-.3 5.6 1.3 6.3 5.4h-4.4c-.2-2.2-.9-4-1.9-5.4z"/></svg></span>`;
+  return `<span class="av" ${st} aria-hidden="true">${esc(initials(c.name))}</span>`;
+}
+const shortWhen = iso => { if (!iso) return ''; const d = new Date(iso), day = ymdOf(d), diff = (Date.now() - d) / 864e5;
+  return day === T() ? timeOf(iso) : day === plus(T(), -1) ? 'Yesterday' : diff < 6 ? d.toLocaleDateString([], { weekday: 'short' }) : d.toLocaleDateString([], { month: 'short', day: 'numeric' }); };
+const SVG_EDIT = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>';
 function viewChat(){
   if (chat.open) return viewConversation();
-  const ch = data.channels || [], chans = ch.filter(c => c.kind === 'channel'), convos = ch.filter(c => c.kind !== 'channel');
-  const item = c => rowBtn(`data-openchat="${esc(c.id)}"`, `<div class="txt"><b>${c.kind === 'channel' ? '# ' : ''}${esc(c.name)}</b><div class="sub">${c.last ? esc(first(c.last.from)) + ': ' + esc(c.last.text) : c.kind === 'group' ? esc(c.members.join(', ')) : 'No messages yet'}</div></div>${c.unread ? `<span class="pill warn">${c.unread}</span>` : c.last ? `<span class="sub">${ago(c.last.at)}</span>` : ''}`);
-  return `<h1>Messages</h1><h2>Channels</h2><div class="card">${chans.map(item).join('') || '<div class="empty">No channels.</div>'}</div>
-    <h2>Direct & groups</h2><div class="card">${convos.map(item).join('') || '<div class="empty">No conversations yet.</div>'}</div>
-    <div class="btns"><button class="btn go" data-newdm>New message</button><button class="btn" data-newgroup>New group</button>${lead() ? '<button class="btn" data-newchannel>New channel</button>' : ''}</div>`;
+  const ch = (data.channels || []).slice().sort((a, b) => String((b.last || {}).at || '').localeCompare(String((a.last || {}).at || '')) || (a.kind === 'channel' ? -1 : 1));
+  const row = c => { const l = c.last, mine = l && first(l.from) === first(data.me.name) && l.from === data.me.name;
+    const pre = !l ? (c.kind === 'group' ? esc(c.members.join(', ')) : 'No messages yet') : (mine ? 'You: ' : c.kind === 'dm' ? '' : esc(first(l.from)) + ': ') + esc(l.text);
+    return `<button class="crow ${c.unread ? 'unread' : ''}" data-openchat="${esc(c.id)}">${avatar(c)}<span class="cbody"><span class="ctop"><b>${esc(c.name)}</b><span class="cwhen">${l ? shortWhen(l.at) : ''}</span></span><span class="cbot"><span class="cpre">${pre}</span>${c.unread ? `<span class="cn">${c.unread > 99 ? '99+' : c.unread}</span>` : ''}</span></span></button>`; };
+  return `<div class="chathead"><h1>Messages</h1><button class="iconbtn" data-newdm aria-label="New message">${SVG_EDIT}</button></div>
+    <div class="clist">${ch.map(row).join('') || '<div class="empty">No conversations yet. Tap the pencil to start one.</div>'}</div>`;
 }
-function convName(){ const c = (data.channels || []).find(x => x.id === chat.open); if (c) return (c.kind === 'channel' ? '# ' : '') + c.name; const other = chat.open.split('-').slice(1).find(x => x !== data.meId), p = (data.people || []).find(x => x.id === other); return p ? p.name : chat.dmName || 'Message'; }
+function convName(){ const c = (data.channels || []).find(x => x.id === chat.open); if (c) return c.name; const other = chat.open.split('-').slice(1).find(x => x !== data.meId), p = (data.people || []).find(x => x.id === other); return p ? p.name : chat.dmName || 'Message'; }
+function convSub(c){ if (!c) return ''; if (c.kind === 'channel') return c.who === 'Everyone' ? 'Channel · everyone' : 'Channel · ' + c.who.toLowerCase(); if (c.kind === 'group') return c.members.map(first).join(', '); return ''; }
+function viewConversation(){
+  const msgs = chat.msgs || [], c = curChat() || { id: chat.open, name: convName(), kind: 'dm' }, multi = c.kind !== 'dm';
+  const gap = (a, b) => Math.abs(new Date(b.at) - new Date(a.at)) / 6e4;
+  const body = msgs.map((m, i) => {
+    const prev = msgs[i - 1], next = msgs[i + 1], mine = m.fromId === chat.me;
+    const sep = !prev || ymdOf(new Date(m.at)) !== ymdOf(new Date(prev.at)) || gap(prev, m) > 60;
+    const firstR = sep || prev.fromId !== m.fromId || gap(prev, m) > 5;
+    const nextSep = next && (ymdOf(new Date(next.at)) !== ymdOf(new Date(m.at)) || gap(m, next) > 60);
+    const lastR = !next || nextSep || next.fromId !== m.fromId || gap(m, next) > 5;
+    const pic = m.photo ? picTag(m) : m.expired ? '<div class="msg exp"><i>Photo expired</i></div>' : '';
+    const meta = chat.meta === m.id ? `<div class="meta ${mine ? 'me' : ''}">${timeOf(m.at)}${mgr() && m.id !== 'tmp' ? ` · <button class="lnk" data-delmsg="${esc(m.id)}">Delete</button>` : ''}</div>` : '';
+    return (sep ? `<div class="daysep"><b>${dayName(ymdOf(new Date(m.at)))}</b> ${timeOf(m.at)}</div>` : '')
+      + (multi && !mine && firstR ? `<div class="from">${esc(first(m.from))}</div>` : '')
+      + `<div class="mrow ${mine ? 'me' : ''} ${multi && !mine ? 'av-slot' : ''} ${lastR ? 'last' : ''}">${multi && !mine && lastR ? avatar({ id: m.fromId, name: m.from }, 28) : ''}`
+      + `<div class="bub ${mine ? 'me' : ''} ${firstR ? 'first' : ''} ${lastR ? 'last' : ''} ${m.photo ? 'photo' : ''} ${m.id === 'tmp' ? 'tmp' : ''}" data-bub="${esc(m.id)}">${pic}${m.text ? `<div class="msg">${esc(m.text)}</div>` : ''}</div></div>` + meta;
+  }).join('');
+  return `<div class="convo"><div class="chatbar"><button class="iconbtn back" data-closechat aria-label="Back"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <div class="who">${avatar(c, 34)}<div class="wtxt"><b>${esc(convName())}</b>${convSub(c) ? `<span>${esc(convSub(c))}</span>` : ''}</div></div>
+      ${canEditChat() ? '<button class="lnk edit" data-editchat>Edit</button>' : '<span class="edit"></span>'}</div>
+    <div class="msgs" id="msgs">${body || `<div class="hello">${avatar(c, 64)}<b>${esc(convName())}</b><span>No messages yet. Say hello 👋</span></div>`}</div>
+    ${chat.photo ? `<div class="pv"><img src="${chat.photo}" alt="Photo to send"><button type="button" class="pvx" data-unphoto aria-label="Remove photo">×</button></div>` : ''}
+    <form class="composer" data-form="send">${Number(data.version) >= 2.7 ? `<label class="picbtn" title="Add a photo" aria-label="Add a photo"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><input type="file" accept="image/*" data-photo hidden onchange="pickPhoto(this)"></label>` : ''}<textarea name="text" rows="1" maxlength="2000" placeholder="${chat.photo ? 'Add a caption' : 'Message'}" aria-label="Message">${esc(chat.compose)}</textarea><button class="send" aria-label="Send" ${chat.sending ? 'disabled' : ''}><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="M5.5 11.5L12 5l6.5 6.5"/></svg></button></form></div>`;
+}
 function curChat(){ return (data.channels || []).find(x => x.id === chat.open); }
 function canEditChat(){ const c = curChat(); return !!c && Number(data.version) >= 2.9 && (c.kind === 'group' || (c.kind === 'channel' && lead())); }
 function editChatSheet(){
@@ -557,16 +594,6 @@ function editChatSheet(){
       ${c.kind === 'group' ? `<h2 style="margin:4px 0 0">People</h2><div class="card">${people.map(p => `<label class="row" style="gap:10px"><input type="checkbox" name="m" value="${esc(p.id)}" ${ids.indexOf(p.id) >= 0 ? 'checked' : ''} style="width:auto;min-height:0"> ${esc(p.name)}</label>`).join('')}</div>`
         : `<label class="f">Who sees it<select name="who">${['Everyone', 'Leads and managers', 'Managers'].map(o => `<option ${o === c.who ? 'selected' : ''}>${o}</option>`).join('')}</select></label>`}
       <button class="btn go">Save</button></form></div></div>`;
-}
-function viewConversation(){
-  const msgs = chat.msgs || [];
-  let lastDay = '';
-  const body = msgs.map(m => { const day = ymdOf(new Date(m.at)), mine = m.fromId === chat.me; const sep = day !== lastDay ? `<div class="daysep">${dayName(day)}</div>` : ''; lastDay = day;
-    return sep + `<div class="bub ${mine ? 'me' : ''}">${mine ? '' : `<div class="from">${esc(m.from)}</div>`}${m.photo ? picTag(m) : m.expired ? '<div class="sub"><i>Photo expired</i></div>' : ''}${m.text ? `<div class="msg">${esc(m.text)}</div>` : ''}<div class="when">${timeOf(m.at)}${mgr() ? ` · <button class="lnk" data-delmsg="${esc(m.id)}">Delete</button>` : ''}</div></div>`; }).join('');
-  return `<div class="convo"><div class="weeknav" style="margin-bottom:8px"><button class="btn sm" data-closechat>‹ Back</button><div><b>${esc(convName())}</b></div>${canEditChat() ? '<button class="btn sm" data-editchat>Edit</button>' : '<span style="width:44px"></span>'}</div>
-    <div class="msgs" id="msgs">${body || '<div class="empty">Say hello 👋</div>'}</div>
-    ${chat.photo ? `<div class="pv"><img src="${chat.photo}" alt="Photo to send"><button type="button" class="pvx" data-unphoto aria-label="Remove photo">×</button></div>` : ''}
-    <form class="composer" data-form="send">${Number(data.version) >= 2.7 ? `<label class="btn picbtn" title="Add a photo" aria-label="Add a photo"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><input type="file" accept="image/*" data-photo hidden onchange="pickPhoto(this)"></label>` : ''}<textarea name="text" rows="1" maxlength="2000" placeholder="${chat.photo ? 'Add a caption' : 'Message'}" aria-label="Message">${esc(chat.compose)}</textarea><button class="btn go" ${chat.sending ? 'disabled' : ''}>Send</button></form></div>`;
 }
 async function openChat(id, name, text, photo){
   chat.open = id; chat.dmName = name || chat.dmName; if (text === undefined) { chat.msgs = chat.msgs && chat.loaded === id ? chat.msgs : []; }
@@ -638,7 +665,7 @@ const scrollChat = () => { const m = $('#msgs'); if (m) m.scrollTop = m.scrollHe
 function pickSheet(kind){
   const people = (data.people || []).filter(p => p.id !== data.meId);
   return `<div class="sheet" role="dialog"><div class="sheet-in"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="margin:0">${kind === 'dm' ? 'New message' : kind === 'group' ? 'New group' : 'New channel'}</h1><button class="btn sm" data-closesheet>Close</button></div>
-    ${kind === 'dm' ? `<div class="card">${people.map(p => rowBtn(`data-dm="${esc(p.id)}" data-dmname="${esc(p.name)}"`, `<div class="txt"><b>${esc(p.name)}</b></div><span>›</span>`)).join('')}</div>`
+    ${kind === 'dm' ? `<div class="card"><button class="row rb" data-newgroup><span class="av grp sm" style="--av:#2B7A8A" aria-hidden="true">+</span><div class="txt"><b>New group</b></div><span>›</span></button>${lead() ? '<button class="row rb" data-newchannel><span class="av ch sm" style="--av:#1E5662" aria-hidden="true">#</span><div class="txt"><b>New channel</b></div><span>›</span></button>' : ''}</div><h2>People</h2><div class="card">${people.map(p => rowBtn(`data-dm="${esc(p.id)}" data-dmname="${esc(p.name)}"`, `${avatar({ id: p.id, name: p.name }, 36)}<div class="txt"><b>${esc(p.name)}</b></div><span>›</span>`)).join('')}</div>`
       : `<form class="stack" data-form="${kind}" style="padding:0"><label class="f">Name<input name="name" maxlength="40" placeholder="${kind === 'group' ? 'e.g. Weekend crew' : 'e.g. Catering'}"></label>
         ${kind === 'group' ? `<div class="card">${people.map(p => `<label class="row" style="gap:10px"><input type="checkbox" name="m" value="${esc(p.id)}" style="width:auto;min-height:0"> ${esc(p.name)}</label>`).join('')}</div>`
           : `<label class="f">Who sees it<select name="who"><option>Everyone</option><option>Leads and managers</option><option>Managers</option></select></label>`}
@@ -940,6 +967,7 @@ function render(){
   const ae = document.activeElement, keepWage = ae && ae.dataset && (ae.dataset.wage || ae.dataset.invf) ? [ae.dataset.wage ? `[data-wage="${ae.dataset.wage}"]` : `[data-invf="${ae.dataset.invf}"][data-invk="${ae.dataset.invk}"]`, ae.value, ae.selectionStart] : null;
   const typingIn = document.activeElement && document.activeElement.closest && document.activeElement.closest('.composer');
   const draft = typingIn ? document.activeElement.value : null;
+  document.body.classList.toggle('inchat', tab === 'chat' && !!chat.open);
   document.body.classList.toggle('wide', wide() && tab === 'schedule' && lead() && schedView !== 'mine');
   const vkey = tab + '|' + schedView + '|' + week + '|' + moreView, same = vkey === lastView, gw = $('.gridwrap'), keep = same && gw ? [gw.scrollTop, gw.scrollLeft] : null, wy = window.scrollY; lastView = vkey;
   $('#main').innerHTML = tab === 'tests' ? viewTests() : tab === 'lists' ? viewLists() : tab === 'schedule' ? viewSchedule() : tab === 'chat' ? viewChat() : tab === 'more' ? viewMore() : viewToday();
@@ -1067,6 +1095,8 @@ document.addEventListener('input', e => {
       clearTimeout(wageTimer[w]); wageTimer[w] = setTimeout(() => act('setWage', { id: w, wage: val }), 900); } }
 });
 document.addEventListener('change', e => { if (e.target.name === 'day' && e.target.closest('form[data-form=avail]')){ const f = e.target.closest('form'); f.querySelector('[data-onlydate]').hidden = e.target.value !== 'date'; } });
+document.addEventListener('click', e => { const b = e.target.closest && e.target.closest('[data-bub]'); if (!b || e.target.closest('button')) return; chat.meta = chat.meta === b.dataset.bub ? '' : b.dataset.bub; const near = isNearBottom(); render(); if (near) scrollChat(); });
+document.addEventListener('input', e => { const t = e.target; if (t.closest && t.closest('.composer') && t.tagName === 'TEXTAREA'){ t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 140) + 'px'; } });
 document.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && e.target.closest && e.target.closest('.composer') && !isIOS()){ e.preventDefault(); e.target.closest('form').requestSubmit(); } });
 
 document.addEventListener('submit', async e => {
