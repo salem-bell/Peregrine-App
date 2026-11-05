@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '2.4';
+const VERSION = '2.5';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Off'];
 
@@ -56,6 +56,8 @@ const SETTINGS = [
   ['Overtime after (hours a week)', '40',                        'Wage estimates pay hours past this, Monday to Sunday, at the overtime rate.'],
   ['Overtime rate',                '1.5',                       'Multiplier for overtime hours.'],
   ['Labor cost extra (%)',         '0',                         'Optional. Added on top of wages in estimates, e.g. 10 for employer payroll taxes.'],
+  ['Inventory sheet',              'https://docs.google.com/spreadsheets/d/1sSGRYl669jFxZ7-3dLYgNNNnR2QXvwgpBJ28o160szU/edit', 'The Peregrine Inventory & Reorder sheet. Leads and managers count it in the app (Lists › Inventory).'],
+  ['Inventory tabs',               'Coffee, In-house, Costco, Paper goods, Other', 'The tabs in that sheet that hold items (same columns: Item, Category, Vendor, Unit, On hand, Par, Case size, Counted on…).'],
   ['Test results sheet',           'https://docs.google.com/spreadsheets/d/1dl8gi2SkPfYOjBzX0syp2WkWssg7t-rpZChpeZNm5QQ/edit', 'The sheet the tests write results to. The app shows each person their own results.'],
 ];
 
@@ -84,6 +86,7 @@ function setup() {
   if (!props.getProperty('SECRET')) props.setProperty('SECRET', newId_(40));
   fixUsers_(ss, isCopy);
   if (!hadShifts) props.setProperty('DRAFTS_V', '1');
+  dirty_('*');
   ['Start Here', 'Settings', 'Users'].forEach((n, i) => move_(ss, n, i + 1));
   ['Checklist log', 'Reads', 'Audit', 'Messages', 'Chat reads', 'Reminder log'].forEach(n => { const s = ss.getSheetByName(n); if (s) { move_(ss, n, ss.getSheets().length); s.setTabColor('#bbbbbb'); } });
   const blank = ss.getSheetByName('Sheet1'); if (blank && blank.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(blank);
@@ -214,12 +217,15 @@ function doGet(e) {
 function doPost(e) {
   let body = {};
   try { body = JSON.parse((e && e.postData && e.postData.contents) || '{}'); } catch (_) { return json_({ error: 'Bad request' }); }
+  MEMO_ = {};
   try {
     if (body.fn === 'info') return json_(info_());
     if (body.fn === 'signIn') return json_(signIn_(body.name, body.code));
     if (body.fn === 'api') return json_(api_(body.token, body.p || {}));
     if (body.fn === 'chat') return json_(chat_(body.token, body.channel, body.text));
     if (body.fn === 'file') return json_(file_(body.token, body.id));
+    if (body.fn === 'inventory') return json_(inventory_(body.token, body.counts));
+    if (body.fn === 'tests') { const ss = SpreadsheetApp.getActive(), me = who_(ss, body.token); return json_({ ok: true, tests: tests_(ss, me), results: me.role === 'Manager' ? setting_(ss, 'Test results sheet') : '' }); }
     return json_({ error: 'Unknown request' });
   } catch (err) {
     return json_({ error: String(err && err.message || err).replace(/^Error:\s*/, '') });
@@ -238,7 +244,7 @@ function signIn_(name, code) {
   const cache = CacheService.getScriptCache(), k1 = 'pin_' + Utilities.base64EncodeWebSafe(n).slice(0, 80);
   if (Number(cache.get('pin_all') || 0) >= 25) throw new Error('Too many wrong codes. Sign-in is paused for an hour.');
   if (Number(cache.get(k1) || 0) >= 5) throw new Error('Too many wrong codes for that name. Try again in 15 minutes.');
-  if (vals_(ss.getSheetByName('Users')).some(r => String(r[0]).trim() && (!r[6] || !/^\d{4}$/.test(String(r[2]))))) fixUsers_(ss, false);   // people typed straight into the sheet
+  if (vals_(ss.getSheetByName('Users')).some(r => String(r[0]).trim() && (!r[6] || !/^\d{4}$/.test(String(r[2]))))) { fixUsers_(ss, false); dirty_('Users'); }   // people typed straight into the sheet
   const users = vals_(ss.getSheetByName('Users')).filter(r => String(r[0]).trim() && truthy_(r[3]) && r[6]);
   let match = users.filter(r => String(r[0]).trim().toLowerCase().replace(/\s+/g, ' ') === n);
   if (!match.length) match = users.filter(r => String(r[0]).trim().toLowerCase().split(/\s+/)[0] === n);
@@ -263,7 +269,7 @@ function role_(v) { return ROLES.indexOf(String(v)) >= 0 ? String(v) : 'Staff'; 
 function who_(ss, token) {
   const [t, id, issued, sig] = String(token || '').split('.');
   if (t !== 'T' || !id || PropertiesService.getScriptProperties().getProperty('SHEET_ID') !== ss.getId()) throw new Error('signin: please sign in');
-  const sh = ss.getSheetByName('Users'), rows = vals_(sh), i = rows.findIndex(r => String(r[6]) === id), r = rows[i];
+  const rows = rv_(ss, 'Users'), i = rows.findIndex(r => String(r[6]) === id), r = rows[i];
   if (!r || !truthy_(r[3]) || sig_(r, issued) !== sig) throw new Error('signin: please sign in');
   const days = Number(setting_(ss, 'Ask for the code again every') || 60);
   if (days > 0 && Date.now() - Number(issued) > days * 864e5) throw new Error('signin: it has been ' + days + ' days – please sign in again');
@@ -274,9 +280,10 @@ function api_(token, p) {
   const ss = SpreadsheetApp.getActive(), me = who_(ss, token);
   if (p.action) {
     const lock = LockService.getScriptLock(); lock.waitLock(20000);
-    let res; try { res = act_(ss, me, p); SpreadsheetApp.flush(); } finally { lock.releaseLock(); }
+    const touched = [];
+    let res; try { res = act_(ss, me, p, touched); SpreadsheetApp.flush(); } finally { dirty_(touched); lock.releaseLock(); }
     const out = state_(ss, who_(ss, token)); if (res !== undefined) out.result = res; return out;
-  } else { const lock = LockService.getScriptLock(); if (lock.tryLock(8000)) lock.releaseLock(); }
+  } else { const lock = LockService.getScriptLock(); if (lock.tryLock(1500)) lock.releaseLock(); }   // don't make readers wait long for someone else's save
   return state_(ss, who_(ss, token));
 }
 
@@ -286,8 +293,8 @@ function api_(token, p) {
 function state_(ss, me) {
   const tz = ss.getSpreadsheetTimeZone(), today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
   const isMgr = me.role === 'Manager', isLead = me.role === 'Lead' || isMgr;
-  if (isMgr && vals_(ss.getSheetByName('Users')).some(r => String(r[0]).trim() && (!r[6] || !/^\d{4}$/.test(String(r[2]))))) fixUsers_(ss, false);
-  const users = vals_(ss.getSheetByName('Users')).filter(r => String(r[0]).trim());
+  if (isMgr && rv_(ss, 'Users').some(r => String(r[0]).trim() && (!r[6] || !/^\d{4}$/.test(String(r[2]))))) { fixUsers_(ss, false); dirty_('Users'); }
+  const users = rv_(ss, 'Users').filter(r => String(r[0]).trim());
   const active = users.filter(r => truthy_(r[3])).map(r => String(r[0]));
   const out = { ok: true, version: VERSION, today, updated: new Date().toISOString(), name: setting_(ss, 'Shop name') || 'Team', me: { name: me.name, role: me.role, id: me.id, email: String(users.find(r => String(r[6]) === me.id)[5] || ''), reminders: remindMode_(ss, users.find(r => String(r[6]) === me.id)), cal: calKey_(users.find(r => String(r[6]) === me.id)) },
     reminders: { on: !/^off$/i.test(setting_(ss, 'Shift reminder emails')), night: setting_(ss, 'Night-before reminder at') || '19:00', hours: Number(setting_(ss, 'Hours-before reminder')) || 2 }, team: active,
@@ -295,8 +302,8 @@ function state_(ss, me) {
 
   // Checklists (today, plus the last 7 days for leads and managers)
   const lists = splitList_(setting_(ss, 'Checklist lists'));
-  const tasks = vals_(ss.getSheetByName('Checklists')).filter(r => r[0] && r[1] && truthy_(r[3])).map(r => ({ list: String(r[0]).trim(), task: String(r[1]).trim(), order: Number(r[2]) || 0, notes: String(r[4] || ''), days: dayset_(r[5]), section: String(r[6] || '').trim() }));
-  const log = vals_(ss.getSheetByName('Checklist log')).map(r => ({ date: ymd_(r[0], tz), list: String(r[1]), task: String(r[2]), by: String(r[3] || ''), at: toIso_(r[4]) }));
+  const tasks = rv_(ss, 'Checklists').filter(r => r[0] && r[1] && truthy_(r[3])).map(r => ({ list: String(r[0]).trim(), task: String(r[1]).trim(), order: Number(r[2]) || 0, notes: String(r[4] || ''), days: dayset_(r[5]), section: String(r[6] || '').trim() }));
+  const log = rv_(ss, 'Checklist log', 2500).map(r => ({ date: ymd_(r[0], tz), list: String(r[1]), task: String(r[2]), by: String(r[3] || ''), at: toIso_(r[4]) }));
   const listNames = lists.length ? lists.filter(l => tasks.some(t => t.list === l)).concat([...new Set(tasks.map(t => t.list))].filter(l => lists.indexOf(l) < 0)) : [...new Set(tasks.map(t => t.list))];
   const dayLists = date => listNames.map(l => {
     const dow = weekday_(date);
@@ -309,8 +316,8 @@ function state_(ss, me) {
   if (isLead) out.history = [1, 2, 3, 4, 5, 6, 7].map(n => addDays_(today, -n)).filter(d => firstLog && d >= firstLog).map(d => { return { date: d, lists: dayLists(d).map(x => ({ list: x.list, done: x.done, total: x.total, missed: x.items.filter(i => !i.by).map(i => i.task) })) }; });
 
   // Announcements
-  const reads = vals_(ss.getSheetByName('Reads'));
-  out.announcements = vals_(ss.getSheetByName('Announcements')).filter(r => r[0] && r[3] && truthy_(r[6])).map(r => {
+  const reads = rv_(ss, 'Reads');
+  out.announcements = rv_(ss, 'Announcements').filter(r => r[0] && r[3] && truthy_(r[6])).map(r => {
     const id = String(r[0]), readers = reads.filter(x => String(x[0]) === id).map(x => String(x[1]));
     const a = { id, posted: toIso_(r[1]), from: String(r[2] || ''), title: String(r[3]), message: String(r[4] || ''), pinned: truthy_(r[5]), mustAck: truthy_(r[7]) && Date.now() - toMs_(r[1]) < 30 * 864e5, read: readers.indexOf(me.name) >= 0 || String(r[2] || '') === me.name };   // the poster has read their own; must-read lapses after 30 days
     if (isLead) { a.readers = readers.filter(n => active.indexOf(n) >= 0); a.notRead = active.filter(n => readers.indexOf(n) < 0 && n !== a.from); }
@@ -321,22 +328,26 @@ function state_(ss, me) {
   const days = Math.min(Math.max(Number(setting_(ss, 'Schedule days shown')) || 14, 1), 60);
   const first = addDays_(today, -21), last = addDays_(today, isLead ? 56 : days - 1);   // the past three weeks feed the time sheets
   ensureShiftIds_(ss);
-  const srows = vals_(ss.getSheetByName('Shifts'));
+  const srows = rv_(ss, 'Shifts');
   // Staff only ever see the published version. Managers and leads see the working copy, marked draft / changed / removed.
   out.shifts = (isLead ? srows.map(r => { const c = shiftObj_(r, tz), pb = pubObj_(r, tz); c.status = truthy_(r[8]) && pb ? 'removed' : !pb ? 'draft' : samePub_(c, pb) ? 'published' : 'changed'; if (c.status === 'changed') c.was = pb; return c; })
     : srows.map(r => pubObj_(r, tz)).filter(Boolean))
     .filter(s => s.date && s.name && s.date >= first && s.date <= last).sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
+  if (!isLead) {   // baristas see their own shifts and the people working with them – not the whole schedule
+    const mine = out.shifts.filter(s => s.name === me.name);
+    out.shifts = out.shifts.filter(s => s.name === me.name || mine.some(m => m.date === s.date && s.start < m.end && s.end > m.start));
+  }
   if (isLead) out.unpublished = out.shifts.filter(s => s.status !== 'published' && s.date >= today).length;
   out.positions = splitList_(setting_(ss, 'Positions'));
   out.presets = presets_(ss, tz);
-  out.availability = vals_(ss.getSheetByName('Availability')).filter(r => r[0] && r[1] && (isMgr || String(r[1]).trim() === me.name))
+  out.availability = rv_(ss, 'Availability').filter(r => r[0] && r[1] && (isLead || String(r[1]).trim() === me.name))
     .map(r => ({ id: String(r[0]), name: String(r[1]).trim(), day: /^\d{4}-/.test(ymd_(r[2], tz)) ? ymd_(r[2], tz) : String(r[2] || '').trim().slice(0, 3), from: hhmm_(r[3], tz), to: hhmm_(r[4], tz), note: String(r[5] || '') }))
     .filter(a => !/^\d{4}-/.test(a.day) || a.day >= addDays_(today, -1));
 
   // Time clock
   out.lateAfter = Number(setting_(ss, 'Late after (minutes)')) || 5;
   out.geo = /\d/.test(setting_(ss, 'Shop location (lat, lng)'));
-  out.punches = vals_(ss.getSheetByName('Time clock')).filter(r => r[0] && r[1] && (isMgr || String(r[1]).trim() === me.name))
+  out.punches = rv_(ss, 'Time clock').filter(r => r[0] && r[1] && (isMgr || String(r[1]).trim() === me.name))
     .map(r => ({ id: String(r[0]), name: String(r[1]).trim(), date: ymd_(r[2], tz), in: toIso_(r[3]), out: toIso_(r[4]), shift: String(r[5] || ''), inPlace: String(r[6] || ''), outPlace: String(r[7] || ''), note: String(r[8] || ''), edited: String(r[9] || '') }))
     .filter(x => x.date >= first).sort((a, b) => String(a.in).localeCompare(String(b.in)));
   out.open = out.punches.find(x => x.name === me.name && x.in && !x.out && Date.now() - new Date(x.in) < 16 * 36e5) || null;   // older ones are missed clock-outs for a manager to fix
@@ -347,17 +358,15 @@ function state_(ss, me) {
   // Chat (channel list + unread counts; messages load separately)
   out.channels = channels_(ss, me, users);
 
-  // Tests
-  out.tests = tests_(ss, me);
 
   // Requests
-  const reqs = vals_(ss.getSheetByName('Requests')).filter(r => r[0]).map(r => ({ id: String(r[0]), created: toIso_(r[1]), from: String(r[2] || ''), type: String(r[3] || ''), date: ymd_(r[4], tz) || String(r[4] || ''),
+  const reqs = rv_(ss, 'Requests').filter(r => r[0]).map(r => ({ id: String(r[0]), created: toIso_(r[1]), from: String(r[2] || ''), type: String(r[3] || ''), date: ymd_(r[4], tz) || String(r[4] || ''),
     details: String(r[5] || ''), status: String(r[6] || 'Pending'), by: String(r[7] || ''), at: toIso_(r[8]), note: String(r[9] || '') }));
-  out.requests = reqs.filter(q => isMgr || q.from === me.name).filter(q => q.status === 'Pending' || !q.date || q.date >= addDays_(today, -14)).sort((a, b) => String(b.created).localeCompare(String(a.created)));
+  out.requests = reqs.filter(q => isMgr || q.from === me.name || (isLead && q.type === 'Time off' && (q.status === 'Approved' || q.status === 'Pending'))).filter(q => q.status === 'Pending' || !q.date || q.date >= addDays_(today, -14)).sort((a, b) => String(b.created).localeCompare(String(a.created)));
 
   // Links
   const can = w => /^manager/i.test(w) ? isMgr : /lead/i.test(w) ? isLead : true;
-  out.links = vals_(ss.getSheetByName('Links')).map((r, i) => ({ r, i })).filter(({ r }) => r[0] && /^https?:\/\//.test(String(r[1])) && can(String(r[2] || 'Everyone')))
+  out.links = rv_(ss, 'Links').map((r, i) => ({ r, i })).filter(({ r }) => r[0] && /^https?:\/\//.test(String(r[1])) && can(String(r[2] || 'Everyone')))
     .map(({ r, i }) => ({ id: 'L' + (i + 2), name: String(r[0]), url: String(r[1]), tier: /^manager/i.test(String(r[2])) ? 'Managers' : /lead/i.test(String(r[2])) ? 'Leads and managers' : 'Everyone',
       file: !!driveId_(r[1]), order: Number(r[3]) || 0 })).sort((a, b) => a.order - b.order);
 
@@ -370,12 +379,14 @@ function state_(ss, me) {
 /* ============================================================
    Writing
    ============================================================ */
-function act_(ss, me, p) {
+function act_(ss, me, p, touched) {
+  touched = touched || [];
   const A = String(p.action), isMgr = me.role === 'Manager', isLead = isMgr || me.role === 'Lead';
   const tz = ss.getSpreadsheetTimeZone(), today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
-  const tab = n => ss.getSheetByName(n) || (TABS[n] ? (buildTab_(ss, n), ss.getSheetByName(n)) : null) || (() => { throw new Error('The ' + n + ' tab is missing – ask a manager to run Team › 1. Set up.'); })();   // new tabs appear on first use
+  const tab = n => (touched.push(n), ss.getSheetByName(n)) || (TABS[n] ? (buildTab_(ss, n), ss.getSheetByName(n)) : null) || (() => { throw new Error('The ' + n + ' tab is missing – ask a manager to run Team › 1. Set up.'); })();   // new tabs appear on first use
   const audit = what => tab('Audit').appendRow([new Date(), me.name, what]);
   const needMgr = () => { if (!isMgr) throw new Error('Only managers can do that'); };
+  const needLead = () => { if (!isLead) throw new Error('Only managers and leads can do that'); };
 
   switch (A) {
     case 'check': {                                   // tick or untick a checklist task (today only)
@@ -474,7 +485,7 @@ function act_(ss, me, p) {
       if (p.wage !== undefined) sh.getRange(row, 11).setValue(wage_(p.wage));
       if (newName !== name) {                         // keep the schedule pointing at the same person
         [['Shifts', 4], ['Availability', 2], ['Time clock', 2], ['Requests', 3]].forEach(([t, c]) => {
-          const sh2 = ss.getSheetByName(t); if (!sh2) return;
+          const sh2 = ss.getSheetByName(t); if (!sh2) return; touched.push(t);
           vals_(sh2).forEach((x, j) => { if (String(x[c - 1]).trim() === name) sh2.getRange(j + 2, c).setValue(newName); });
         });
       }
@@ -483,7 +494,7 @@ function act_(ss, me, p) {
     }
     // ----- schedule (managers) -----
     case 'addShift': case 'saveShift': {
-      needMgr();
+      needLead();
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(p.date || '')) || !/^\d{2}:\d{2}$/.test(String(p.start || '')) || !/^\d{2}:\d{2}$/.test(String(p.end || ''))) throw new Error('A shift needs a date, a start and an end');
       const name = String(p.name || '');
       if (!vals_(tab('Users')).some(r => String(r[0]) === name && truthy_(r[3]))) throw new Error('Pick someone on the team');
@@ -497,7 +508,7 @@ function act_(ss, me, p) {
       sh.getRange(sh.getLastRow() + 1, 1, 1, 9).setValues([row.concat([newId_(10), '', false])]); return;
     }
     case 'deleteShift': {
-      needMgr();
+      needLead();
       const sh = tab('Shifts'), v = vals_(sh);
       const i = p.id ? v.findIndex(r => String(r[6]) === String(p.id)) : v.findIndex(r => ymd_(r[0], tz) === p.date && hhmm_(r[1], tz) === p.start && String(r[3]).trim() === p.name);
       if (i < 0) return;
@@ -528,7 +539,7 @@ function act_(ss, me, p) {
       sh.deleteRow(row); return;
     }
     case 'restoreShift': {
-      needMgr();
+      needLead();
       const sh = tab('Shifts'), v = vals_(sh), i = v.findIndex(r => String(r[6]) === String(p.id)); if (i >= 0) sh.getRange(i + 2, 9).setValue(false); return;
     }
     case 'publish': {                                 // put the working schedule for a date range in front of the team
@@ -603,7 +614,7 @@ function act_(ss, me, p) {
       return { sent: 1 };
     }
     case 'copyWeek': {                                // copy one week's shifts onto another week (skips exact duplicates)
-      needMgr();
+      needLead();
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(p.from || '')) || !/^\d{4}-\d{2}-\d{2}$/.test(String(p.to || ''))) throw new Error('Pick the weeks');
       const sh = tab('Shifts'), v = vals_(sh).filter(r => !truthy_(r[8])).map(r => ({ date: ymd_(r[0], tz), start: hhmm_(r[1], tz), end: hhmm_(r[2], tz), name: String(r[3]).trim(), pos: String(r[4] || ''), notes: String(r[5] || '') }));
       const shift = (d, n) => addDays_(d, n), off = Math.round((Date.parse(p.to) - Date.parse(p.from)) / 864e5);
@@ -615,7 +626,7 @@ function act_(ss, me, p) {
       audit('Copied ' + rows.length + ' shifts from the week of ' + p.from + ' to ' + p.to); return;
     }
     case 'clearWeek': {
-      needMgr();
+      needLead();
       const sh = tab('Shifts'), v = vals_(sh);
       for (let i = v.length - 1; i >= 0; i--) { const d = ymd_(v[i][0], tz); if (d >= p.from && d <= addDays_(p.from, 6)) { if (pubObj_(v[i], tz)) sh.getRange(i + 2, 9).setValue(true); else sh.deleteRow(i + 2); } }
       audit('Cleared the schedule for the week of ' + p.from); return;
@@ -673,7 +684,7 @@ function act_(ss, me, p) {
     }
     case 'deleteMessage': {
       const sh = tab('Messages'), r = findRow_(sh, p.id); if (!r) return;
-      if (String(sh.getRange(r, 3).getValue()) !== me.id && !isMgr) throw new Error('You can only delete your own messages');
+      if (!isMgr) throw new Error('Only managers can delete messages');   // the chat is the shop's record
       sh.deleteRow(r); return;
     }
   }
@@ -690,10 +701,12 @@ function ensureShiftIds_(ss) {
     if (String(sh.getRange(1, 8).getValue()) !== TABS.Shifts[7]) { sh.getRange(1, 8, 1, 2).setValues([TABS.Shifts.slice(7)]); head_(sh, 9); }
     const tz = ss.getSpreadsheetTimeZone(), v0 = vals_(sh);
     v0.forEach((r, i) => { if (r[0] && r[3] && !r[7]) sh.getRange(i + 2, 8, 1, 2).setValues([[pubJson_(shiftObj_(r, tz)), false]]); });
-    props.setProperty('DRAFTS_V', '1');
+    props.setProperty('DRAFTS_V', '1'); dirty_('Shifts');
   }
-  const v = vals_(sh);
-  v.forEach((r, i) => { if (r[0] && r[3] && !r[6]) sh.getRange(i + 2, 7).setValue(newId_(10)); });   // rows typed straight into the sheet
+  const v = rv_(ss, 'Shifts');
+  if (v.some(r => r[0] && r[3] && !r[6])) {           // rows typed straight into the sheet need an ID
+    vals_(sh).forEach((r, i) => { if (r[0] && r[3] && !r[6]) sh.getRange(i + 2, 7).setValue(newId_(10)); }); dirty_('Shifts');
+  }
 }
 function atLocal_(ymd, hm, tz) { return Utilities.parseDate(ymd + ' ' + hm, tz, 'yyyy-MM-dd HH:mm'); }
 /** The shift this clock-in belongs to: same person, same day, starting within 3 hours (or already running). */
@@ -723,9 +736,9 @@ const tierOk_ = (me, w) => /^manager/i.test(w) ? me.role === 'Manager' : /lead/i
 /** Channels this person can see, with unread counts and the last message. DMs are 'dm-<id>-<id>'. */
 function channels_(ss, me, users) {
   const byId = {}; users.forEach(r => { byId[String(r[6])] = String(r[0]); });
-  const reads = {}; vals_(ss.getSheetByName('Chat reads')).forEach(r => { if (String(r[0]) === me.id) reads[String(r[1])] = toMs_(r[2]); });
-  const msgs = vals_(ss.getSheetByName('Messages'));
-  const list = vals_(ss.getSheetByName('Channels')).filter(r => r[0] && r[1]).map(r => ({ id: String(r[0]), name: String(r[1]), kind: String(r[2] || 'channel'), members: String(r[3] || '').split(',').filter(Boolean), who: String(r[4] || 'Everyone') }))
+  const reads = {}; rv_(ss, 'Chat reads').forEach(r => { if (String(r[0]) === me.id) reads[String(r[1])] = toMs_(r[2]); });
+  const msgs = rv_(ss, 'Messages', 3000);
+  const list = rv_(ss, 'Channels').filter(r => r[0] && r[1]).map(r => ({ id: String(r[0]), name: String(r[1]), kind: String(r[2] || 'channel'), members: String(r[3] || '').split(',').filter(Boolean), who: String(r[4] || 'Everyone') }))
     .filter(c => c.kind === 'channel' ? tierOk_(me, c.who) : c.members.indexOf(me.id) >= 0);
   // DMs exist as soon as there is a message
   const dms = {}; msgs.forEach(m => { const c = String(m[1]); if (/^dm-/.test(c) && c.split('-').indexOf(me.id) > 0) dms[c] = 1; });
@@ -741,7 +754,7 @@ function channels_(ss, me, users) {
 }
 /** Opens a channel (and marks it read), optionally sending a message first. Light: doesn't rebuild the whole app state. */
 function chat_(token, channel, text) {
-  const ss = SpreadsheetApp.getActive(), me = who_(ss, token), users = vals_(ss.getSheetByName('Users')).filter(r => String(r[0]).trim());
+  const ss = SpreadsheetApp.getActive(), me = who_(ss, token), users = rv_(ss, 'Users').filter(r => String(r[0]).trim());
   channel = String(channel || '');
   let ok = channels_(ss, me, users).some(c => c.id === channel);
   if (!ok && /^dm-/.test(channel)) {                 // a brand-new DM: both people must be active teammates
@@ -756,9 +769,10 @@ function chat_(token, channel, text) {
     }
     const rs = ss.getSheetByName('Chat reads'), rv = vals_(rs), i = rv.findIndex(r => String(r[0]) === me.id && String(r[1]) === channel);
     if (i >= 0) rs.getRange(i + 2, 3).setValue(new Date()); else rs.appendRow([me.id, channel, new Date()]);
+    dirty_(['Chat reads', 'Messages']);
     SpreadsheetApp.flush();
   } finally { lock.releaseLock(); }
-  const msgs = vals_(ss.getSheetByName('Messages')).filter(m => String(m[1]) === channel).slice(-150)
+  const msgs = rv_(ss, 'Messages', 3000).filter(m => String(m[1]) === channel).slice(-150)
     .map(m => ({ id: String(m[0]), fromId: String(m[2]), from: String(m[3]), at: toIso_(m[4]), text: String(m[5]) }));
   return { ok: true, channel, me: me.id, messages: msgs, channels: channels_(ss, me, users) };
 }
@@ -810,6 +824,48 @@ function file_(token, id) {
    ============================================================ */
 /** '$16.50' or '16.5' → 16.5. Blank → ''. Rejects nonsense. */
 function wage_(v) { const t = String(v == null ? '' : v).replace(/[$,\s]/g, ''); if (!t) return ''; const n = Number(t); if (!(n >= 0 && n < 1000)) throw new Error('Wage should be dollars an hour, like 16.50'); return Math.round(n * 100) / 100; }
+/* ----- inventory: the Peregrine Inventory & Reorder sheet, counted in the app by leads and managers ----- */
+function invBook_(ss) { const id = driveId_(setting_(ss, 'Inventory sheet')); if (!id) throw new Error('Add the inventory sheet link in Settings › Inventory sheet'); return SpreadsheetApp.openById(id); }
+function inventory_(token, counts) {
+  const ss = SpreadsheetApp.getActive(), me = who_(ss, token), isMgr = me.role === 'Manager';
+  if (me.role !== 'Lead' && !isMgr) throw new Error('Only managers and leads can see inventory');
+  const tz = ss.getSpreadsheetTimeZone(), book = invBook_(ss), tabs = splitList_(setting_(ss, 'Inventory tabs'));
+  const cache = CacheService.getScriptCache(), ck = 'INV:' + (isMgr ? 'm' : 'l') + ':' + (cache.get('G:INV') || '0');
+  if (counts && counts.length) {                      // save counts: [{tab, row, item, onHand, par?, caseSize?}]
+    const lock = LockService.getScriptLock(); lock.waitLock(15000);
+    try {
+      const today = atLocal_(Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd'), '00:00', tz);
+      counts.slice(0, 200).forEach(c => {
+        const sh = book.getSheetByName(String(c.tab)); if (!sh || tabs.indexOf(sh.getName()) < 0) return;
+        const row = Number(c.row); if (!(row >= 2) || row > sh.getLastRow()) return;
+        if (String(sh.getRange(row, 1).getValue()).trim() !== String(c.item).trim()) return;   // the sheet changed under us; skip, the reload fixes it
+        const n = String(c.onHand == null ? '' : c.onHand).trim();
+        if (n !== '' && !(Number(n) >= 0 && Number(n) < 100000)) return;
+        sh.getRange(row, 5).setValue(n === '' ? '' : Number(n));
+        sh.getRange(row, 8).setValue(n === '' ? '' : today);
+        if (isMgr && c.par !== undefined) { const v = String(c.par).trim(); if (v === '' || Number(v) >= 0) sh.getRange(row, 6).setValue(v === '' ? '' : Number(v)); }
+        if (isMgr && c.caseSize !== undefined) { const v = String(c.caseSize).trim(); if (v === '' || Number(v) > 0) sh.getRange(row, 7).setValue(v === '' ? '' : Number(v)); }
+      });
+      SpreadsheetApp.flush(); cache.put('G:INV', String(Date.now()), 21600);
+    } finally { lock.releaseLock(); }
+    return { ok: true, saved: counts.length };
+  }
+  const hit = cache.get(ck); if (hit) { try { return JSON.parse(hit); } catch (e) {} }
+  const items = [];
+  tabs.forEach(t => {
+    const sh = book.getSheetByName(t); if (!sh || sh.getLastRow() < 2) return;
+    sh.getRange(2, 1, sh.getLastRow() - 1, 12).getValues().forEach((r, i) => {
+      if (!String(r[0]).trim()) return;
+      items.push({ tab: t, row: i + 2, item: String(r[0]).trim(), cat: String(r[1] || ''), vendor: String(r[2] || ''), unit: String(r[3] || ''),
+        onHand: r[4] === '' ? '' : Number(r[4]), par: r[5] === '' ? '' : Number(r[5]), caseSize: r[6] === '' ? '' : Number(r[6]),
+        counted: r[7] instanceof Date ? Utilities.formatDate(r[7], tz, 'yyyy-MM-dd') : String(r[7] || ''), cost: Number(r[10]) || 0 });
+    });
+  });
+  const out = { ok: true, tabs, items, url: setting_(ss, 'Inventory sheet'), canEditPar: isMgr };
+  try { const t = JSON.stringify(out); if (t.length < 95000) cache.put(ck, t, 60); } catch (e) {}
+  return out;
+}
+
 /** The version of a shift the team sees (set when it's published), or null for a draft. */
 function pubObj_(r, tz) {
   const t = String(r[7] || ''); if (!t) return null;
@@ -840,7 +896,7 @@ function addMin_(hm, n) { const [h, m] = hm.split(':').map(Number), t = Math.max
 function shortDay_(ymd) { const [y, m, d] = ymd.split('-').map(Number), x = new Date(Date.UTC(y, m - 1, d)); return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][x.getUTCDay()] + ' ' + ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m - 1] + ' ' + d; }
 function prepList_(ss, me, tz) {
   const cutoff = Date.now() - 36 * 36e5;
-  return vals_(ss.getSheetByName('Prep')).filter(r => r[0] && r[1] && (!r[9] || toMs_(r[9]) > cutoff)).map(r => {
+  return rv_(ss, 'Prep').filter(r => r[0] && r[1] && (!r[9] || toMs_(r[9]) > cutoff)).map(r => {
     const names = String(r[5] || '').split(',').map(x => x.trim()).filter(Boolean);
     return { id: String(r[0]), item: String(r[1]), details: String(r[2] || ''), date: ymd_(r[3], tz), label: String(r[4] || ''), for: names, by: String(r[6] || ''), at: toIso_(r[7]), doneBy: String(r[8] || ''), doneAt: toIso_(r[9]), mine: names.indexOf(me.name) >= 0 };
   }).sort((a, b) => (!!a.doneAt - !!b.doneAt) || String(a.date).localeCompare(String(b.date)) || String(b.at).localeCompare(String(a.at)));
@@ -946,7 +1002,36 @@ function dayset_(v) {
   return out.length ? out : null;
 }
 function vals_(sh) { if (!sh || sh.getLastRow() < 2) return []; return sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues(); }
-function setting_(ss, label) { const r = vals_(ss.getSheetByName('Settings')).find(x => String(x[0]).trim() === label); return r ? String(r[1]).trim() : ''; }
+/** Only the last n rows (logs that grow forever: messages, checklist log). */
+function tail_(sh, n) { if (!sh || sh.getLastRow() < 2) return []; const last = sh.getLastRow(), from = Math.max(2, last - n + 1); return sh.getRange(from, 1, last - from + 1, sh.getLastColumn()).getValues(); }
+
+/* ----- speed: reads are memoized per request and cached for a minute between requests.
+   Every write through the app marks its tab dirty, and onEdit does the same for edits made by hand in the sheet,
+   so nothing stale is shown. ----- */
+let MEMO_ = {};
+const CACHE_TTL_ = 90;
+function gen_(n) { return CacheService.getScriptCache().get('G:' + n) || '0'; }
+function dirty_(names) {
+  const c = CacheService.getScriptCache();
+  [].concat(names).filter(Boolean).forEach(n => { Object.keys(MEMO_).forEach(k => { if (n === '*' || k === n || k.indexOf(n + '#') === 0) delete MEMO_[k]; }); c.put('G:' + n, String(Date.now()) + Math.random().toString(36).slice(2, 6), 21600); });
+}
+function pack_(v) { return v.map(r => r.map(x => x instanceof Date ? { $d: x.getTime() } : x)); }
+function unpack_(v) { return v.map(r => r.map(x => x && typeof x === 'object' && '$d' in x ? new Date(x.$d) : x)); }
+/** Cached read of a whole tab (by name). Use for reading only – writes need vals_ on the live sheet. */
+function rv_(ss, n, tailRows) {
+  const k = n + (tailRows ? '#' + tailRows : '');
+  if (MEMO_[k]) return MEMO_[k];
+  const c = CacheService.getScriptCache(), key = 'V' + VERSION + ':' + k + ':' + gen_(n) + ':' + gen_('*');
+  const hit = c.get(key);
+  if (hit) { try { return (MEMO_[k] = unpack_(JSON.parse(hit))); } catch (e) {} }
+  const sh = ss.getSheetByName(n), v = tailRows ? tail_(sh, tailRows) : vals_(sh);
+  MEMO_[k] = v;
+  try { const t = JSON.stringify(pack_(v)); if (t.length < 95000) c.put(key, t, CACHE_TTL_); } catch (e) {}
+  return v;
+}
+/** Simple trigger: edits made by hand in the sheet clear that tab's cache right away. */
+function onEdit(e) { try { dirty_(e.range.getSheet().getName()); } catch (err) {} }
+function setting_(ss, label) { const r = rv_(ss, 'Settings').find(x => String(x[0]).trim() === label); return r ? String(r[1]).trim() : ''; }
 function head_(sh, n) { sh.getRange(1, 1, 1, n).setFontWeight('bold').setBackground('#eeeeee'); sh.setFrozenRows(1); }
 function move_(ss, name, pos) { const s = ss.getSheetByName(name); if (s) { ss.setActiveSheet(s); ss.moveActiveSheet(Math.min(pos, ss.getSheets().length)); } }
 function splitList_(s) { return String(s || '').split(',').map(x => x.trim()).filter(Boolean); }

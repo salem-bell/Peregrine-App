@@ -47,7 +47,8 @@ async function refresh(p){
   }
   data = got; offline = false; save('pt-cache', JSON.stringify(data)); render(); return got;
 }
-const act = (action, params) => refresh(Object.assign({ action }, params || {}));
+const act = (action, params) => { const pr = refresh(Object.assign({ action }, params || {})); saving(); pr.finally(saving); return pr; };
+function saving(){ const el = $('#saving'); if (el) el.hidden = !pending; }
 function signOut(msg){ TOKEN = ''; data = null; save('pt-token', null); save('pt-cache', null); stopChat(); render(); if (msg) toast(msg.charAt(0).toUpperCase() + msg.slice(1)); }
 
 /* ---------- formatting ---------- */
@@ -128,7 +129,7 @@ const weekShifts = wk => (data.shifts || []).filter(s => notGone(s) && s.date >=
 /** Live estimate for the shift being edited, counting the rest of that person's week (so overtime shows up). */
 function shiftEstimate(f){
   const g = n => (f.elements.namedItem(n) || {}).value || '', name = g('name'), date = g('date'), start = g('start'), end = g('end');
-  if (!name || !date || !start || !end || end <= start) return '';
+  if (!mgr() || !name || !date || !start || !end || end <= start) return '';
   const w = wageOf(name); if (!w) return `<span class="sub">No wage set for ${esc(first(name))} – add it in Team to see an estimate.</span>`;
   const wk = monday(date), others = weekShifts(wk).filter(s => s.id !== (sheet && sheet.id));
   const L = labor(shiftItems(others.concat([{ id: '_this', name, date, start, end }])));
@@ -227,12 +228,57 @@ function clockState(s){       // managers: is this person clocked in for today's
 }
 
 /* ----- checklists ----- */
-const PREP = '__prep';
+const PREP = '__prep', INV = '__inv';
+/* ----- inventory (leads and managers): counts go straight into the Inventory & Reorder sheet ----- */
+let inv = null, invTab = load('pt-invtab') || '', invQ = '', invQueue = {}, invTimer = null, invBusy = false;
+const invStatus = x => x.onHand === '' || x.onHand == null ? 'Not counted' : x.onHand <= 0 ? 'Out' : x.par === '' || x.par == null ? 'OK' : x.onHand < x.par ? 'Below par' : 'OK';
+const invOrder = x => { if (x.onHand === '' || x.onHand == null || x.par === '' || x.par == null || !(x.onHand < x.par)) return 0; const c = Number(x.caseSize) || 1; return Math.ceil((x.par - x.onHand) / c) * c; };
+async function loadInv(force){
+  if (invBusy) return; invBusy = true;
+  try { const r = await post({ fn: 'inventory', token: TOKEN }); inv = r; if (!invTab || (invTab !== 'Reorder' && r.tabs.indexOf(invTab) < 0)) invTab = r.tabs[0]; }
+  catch (e) { toast(String(e.message || e)); }
+  invBusy = false; if (tab === 'lists' && listTab === INV) render();
+}
+function queueCount(x, field, val){
+  x[field] = val === '' ? '' : Number(val); if (field === 'onHand') x.counted = val === '' ? '' : T();
+  const k = x.tab + '|' + x.row; invQueue[k] = Object.assign(invQueue[k] || { tab: x.tab, row: x.row, item: x.item }, { onHand: x.onHand }, field === 'par' ? { par: val } : {}, field === 'caseSize' ? { caseSize: val } : {});
+  clearTimeout(invTimer); invTimer = setTimeout(flushCounts, 1200);
+}
+async function flushCounts(){
+  const counts = Object.values(invQueue); if (!counts.length) return; invQueue = {};
+  try { await post({ fn: 'inventory', token: TOKEN, counts }); } catch (e) { counts.forEach(c => { invQueue[c.tab + '|' + c.row] = c; }); toast('Counts not saved yet – ' + String(e.message || e)); clearTimeout(invTimer); invTimer = setTimeout(flushCounts, 5000); }
+}
+function viewInventory(cl){
+  if (!inv){ loadInv(); return `<h1>Checklists</h1>${listSeg(cl)}<div class="card"><div class="empty">Loading inventory…</div></div>`; }
+  const items = inv.items, need = items.filter(x => ['Out', 'Below par'].includes(invStatus(x))), out = items.filter(x => invStatus(x) === 'Out'), notC = items.filter(x => invStatus(x) === 'Not counted');
+  const cost = need.reduce((n, x) => n + invOrder(x) * (x.cost || 0), 0);
+  const tabs = inv.tabs.concat(['Reorder']);
+  const q = invQ.trim().toLowerCase();
+  const pill = x => { const st = invStatus(x); return `<span class="pill ${st === 'OK' ? 'ok' : st === 'Not counted' ? 'mute' : 'warn'}">${st}</span>`; };
+  let body;
+  if (invTab === 'Reorder') {
+    const byV = {}; need.forEach(x => (byV[x.vendor || 'Other'] = byV[x.vendor || 'Other'] || []).push(x));
+    body = Object.keys(byV).sort().map(v => `<h2>${esc(v)}</h2><div class="card">${byV[v].map(x => `<div class="row"><div class="txt"><b>${esc(x.item)}</b><div class="sub">${x.onHand === '' ? '–' : x.onHand} on hand · par ${x.par}${x.unit ? ' · ' + esc(x.unit) : ''}</div></div>${pill(x)}<div class="money"><b>${invOrder(x)}</b><div class="sub">${x.cost ? money(invOrder(x) * x.cost, true) : ''}</div></div></div>`).join('')}</div>`).join('') || '<div class="card"><div class="empty">Nothing needs ordering.</div></div>';
+  } else {
+    const list = items.filter(x => (q ? (x.item + ' ' + x.cat + ' ' + x.vendor).toLowerCase().includes(q) : x.tab === invTab));
+    let lastCat = '';
+    body = `<div class="card">${list.map(x => { const head = !q && x.cat !== lastCat ? `<div class="sec">${esc(x.cat || 'Other')}</div>` : ''; lastCat = x.cat;
+      return head + `<div class="row inv"><div class="txt"><b>${esc(x.item)}</b>${pill(x)}<div class="sub">${esc(x.unit || '')}${x.par !== '' ? ' · par ' + x.par : ''}${x.caseSize > 1 ? ' · case of ' + x.caseSize : ''}${x.counted ? ' · counted ' + (x.counted === T() ? 'today' : esc(x.counted)) : ''}${q ? ' · ' + esc(x.tab) : ''}</div>
+        ${inv.canEditPar ? `<div class="invmeta"><label>Par <input data-invf="par" data-invk="${esc(x.tab)}|${x.row}" inputmode="decimal" value="${x.par}"></label><label>Case <input data-invf="caseSize" data-invk="${esc(x.tab)}|${x.row}" inputmode="decimal" value="${x.caseSize}"></label></div>` : ''}</div>
+        <div class="stepper"><button class="mini" data-invstep="-1" data-invk="${esc(x.tab)}|${x.row}" aria-label="One less">–</button><input class="cnt" data-invf="onHand" data-invk="${esc(x.tab)}|${x.row}" inputmode="decimal" value="${x.onHand}" placeholder="–" aria-label="${esc(x.item)} on hand"><button class="mini" data-invstep="1" data-invk="${esc(x.tab)}|${x.row}" aria-label="One more">+</button></div></div>`; }).join('') || '<div class="empty">No items.</div>'}</div>`;
+  }
+  return `<h1>Checklists</h1>${listSeg(cl)}
+    <div class="card"><div class="row"><div class="txt"><b>${need.length} to order</b><div class="sub">${out.length} out · ${notC.length} not counted · about ${money(cost)} at known costs</div></div><a class="btn sm" href="${esc(inv.url)}" target="_blank" rel="noopener">Open sheet ↗</a></div></div>
+    <input class="search" data-invsearch placeholder="Search all items" value="${esc(invQ)}" aria-label="Search inventory">
+    ${q ? '' : `<div class="seg">${tabs.map(t => `<button data-invtab="${esc(t)}" aria-pressed="${t === invTab}">${esc(t)}${t === 'Reorder' && need.length ? ' ' + need.length : ''}</button>`).join('')}</div>`}
+    ${body}
+    <p class="sub">Counts save to the Inventory & Reorder sheet as you type, with today's date. Blank = not counted.${inv.canEditPar ? ' Par and case size are editable by managers.' : ''}</p>`;
+}
 const prepOpen = () => (data.prep || []).filter(x => !x.doneAt);
 const prepMine = () => prepOpen().filter(x => x.mine);
 function listSeg(cl){
   const n = prepOpen().length;
-  return `<div class="seg">${cl.map(x => `<button data-list="${esc(x.list)}" aria-pressed="${x.list === listTab}">${esc(x.list)} ${x.done}/${x.total}</button>`).join('')}<button data-list="${PREP}" aria-pressed="${listTab === PREP}">Prep${n ? ' ' + n : ''}</button></div>`;
+  return `<div class="seg">${cl.map(x => `<button data-list="${esc(x.list)}" aria-pressed="${x.list === listTab}">${esc(x.list)} ${x.done}/${x.total}</button>`).join('')}<button data-list="${PREP}" aria-pressed="${listTab === PREP}">Prep${n ? ' ' + n : ''}</button>${lead() ? `<button data-list="${INV}" aria-pressed="${listTab === INV}">Inventory</button>` : ''}</div>`;
 }
 function prepRow(x){
   const on = !!x.doneAt, canDel = x.by === data.me.name || lead();
@@ -260,6 +306,7 @@ function viewPrep(cl){
 function viewLists(){
   const cl = data.checklists || [];
   if (listTab === PREP) return viewPrep(cl);
+  if (listTab === INV && lead()) return viewInventory(cl);
   if (!cl.length) return '<h1>Checklists</h1>' + listSeg(cl) + '<div class="card"><div class="empty">Nothing on the checklists today.</div></div>';
   if (!cl.some(c => c.list === listTab)) listTab = (cl.find(c => c.done < c.total) || cl[0]).list;
   const c = cl.find(x => x.list === listTab);
@@ -273,24 +320,48 @@ function viewLists(){
 }
 
 /* ----- schedule ----- */
-function weekBounds(){ return [monday(plus(T(), -21)), monday(plus(T(), mgr() ? 49 : 7))]; }
+let schedView = load('pt-sview') || 'build';
+/** What the team actually sees of a shift (leads and managers get drafts too). */
+function pubView(s){ if (s.status === 'draft') return null; if (s.status === 'changed' && s.was) return Object.assign({}, s, s.was, { status: '' }); return s; }
+function viewMyShifts(){
+  const vis = (data.shifts || []).map(pubView).filter(Boolean), now = new Date();
+  const mine = vis.filter(s => s.name === data.me.name && (s.date > T() || (s.date === T() && mins(s.end) > now.getHours() * 60 + now.getMinutes())));
+  const past = vis.filter(s => s.name === data.me.name && s.date < T() && s.date >= plus(T(), -7));
+  const crew = s => vis.filter(o => o !== s && o.name !== s.name && o.date === s.date && mins(o.start) < mins(s.end) && mins(o.end) > mins(s.start));
+  const card = s => { const c = crew(s);
+    return `<div class="card shiftcard ${s.date === T() ? 'today' : ''}"><div class="row" style="display:block">
+      <div style="display:flex;align-items:baseline;gap:8px"><b style="flex:1;font:400 1.05rem/1.2 var(--head);letter-spacing:.06em;text-transform:uppercase">${dayName(s.date)}</b><span class="sub">${shortDay(s.date)}</span></div>
+      <div class="big2">${t12(s.start)} – ${t12(s.end)} <span class="sub">${hrs(mins(s.end) - mins(s.start))}${s.position ? ' · ' + esc(s.position) : ''}</span></div>
+      ${s.notes ? `<div class="sub">${esc(s.notes)}</div>` : ''}
+      <div class="crew">${c.length ? '<span class="sub">Working with</span> ' + c.map(o => `<span class="pill mute">${esc(first(o.name))} ${t12(o.start)}–${t12(o.end)}</span>`).join(' ') : '<span class="sub">No one else on yet</span>'}</div></div></div>`; };
+  const wk = mine.filter(s => s.date <= plus(monday(T()), 6)).reduce((n, s) => n + mins(s.end) - mins(s.start), 0);
+  return `<div class="mywrap">${mine.length ? `<p class="sub" style="margin:0 4px 10px">${mine.length} upcoming shift${mine.length > 1 ? 's' : ''}${wk ? ' · ' + hrs(wk) + ' left this week' : ''}</p>${mine.map(card).join('')}` : '<div class="card"><div class="empty">No upcoming shifts on the published schedule.</div></div>'}
+    ${past.length ? `<details class="more" style="margin:12px 4px"><summary>Last 7 days</summary>${past.map(card).join('')}</details>` : ''}
+    <div class="btns" style="margin-top:14px"><button class="btn" data-more="requests">Time off & swaps</button><button class="btn" data-more="avail">My availability</button><button class="btn" data-more="reminders">Reminders & calendar</button></div></div>`;
+}
+function weekBounds(){ return [monday(plus(T(), -21)), monday(plus(T(), lead() ? 49 : 7))]; }
 function viewSchedule(){
+  const seg = lead() ? `<div class="seg" style="max-width:420px;margin-left:0"><button data-sview="build" aria-pressed="${schedView !== 'mine'}">Build schedule</button><button data-sview="mine" aria-pressed="${schedView === 'mine'}">My shifts</button></div>` : '';
+  if (!lead() || schedView === 'mine') { document.body.classList.remove('wide'); return `<h1>${lead() ? 'Schedule' : 'My shifts'}</h1>${seg}${viewMyShifts()}`; }
+  return viewScheduleBuild(seg);
+}
+function viewScheduleBuild(seg){
   const [lo, hi] = weekBounds();
   if (!week || week < lo || week > hi) week = monday(T());
-  if (wide()) return viewScheduleGrid();
+  if (wide()) return viewScheduleGrid(seg);
   const days = Array.from({ length: 7 }, (_, i) => plus(week, i));
   const label = week === monday(T()) ? 'This week' : week === plus(monday(T()), 7) ? 'Next week' : week === plus(monday(T()), -7) ? 'Last week' : 'Week of ' + shortDay(week);
   const nav = `<div class="weeknav"><button class="btn sm" data-week="-7" ${week <= lo ? 'disabled' : ''} aria-label="Previous week">‹</button><div><b>${label}</b><div class="sub">${shortDay(days[0])} – ${shortDay(days[6])}</div></div><button class="btn sm" data-week="7" ${week >= hi ? 'disabled' : ''} aria-label="Next week">›</button></div>`;
   const mineOnly = schedMine && !mgr();
   const dayCard = d => {
     const list = shiftsOn(d).filter(s => !mineOnly || s.name === data.me.name);
-    const offs = mgr() ? (data.requests || []).filter(q => q.type === 'Time off' && q.date === d && q.status === 'Approved').map(q => first(q.from)) : [];
+    const offs = lead() ? (data.requests || []).filter(q => q.type === 'Time off' && q.date === d && q.status === 'Approved').map(q => first(q.from)) : [];
     return `<h2 ${d === T() ? 'id="todayh" class="today-h"' : ''}>${dayName(d)}${d !== T() && d !== plus(T(), 1) ? '' : ' · ' + shortDay(d)}</h2><div class="card">
-      ${list.map(s => { const cf = mgr() ? conflicts(s) : [];
+      ${list.map(s => { const cf = lead() ? conflicts(s) : [];
         const inner = `<div class="txt ${s.status === 'removed' ? 'gone' : ''}"><b>${esc(s.name)}</b> ${statusPill(s)}<div class="sub">${t12(s.start)}–${t12(s.end)} · ${hrs(mins(s.end) - mins(s.start))}${s.position ? ' · ' + esc(s.position) : ''}${s.notes ? ' · ' + esc(s.notes) : ''}</div>${cf.length ? `<div style="margin-top:4px">${cf.map(([c, t]) => `<span class="pill ${c}">${esc(t)}</span>`).join(' ')}</div>` : ''}</div>${mgr() ? '<span class="sub">Edit</span>' : ''}`;
-        return mgr() ? rowBtn(`data-editshift="${esc(s.id)}" class="${s.name === data.me.name ? 'mine' : ''}"`, inner) : `<div class="row ${s.name === data.me.name ? 'mine' : ''}">${inner}</div>`; }).join('') || '<div class="empty" style="padding:14px">No shifts.</div>'}
+        return lead() ? rowBtn(`data-editshift="${esc(s.id)}" class="${s.name === data.me.name ? 'mine' : ''}"`, inner) : `<div class="row ${s.name === data.me.name ? 'mine' : ''}">${inner}</div>`; }).join('') || '<div class="empty" style="padding:14px">No shifts.</div>'}
       ${offs.length ? `<div class="row"><div class="txt sub">Off: ${offs.map(esc).join(', ')}</div></div>` : ''}
-      ${mgr() ? rowBtn(`data-addshift="${d}"`, '<div class="txt accent"><b>+ Add shift</b></div>') : ''}</div>`;
+      ${lead() ? rowBtn(`data-addshift="${d}"`, '<div class="txt accent"><b>+ Add shift</b></div>') : ''}</div>`;
   };
   const totals = mgr() ? (() => { const t = {}; days.forEach(d => shiftsOn(d).filter(notGone).forEach(s => { t[s.name] = (t[s.name] || 0) + mins(s.end) - mins(s.start); }));
     const L = labor(shiftItems(weekShifts(week)));
@@ -298,15 +369,15 @@ function viewSchedule(){
       <div class="row"><div class="txt"><b>Total</b></div><b>${hrs(Object.values(t).reduce((a, b) => a + b, 0))}</b><span class="money"><b>${money(L.total)}</b></span></div></div>` : ''; })() : '';
   const pend = weekPending(week).length;
   const pubBtn = lead() ? (pend ? `<button class="btn sm go" data-publish>Publish week (${pend})</button>` : '<span class="pill ok">Published</span>') : '';
-  const tools = lead() ? `<div class="btns" style="margin:10px 0 4px">${pubBtn}${mgr() ? '<button class="btn sm" data-copyweek>Copy last week here</button><button class="btn sm" data-clearweek>Clear this week</button>' : ''}</div>` : '';
-  return `<h1>Schedule</h1>${nav}${lead() && pend ? '<p class="sub" style="margin:0 4px 6px">Drafts and changes stay hidden from the team until you publish.</p>' : ''}${mgr() ? '' : `<div class="seg"><button data-mine="0" aria-pressed="${!schedMine}">Everyone</button><button data-mine="1" aria-pressed="${schedMine}">My shifts</button></div>`}
+  const tools = lead() ? `<div class="btns" style="margin:10px 0 4px">${pubBtn}${lead() ? '<button class="btn sm" data-copyweek>Copy last week here</button><button class="btn sm" data-clearweek>Clear this week</button>' : ''}</div>` : '';
+  return `<h1>Schedule</h1>${seg || ''}${nav}${lead() && pend ? '<p class="sub" style="margin:0 4px 6px">Drafts and changes stay hidden from the team until you publish.</p>' : ''}${mgr() ? '' : `<div class="seg"><button data-mine="0" aria-pressed="${!schedMine}">Everyone</button><button data-mine="1" aria-pressed="${schedMine}">My shifts</button></div>`}
     ${tools}${days.map(dayCard).join('')}${totals}
     <div class="btns" style="margin-top:14px"><button class="btn" data-more="requests">Time off & swaps</button><button class="btn" data-more="avail">My availability</button></div>`;
 }
 
 /** Desktop: the whole week as a grid, people down the side. Click a cell to add, click a shift to edit, drag to move (hold Alt/Option to copy). */
-function viewScheduleGrid(){
-  const [lo, hi] = weekBounds(), days = Array.from({ length: 7 }, (_, i) => plus(week, i)), M = mgr();
+function viewScheduleGrid(seg){
+  const [lo, hi] = weekBounds(), days = Array.from({ length: 7 }, (_, i) => plus(week, i)), M = mgr(), E = lead();
   const label = week === monday(T()) ? 'This week' : week === plus(monday(T()), 7) ? 'Next week' : week === plus(monday(T()), -7) ? 'Last week' : 'Week of ' + shortDay(week);
   const inWeek = (data.shifts || []).filter(s => days.includes(s.date)), inWeekLive = inWeek.filter(notGone);
   const everyone = lineup(), hasShift = n => inWeek.some(s => s.name === n && notGone(s));
@@ -320,11 +391,11 @@ function viewScheduleGrid(){
     const list = inWeek.filter(s => s.name === p.name && s.date === d);
     const off = approvedOff(p.name, d), ask = pendingOff(p.name, d), un = unavail(p.name, d);
     const note = off ? '<div class="cnote warn">Time off</div>' : ask ? '<div class="cnote">Asked off</div>' : un ? `<div class="cnote">${un.from ? 'Can\'t ' + t12(un.from) + '–' + t12(un.to) : 'Unavailable'}</div>` : '';
-    const chips = list.map(s => { const cf = M ? conflicts(s) : [];
+    const chips = list.map(s => { const cf = E ? conflicts(s) : [];
       const tip = cf.map(c => c[1]).concat(s.status === 'changed' && s.was ? ['Team still sees ' + (s.was.name !== s.name ? s.was.name + ' ' : '') + t12(s.was.start) + '–' + t12(s.was.end) + (s.was.date !== s.date ? ' on ' + shortDay(s.was.date) : '')] : []).join(' · ');
-      return `<button class="chip ${cf.some(c => c[0] === 'warn') ? 'bad' : ''} ${s.name === data.me.name ? 'me' : ''} st-${s.status || 'published'}" ${M ? `data-editshift="${esc(s.id)}" ${s.status === 'removed' ? '' : `draggable="true" data-drag="${esc(s.id)}"`}` : 'tabindex="-1"'} title="${esc(tip)}">
+      return `<button class="chip ${cf.some(c => c[0] === 'warn') ? 'bad' : ''} ${s.name === data.me.name ? 'me' : ''} st-${s.status || 'published'}" ${E ? `data-editshift="${esc(s.id)}" ${s.status === 'removed' ? '' : `draggable="true" data-drag="${esc(s.id)}"`}` : 'tabindex="-1"'} title="${esc(tip)}">
         ${STATUS[s.status] ? `<i class="tag">${STATUS[s.status][1]}</i>` : ''}<b>${t12(s.start)}–${t12(s.end)}</b>${s.position ? `<span>${esc(s.position)}</span>` : ''}${s.notes ? `<span class="n2">${esc(s.notes)}</span>` : ''}</button>`; }).join('');
-    return `<td class="${d === T() ? 'today' : ''} ${off ? 'off' : un && !un.from ? 'un' : ''}" ${M ? `data-cell="${esc(p.name)}|${d}"` : ''}>${note}${chips}${M ? `<button class="addc" data-addshift="${d}" data-who="${esc(p.name)}" aria-label="Add a shift for ${esc(p.name)} on ${shortDay(d)}">+</button>` : ''}</td>`;
+    return `<td class="${d === T() ? 'today' : ''} ${off ? 'off' : un && !un.from ? 'un' : ''}" ${E ? `data-cell="${esc(p.name)}|${d}"` : ''}>${note}${chips}${E ? `<button class="addc" data-addshift="${d}" data-who="${esc(p.name)}" aria-label="Add a shift for ${esc(p.name)} on ${shortDay(d)}">+</button>` : ''}</td>`;
   };
   const rows = roster.map(p => { const m = inWeek.filter(s => s.name === p.name).reduce((n, s) => n + mins(s.end) - mins(s.start), 0);
     const m2 = inWeekLive.filter(s => s.name === p.name).reduce((n, s) => n + mins(s.end) - mins(s.start), 0);
@@ -333,11 +404,11 @@ function viewScheduleGrid(){
     const hideBtn = M && p.id ? `<button class="mini" data-onsched="${esc(p.id)}" data-to="${p.hidden ? 1 : 0}" title="${p.hidden ? 'Show on the schedule' : 'Hide from the schedule'}">${p.hidden ? 'Show' : 'Hide'}</button>` : '';
     return `<tr class="${p.name === data.me.name ? 'mine-row' : ''} ${p.hidden ? 'hid' : ''}" ${p.id ? `data-rid="${esc(p.id)}"` : ''}><th scope="row"><div class="who">${handle}<div><b>${esc(p.name)}</b><span class="sub">${esc(p.role || '')}${p.hidden ? ' · hidden' : ''}</span></div>${hideBtn}</div>${wageIn}</th>${days.map(d => cell(p, d)).join('')}<td class="tot">${m2 ? hrs(m2) : ''}${M && m2 ? `<div class="money">${p.wage ? money(L.byPerson[p.name] || 0) : '<span class="sub">no wage</span>'}</div>${L.ot[p.name] ? `<span class="pill warn">OT ${hrs(L.ot[p.name] * 60)}</span>` : ''}` : ''}</td></tr>`; }).join('');
   const total = inWeekLive.reduce((n, s) => n + mins(s.end) - mins(s.start), 0);
-  return `<div class="gridhead"><h1 style="margin:0">Schedule</h1>
+  return `${seg || ''}<div class="gridhead"><h1 style="margin:0">Schedule</h1>
       <div class="weeknav" style="margin:0"><button class="btn sm" data-week="-7" ${week <= lo ? 'disabled' : ''} aria-label="Previous week">‹</button><div style="min-width:200px"><b>${label}</b><div class="sub">${shortDay(days[0])} – ${shortDay(days[6])}</div></div><button class="btn sm" data-week="7" ${week >= hi ? 'disabled' : ''} aria-label="Next week">›</button>${week !== monday(T()) ? '<button class="btn sm" data-thisweek>Today</button>' : ''}</div>
       ${M ? `<div class="labor"><span class="sub">Est. wages</span><b>${money(L.total)}</b><span class="sub">${hrs(total)}${data.pay && data.pay.extra ? ' · incl. ' + data.pay.extra + '% extra' : ''}</span></div>` : ''}
-      <div class="btns">${M ? '<button class="btn sm" data-copyweek>Copy last week</button><button class="btn sm" data-clearweek>Clear week</button>' : ''}${lead() ? (weekPending(week).length ? `<button class="btn sm go" data-publish>Publish week (${weekPending(week).length})</button>` : '<span class="pill ok">Published</span>') : ''}<button class="btn sm" data-print>Print</button></div></div>
-    <div class="gridwrap"><table class="grid"><thead><tr><th class="corner">${M ? '<span class="sub">Click a box to add. Drag to move, Alt-drag to copy.</span>' : ''}</th>${days.map(d => `<th class="${d === T() ? 'today' : ''}"><b>${DOW[pd(d).getDay()]}</b> ${pd(d).getDate()}<span class="sub">${hrs(dayMins(d))}</span></th>`).join('')}<th class="tot">Hours</th></tr></thead>
+      <div class="btns">${E ? '<button class="btn sm" data-copyweek>Copy last week</button><button class="btn sm" data-clearweek>Clear week</button>' : ''}${lead() ? (weekPending(week).length ? `<button class="btn sm go" data-publish>Publish week (${weekPending(week).length})</button>` : '<span class="pill ok">Published</span>') : ''}<button class="btn sm" data-print>Print</button></div></div>
+    <div class="gridwrap"><table class="grid"><thead><tr><th class="corner">${E ? '<span class="sub">Click a box to add. Drag to move, Alt-drag to copy.</span>' : ''}</th>${days.map(d => `<th class="${d === T() ? 'today' : ''}"><b>${DOW[pd(d).getDay()]}</b> ${pd(d).getDate()}<span class="sub">${hrs(dayMins(d))}</span></th>`).join('')}<th class="tot">Hours</th></tr></thead>
       <tbody data-reorder>${rows || `<tr><td colspan="9" class="empty">No one on the team yet.</td></tr>`}</tbody>
       <tfoot><tr><th scope="row">Total${M ? '<span class="sub">Estimated wages</span>' : ''}</th>${days.map(d => `<td class="tot">${inWeekLive.filter(s => s.date === d).length} shift${inWeekLive.filter(s => s.date === d).length === 1 ? '' : 's'}${M ? `<div class="money">${money(L.byDay[d] || 0)}</div>` : ''}</td>`).join('')}<td class="tot"><b>${hrs(total)}</b>${M ? `<div class="money"><b>${money(L.total)}</b></div>` : ''}</td></tr></tfoot></table></div>
     ${M && hiddenOut.length ? `<p class="sub">Hidden from the schedule: ${hiddenOut.map(p => `${esc(p.name)} <button class="mini" data-onsched="${esc(p.id)}" data-to="1">Show</button>`).join(' · ')}</p>` : ''}
@@ -437,7 +508,7 @@ function viewConversation(){
   const msgs = chat.msgs || [];
   let lastDay = '';
   const body = msgs.map(m => { const day = ymdOf(new Date(m.at)), mine = m.fromId === chat.me; const sep = day !== lastDay ? `<div class="daysep">${dayName(day)}</div>` : ''; lastDay = day;
-    return sep + `<div class="bub ${mine ? 'me' : ''}">${mine ? '' : `<div class="from">${esc(m.from)}</div>`}<div class="msg">${esc(m.text)}</div><div class="when">${timeOf(m.at)}${mine || mgr() ? ` · <button class="lnk" data-delmsg="${esc(m.id)}">Delete</button>` : ''}</div></div>`; }).join('');
+    return sep + `<div class="bub ${mine ? 'me' : ''}">${mine ? '' : `<div class="from">${esc(m.from)}</div>`}<div class="msg">${esc(m.text)}</div><div class="when">${timeOf(m.at)}${mgr() ? ` · <button class="lnk" data-delmsg="${esc(m.id)}">Delete</button>` : ''}</div></div>`; }).join('');
   return `<div class="convo"><div class="weeknav" style="margin-bottom:8px"><button class="btn sm" data-closechat>‹ Back</button><div><b>${esc(convName())}</b></div><span style="width:44px"></span></div>
     <div class="msgs" id="msgs">${body || '<div class="empty">Say hello 👋</div>'}</div>
     <form class="composer" data-form="send"><textarea name="text" rows="1" maxlength="2000" placeholder="Message" aria-label="Message">${esc(chat.compose)}</textarea><button class="btn go" ${chat.sending ? 'disabled' : ''}>Send</button></form></div>`;
@@ -570,16 +641,59 @@ function viewViewer(){
 }
 
 /* ----- tests ----- */
-function viewTests(){
-  const ts = data.tests || [];
-  const row = t => { const st = t.passed ? '<span class="pill ok">Passed</span>' : t.last ? `<span class="pill warn">${esc(t.last.result || 'Not yet')} ${esc(t.last.score)}/${esc(t.last.outOf)}</span>` : !t.unlocked ? '<span class="pill mute">Locked</span>' : '';
-    return `<div class="row" style="display:block"><div style="display:flex;gap:8px;align-items:center"><b style="flex:1">${esc(t.name)}</b>${st}</div>
-      <div class="sub">${!t.unlocked ? 'Pass ' + esc(t.need) + ' first' : t.taken ? 'Taken ' + t.taken + ' time' + (t.taken > 1 ? 's' : '') + (t.last && t.last.when ? ' · last ' + ago(t.last.when) : '') : 'Not taken yet'}</div>
-      ${t.unlocked && t.url ? `<div class="btns" style="margin-top:8px"><a class="btn sm ${t.passed ? '' : 'go'}" href="${esc(t.url)}" target="_blank" rel="noopener">${t.passed ? 'Retake' : 'Take the test'} ↗</a></div>` : t.unlocked && !t.url ? '<div class="sub">The link isn\'t set up yet – ask a manager.</div>' : ''}</div>`; };
-  return `${back()}<h1>Training & tests</h1><div class="card">${ts.map(row).join('') || '<div class="empty">No tests set up.</div>'}</div>
-    <p class="sub">Tests open in your browser. Use your first and last name exactly as you sign in. Results show here a minute after you submit – pull down or tap ↻.</p>`;
+/* ----- tests: a tab of its own. Taken right in the app (signed in, so no typing your name); results go to the results sheet. ----- */
+let tdata = null, tAt = 0, runner = null;
+async function loadTests(){
+  try { const r = await post({ fn: 'tests', token: TOKEN }); tdata = r; tAt = Date.now(); } catch (e) { const m = String(e.message || e); if (/^signin/.test(m)) return signOut(m.replace(/^signin:\s*/, '')); toast(m); }
+  if (tab === 'tests') render();
 }
-
+function viewTests(){
+  if (!tdata || Date.now() - tAt > 60000) loadTests();
+  if (!tdata) return '<h1>Tests</h1><div class="card"><div class="empty">Loading your tests…</div></div>';
+  const ts = tdata.tests || [];
+  const row = t => { const st = t.passed ? '<span class="pill ok">Passed</span>' : t.pending ? '<span class="pill mute">Being scored</span>' : t.last ? `<span class="pill warn">${esc(t.last.result || 'Not yet')}${t.last.score !== '' && t.last.score != null ? ' ' + esc(t.last.score) + '/' + esc(t.last.outOf) : ''}</span>` : !t.unlocked ? '<span class="pill mute">Locked</span>' : '';
+    const go = t.unlocked ? (t.inApp ? `<button class="btn sm ${t.passed ? '' : 'go'}" data-taketest="${esc(t.level)}">${t.passed ? 'Retake' : t.taken ? 'Try again' : 'Start the test'}</button>` : t.url ? `<a class="btn sm ${t.passed ? '' : 'go'}" href="${esc(t.url)}" target="_blank" rel="noopener">${t.passed ? 'Retake' : 'Take the test'} ↗</a>` : '<span class="sub">Not set up yet – ask a manager.</span>') : '';
+    return `<div class="row" style="display:block"><div style="display:flex;gap:8px;align-items:center"><b style="flex:1">${esc(t.name)}</b>${st}</div>
+      <div class="sub">${!t.unlocked ? 'Pass ' + esc(t.need) + ' first' : (t.info ? esc(t.info) + ' · ' : '') + (t.taken ? 'Taken ' + t.taken + ' time' + (t.taken > 1 ? 's' : '') + (t.last && t.last.when ? ' · last ' + ago(t.last.when) : '') : 'Not taken yet')}</div>
+      ${go ? `<div class="btns" style="margin-top:8px">${go}</div>` : ''}</div>`; };
+  return `<h1>Tests</h1>
+    ${tdata.results ? `<div class="card"><div class="row"><div class="txt"><b>Test results</b><div class="sub">Everyone's scores and written answers live in the results sheet.</div></div><a class="btn sm" href="${esc(tdata.results)}" target="_blank" rel="noopener">Open sheet ↗</a></div></div>` : ''}
+    <h2>Certification</h2><div class="card">${ts.map(row).join('') || '<div class="empty">No tests set up.</div>'}</div>
+    <p class="sub">Each level unlocks when you pass the one before it. You can retake a test; your best result counts.</p>`;
+}
+async function startTest(level){
+  runner = { level, loading: true }; render();
+  try { const t = await post({ fn: 'getTest', token: TOKEN, level }); runner = { level, t, i: 0, a: load('pt-test-' + level) ? JSON.parse(load('pt-test-' + level)) : {}, started: Date.now() }; }
+  catch (e) { runner = null; toast(String(e.message || e)); }
+  render();
+}
+function viewRunner(){
+  if (runner.loading) return '<div class="runner"><div class="empty">Opening the test…</div></div>';
+  if (runner.done) { const d = runner.done;
+    return `<div class="runner"><div class="runner-in"><h1>${esc(runner.t.title)}</h1>
+      ${runner.t.written ? '<p>Submitted. Your Manager will score it and you\'ll see the result here.</p>' : `<div class="score ${d.result === 'Pass' ? 'ok' : ''}">${esc(d.score)} / ${esc(d.outOf)}</div><p><b>${d.result === 'Pass' ? 'You passed.' : 'Not yet.'}</b> ${d.result === 'Pass' ? '' : 'You need ' + esc(d.needed) + ' to pass. Review the material and try again.'}</p>${d.missed && d.missed.length ? `<p class="sub">Questions to review: ${d.missed.join(', ')}</p>` : ''}`}
+      <button class="btn go" data-closetest style="width:100%">Done</button></div></div>`; }
+  const t = runner.t, q = t.q[runner.i], n = t.q.length, ans = runner.a[runner.i], answered = Object.keys(runner.a).filter(k => String(runner.a[k]).trim()).length;
+  const sec = q.s && (runner.i === 0 || t.q[runner.i - 1].s !== q.s) ? `<div class="sub" style="margin-bottom:6px">${esc(q.s)}</div>` : `<div class="sub" style="margin-bottom:6px">${esc(q.s || '')}</div>`;
+  return `<div class="runner"><div class="runner-in">
+    <div class="rhead"><button class="btn sm" data-closetest>Close</button><span class="sub">${runner.i + 1} of ${n}</span></div>
+    <div class="progress" style="margin:10px 0 16px"><i style="width:${Math.round(answered / n * 100)}%"></i></div>
+    ${sec}<h2 class="q">${esc(q.p)}</h2>
+    ${t.written ? `<textarea data-wans rows="7" placeholder="Type your answer">${esc(ans || '')}</textarea><p class="sub">Saved on this phone as you type.</p>`
+      : `<div class="opts">${q.o.map((o, k) => `<button class="opt2 ${ans === o ? 'on' : ''}" data-pick="${k}">${esc(o)}</button>`).join('')}</div>`}
+    <div class="btns rfoot"><button class="btn" data-tq="-1" ${runner.i === 0 ? 'disabled' : ''}>Back</button>
+      ${runner.i < n - 1 ? `<button class="btn go" data-tq="1">Next</button>` : `<button class="btn go" data-submittest ${answered < n ? 'title="Some questions are blank"' : ''}>Submit</button>`}</div>
+    ${runner.i === n - 1 && answered < n ? `<p class="sub warn-t">${n - answered} question${n - answered > 1 ? 's are' : ' is'} blank.</p>` : ''}
+  </div></div>`;
+}
+async function submitTest(){
+  const t = runner.t, answers = t.q.map((_, k) => runner.a[k] == null ? '' : runner.a[k]);
+  if (!confirm(answers.some(a => !String(a).trim()) ? 'Some answers are blank. Submit anyway?' : 'Submit your answers?')) return;
+  runner.sending = true; render();
+  try { const d = await post({ fn: 'submitTest', token: TOKEN, level: runner.level, answers }); save('pt-test-' + runner.level, null); runner.done = d; tdata = null; }
+  catch (e) { toast('Not submitted – ' + String(e.message || e)); }
+  runner.sending = false; render();
+}
 /* ----- team ----- */
 const back = to => `<button class="btn sm" data-more="${to || ''}" style="margin-bottom:6px">‹ ${to ? 'Back' : 'More'}</button>`;
 function viewTeam(){
@@ -606,7 +720,7 @@ function viewTeam(){
 }
 
 function viewMore(){
-  const views = { reminders: viewReminders, requests: viewRequests, avail: viewAvail, time: viewTime, news: viewNews, resources: viewResources, tests: viewTests, team: () => mgr() ? viewTeam() : viewMoreList() };
+  const views = { reminders: viewReminders, requests: viewRequests, avail: viewAvail, time: viewTime, news: viewNews, resources: viewResources, team: () => mgr() ? viewTeam() : viewMoreList() };
   return views[moreView] ? views[moreView]() : viewMoreList();
 }
 function viewMoreList(){
@@ -621,14 +735,13 @@ function viewMoreList(){
       ${item('avail', 'Availability', 'When you can\'t work')}
       ${item('reminders', 'Shift reminders', data.me.reminders === 'Off' || !data.me.email ? 'Off' : data.me.reminders + ' · ' + esc(data.me.email))}
       ${item('resources', 'Resources', 'Recipes, guides, handbooks')}
-      ${item('tests', 'Training & tests', 'Certification tests and your results')}
       ${mgr() ? item('team', 'Team & sign-in codes') : ''}</div>
     <h2>Look</h2><div class="seg">${[['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']].map(([k, n]) => `<button data-theme="${k}" aria-pressed="${theme() === k}">${n}</button>`).join('')}</div>
     <h2>${esc(data.me.name)} · ${esc(data.me.role)}</h2><div class="card"><div class="row"><div class="txt sub">Signed in on this phone.${!standalone() ? ' Tip: add this app to your home screen.' : ''}</div><button class="btn sm" data-signout>Sign out</button></div></div>
     <p class="sub" style="text-align:center">Peregrine Team · server ${esc(data.version || '')}</p>`;
 }
 
-const TABS = [['today', 'Today', '☀︎'], ['schedule', 'Schedule', '▦'], ['chat', 'Chat', '✉︎'], ['lists', 'Lists', '✓'], ['more', 'More', '☰']];
+const TABS = [['today', 'Today', '☀︎'], ['schedule', 'Schedule', '▦'], ['chat', 'Chat', '✉︎'], ['lists', 'Lists', '✓'], ['tests', 'Tests', '✎'], ['more', 'More', '☰']];
 function render(){
   if (rowDrag){ rowDrag.later = true; return; }       // don't redraw under a finger mid-drag
   $('#offline').hidden = !offline;
@@ -641,15 +754,15 @@ function render(){
   const badge = { lists: prepMine().length, chat: chatN, more: (mgr() ? (data.requests || []).filter(q => q.status === 'Pending' && q.from !== data.me.name).length : 0) + (data.announcements || []).filter(a => !a.read).length };
   $('#tabs').hidden = false;
   $('#tabs').innerHTML = TABS.map(([k, n, ic]) => `<button data-tab="${k}" ${tab === k ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}${badge[k] ? `<span class="n">${badge[k]}</span>` : ''}</button>`).join('');
-  const ae = document.activeElement, keepWage = ae && ae.dataset && ae.dataset.wage ? [ae.dataset.wage, ae.value, ae.selectionStart] : null;
+  const ae = document.activeElement, keepWage = ae && ae.dataset && (ae.dataset.wage || ae.dataset.invf) ? [ae.dataset.wage ? `[data-wage="${ae.dataset.wage}"]` : `[data-invf="${ae.dataset.invf}"][data-invk="${ae.dataset.invk}"]`, ae.value, ae.selectionStart] : null;
   const typingIn = document.activeElement && document.activeElement.closest && document.activeElement.closest('.composer');
   const draft = typingIn ? document.activeElement.value : null;
-  document.body.classList.toggle('wide', wide() && tab === 'schedule');
-  $('#main').innerHTML = tab === 'lists' ? viewLists() : tab === 'schedule' ? viewSchedule() : tab === 'chat' ? viewChat() : tab === 'more' ? viewMore() : viewToday();
+  document.body.classList.toggle('wide', wide() && tab === 'schedule' && lead() && schedView !== 'mine');
+  $('#main').innerHTML = tab === 'tests' ? viewTests() : tab === 'lists' ? viewLists() : tab === 'schedule' ? viewSchedule() : tab === 'chat' ? viewChat() : tab === 'more' ? viewMore() : viewToday();
   if (draft !== null){ const t = $('.composer textarea'); if (t){ t.value = draft; t.focus(); } }
-  $('#overlay').innerHTML = viewer ? viewViewer() : sheet ? (sheet.kind === 'shift' ? shiftSheet() : sheet.kind === 'publish' ? publishSheet() : sheet.kind === 'punch' ? punchSheet() : pickSheet(sheet.kind)) : '';
-  document.body.classList.toggle('noscroll', !!(viewer || sheet));
-  if (keepWage){ const el = document.querySelector(`[data-wage="${keepWage[0]}"]`); if (el){ el.value = keepWage[1]; el.focus(); try { el.setSelectionRange(keepWage[2], keepWage[2]); } catch (_) {} } }
+  $('#overlay').innerHTML = runner ? viewRunner() : viewer ? viewViewer() : sheet ? (sheet.kind === 'shift' ? shiftSheet() : sheet.kind === 'publish' ? publishSheet() : sheet.kind === 'punch' ? punchSheet() : pickSheet(sheet.kind)) : '';
+  document.body.classList.toggle('noscroll', !!(viewer || sheet || runner));
+  if (keepWage){ const el = document.querySelector(keepWage[0]); if (el){ el.value = keepWage[1]; el.focus(); try { el.setSelectionRange(keepWage[2], keepWage[2]); } catch (_) {} } }
   const sf = document.querySelector('form[data-form=shift]'), est = $('#est'); if (sf && est) est.innerHTML = shiftEstimate(sf);
 }
 
@@ -665,7 +778,7 @@ function getPos(){
 }
 document.addEventListener('click', async e => {
   const b = e.target.closest('button, a[data-x]');
-  if (!b){ const td = e.target.closest && e.target.closest('td[data-cell]'); if (td && mgr()){ const [who, date] = td.dataset.cell.split('|'); sheet = { kind: 'shift', date, name: who, start: (data.presets[0] || {}).start, end: (data.presets[0] || {}).end }; render(); } return; }
+  if (!b){ const td = e.target.closest && e.target.closest('td[data-cell]'); if (td && lead()){ const [who, date] = td.dataset.cell.split('|'); sheet = { kind: 'shift', date, name: who, start: (data.presets[0] || {}).start, end: (data.presets[0] || {}).end }; render(); } return; }
   const d = b.dataset;
   if (b.id === 'refresh'){ if (chat.open) { openChat(chat.open); return; } refresh().then(r => { if (r) toast('Up to date'); }); return; }
   if (d.install !== undefined && installEvt){ installEvt.prompt(); installEvt = null; return; }
@@ -673,10 +786,13 @@ document.addEventListener('click', async e => {
   if (d.tab){ tab = d.tab; save('pt-tab', tab); if (tab === 'more') moreView = ''; if (tab !== 'chat') stopChat(); window.scrollTo(0, 0); render(); if (tab === 'schedule') scrollToday(); return; }
   if (d.golist){ listTab = d.golist; tab = 'lists'; save('pt-tab', tab); window.scrollTo(0, 0); render(); return; }
   if (d.more !== undefined){ tab = 'more'; moreView = d.more; editUser = null; if (d.more !== 'time') tsPerson = ''; if (d.more === 'time' && b.textContent.includes('Back')) tsPerson = ''; window.scrollTo(0, 0); render(); return; }
-  if (d.list){ listTab = d.list; render(); return; }
+  if (d.list){ listTab = d.list; if (d.list === INV) loadInv(); render(); return; }
+  if (d.invtab){ invTab = d.invtab; save('pt-invtab', invTab); render(); return; }
+  if (d.invstep){ const x = inv && inv.items.find(i => i.tab + '|' + i.row === d.invk); if (!x) return; const v = Math.max(0, (Number(x.onHand) || 0) + Number(d.invstep)); queueCount(x, 'onHand', String(v)); render(); return; }
   if (d.prepdone){ const x = (data.prep || []).find(p => p.id === d.prepdone), on = d.on !== '1'; if (x){ x.doneAt = on ? new Date().toISOString() : ''; x.doneBy = on ? data.me.name : ''; } render(); act('donePrep', { id: d.prepdone, done: on ? '1' : '0' }); return; }
   if (d.prepdel){ if (!confirm('Remove this prep item?')) return; data.prep = (data.prep || []).filter(p => p.id !== d.prepdel); render(); act('delPrep', { id: d.prepdel }); return; }
   if (d.theme){ setTheme(d.theme); render(); return; }
+  if (d.sview){ schedView = d.sview; save('pt-sview', schedView); render(); if (schedView === 'build') scrollToday(); return; }
   if (d.mine !== undefined){ schedMine = d.mine === '1'; save('pt-mine', schedMine ? '1' : '0'); render(); return; }
   if (d.week){ week = plus(week, Number(d.week)); render(); window.scrollTo(0, 0); scrollToday(); return; }
   if (d.tsweek){ tsWeek = plus(tsWeek, Number(d.tsweek)); render(); return; }
@@ -687,6 +803,11 @@ document.addEventListener('click', async e => {
   if (d.canceledit !== undefined){ editUser = null; render(); return; }
   if (d.dismiss !== undefined){ justAdded = null; render(); return; }
   if (d.closesheet !== undefined){ sheet = null; render(); return; }
+  if (d.taketest){ startTest(d.taketest); return; }
+  if (d.closetest !== undefined){ if (runner && !runner.done && Object.keys(runner.a || {}).length && !confirm('Leave the test? Your answers stay saved on this phone.')) return; runner = null; render(); if (tab === 'tests') loadTests(); return; }
+  if (d.pick !== undefined && runner){ runner.a[runner.i] = runner.t.q[runner.i].o[Number(d.pick)]; save('pt-test-' + runner.level, JSON.stringify(runner.a)); render(); return; }
+  if (d.tq && runner){ runner.i = Math.max(0, Math.min(runner.t.q.length - 1, runner.i + Number(d.tq))); render(); const o = document.querySelector('.runner'); if (o) o.scrollTop = 0; return; }
+  if (d.submittest !== undefined && runner && !runner.sending){ submitTest(); return; }
   if (d.closeviewer !== undefined){ viewer = null; render(); return; }
   if (d.pdf){ openPdf(d.pdf); return; }
   if (d.openchat){ openChat(d.openchat); return; }
@@ -737,6 +858,15 @@ document.addEventListener('click', async e => {
 });
 let wageTimer = {};
 document.addEventListener('input', e => {
+  const t = e.target; if (!t.dataset) return;
+  if (t.dataset.wans !== undefined && runner){ runner.a[runner.i] = t.value; save('pt-test-' + runner.level, JSON.stringify(runner.a)); return; }
+  if (t.dataset.invsearch !== undefined){ invQ = t.value; const pos = t.selectionStart; render(); const el = document.querySelector('[data-invsearch]'); if (el){ el.focus(); try { el.setSelectionRange(pos, pos); } catch (_) {} } return; }
+  if (t.dataset.invf){ const x = inv && inv.items.find(i => i.tab + '|' + i.row === t.dataset.invk); const v = t.value.trim();
+    if (x && (v === '' || (!isNaN(+v) && +v >= 0))) queueCount(x, t.dataset.invf, v); }
+});
+document.addEventListener('change', e => { if (e.target.dataset && e.target.dataset.invf && tab === 'lists') render(); });
+window.addEventListener('pagehide', () => { if (Object.keys(invQueue).length) flushCounts(); });
+document.addEventListener('input', e => {
   const f = e.target.closest && e.target.closest('form[data-form=shift]'); if (f){ const el = $('#est'); if (el) el.innerHTML = shiftEstimate(f); }
   const w = e.target.dataset && e.target.dataset.wage;
   if (w){ const u = (data.users || []).find(x => x.id === w), val = e.target.value.replace(/[$,\s]/g, '');
@@ -770,16 +900,18 @@ document.addEventListener('submit', async e => {
   if (kind === 'publish'){ const notify = f.elements.namedItem('notify').checked ? '1' : '0'; sheet = null; render();
     act('publish', { from: week, to: plus(week, 6), notify }).then(r => { if (r && r.result) toast('Published' + (notify === '1' ? ' · emailed ' + r.result.emailed + (r.result.noEmail.length ? ' · no email: ' + r.result.noEmail.map(first).join(', ') : '') : '')); }); return; }
   if (kind === 'prep'){ if (!v('item')){ toast('What needs prepping?'); return; } const notify = f.elements.namedItem('notify').checked ? '1' : '0';
-    btn.disabled = true; act('addPrep', { item: v('item'), details: v('details'), when: v('when'), notify }).then(r => { if (r && r.result){ const x = r.result;
+    (data.prep = data.prep || []).unshift({ id: 'tmp' + Date.now(), item: v('item'), details: v('details'), label: 'Sending…', for: [], by: data.me.name, at: new Date().toISOString(), doneAt: '', mine: false }); render();
+    act('addPrep', { item: v('item'), details: v('details'), when: v('when'), notify }).then(r => { if (r && r.result){ const x = r.result;
       toast(x.names.length ? 'Sent to ' + x.label + ' · ' + x.names.map(first).join(', ') + (x.emailed ? ' (emailed ' + x.emailed + ')' : '') : 'Added – nobody is scheduled for that shift yet'); } }); f.reset(); return; }
   if (kind === 'punch'){ const p = { id: sheet && sheet.id || '', name: v('name'), date: v('date'), in: v('in'), out: v('out'), note: v('note') }; sheet = null; act('savePunch', p).then(r => { if (r) toast('Saved'); }); return; }
   if (kind === 'reminders'){ const mode = (f.querySelector('input[name=mode]:checked') || {}).value || '';
     act('myReminders', { email: v('email'), mode }).then(r => { if (r) toast(mode === 'Off' ? 'Reminders off' : v('email') ? 'Saved' : 'Saved – add an email to get them'); }); return; }
-  if (kind === 'avail'){ const day = v('day') === 'date' ? v('date') : v('day'); if (!day){ toast('Pick a date'); return; } act('addAvail', { day, from: v('from'), to: v('to'), note: v('note') }).then(r => { if (r) toast('Added'); }); f.reset(); return; }
+  if (kind === 'avail'){ const day = v('day') === 'date' ? v('date') : v('day'); if (!day){ toast('Pick a date'); return; }
+    (data.availability = data.availability || []).push({ id: 'tmp' + Date.now(), name: data.me.name, day, from: v('from'), to: v('to'), note: v('note') }); render(); act('addAvail', { day, from: v('from'), to: v('to'), note: v('note') }).then(r => { if (r) toast('Added'); }); f.reset(); return; }
   if (kind === 'group'){ const members = [...f.querySelectorAll('input[name=m]:checked')].map(x => x.value).join(','); sheet = null; act('newChannel', { kind: 'group', name: v('name'), members }).then(r => { if (r) toast('Group made'); }); return; }
   if (kind === 'channel'){ sheet = null; act('newChannel', { kind: 'channel', name: v('name'), who: v('who') }).then(r => { if (r) toast('Channel made'); }); return; }
   if (kind === 'announce'){ if (!v('title')){ toast('Add a title'); return; } act('announce', { title: v('title'), message: f.elements.namedItem('message').value, pinned: v('pinned'), mustAck: v('mustAck') }).then(r => { if (r) toast('Posted'); }); f.reset(); return; }
-  if (kind === 'request'){ act('request', { type: v('type'), date: v('date'), details: v('details') }).then(r => { if (r) toast('Sent to managers'); }); f.reset(); return; }
+  if (kind === 'request'){ (data.requests = data.requests || []).unshift({ id: 'tmp' + Date.now(), from: data.me.name, type: v('type'), date: v('date'), details: v('details'), status: 'Pending', created: new Date().toISOString() }); render(); act('request', { type: v('type'), date: v('date'), details: v('details') }).then(r => { if (r) toast('Sent to managers'); }); f.reset(); return; }
   if (kind === 'user'){
     if (!v('name')){ toast('Add a name'); return; }
     const p = { name: v('name'), role: v('role'), phone: v('phone'), email: v('email'), wage: v('wage') };
@@ -831,7 +963,7 @@ document.addEventListener('drop', e => {
   render(); act('saveShift', p).then(r => { if (r) toast(copy ? 'Copied to ' + first(name) + ', ' + shortDay(date) : 'Moved to ' + first(name) + ', ' + shortDay(date)); });
 });
 WIDE.addEventListener && WIDE.addEventListener('change', () => { if (data) render(); });
-const typing = () => { const a = document.activeElement; return a && /INPUT|TEXTAREA|SELECT/.test(a.tagName); };
+const typing = () => { const a = document.activeElement; return (a && /INPUT|TEXTAREA|SELECT/.test(a.tagName)) || !!runner; };
 document.addEventListener('visibilitychange', () => { if (document.hidden || !TOKEN) return; if (chat.open && tab === 'chat') openChat(chat.open); else if (!pending && !typing() && !sheet) refresh(); });
 setInterval(() => { if (!document.hidden && TOKEN && !pending && !typing() && !sheet && !viewer && !chat.open) refresh(); }, 90000);
 window.addEventListener('online', () => { if (TOKEN) refresh(); });
