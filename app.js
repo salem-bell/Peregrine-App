@@ -549,6 +549,27 @@ function avatar(c, size){
 }
 const shortWhen = iso => { if (!iso) return ''; const d = new Date(iso), day = ymdOf(d), diff = (Date.now() - d) / 864e5;
   return day === T() ? timeOf(iso) : day === plus(T(), -1) ? 'Yesterday' : diff < 6 ? d.toLocaleDateString([], { weekday: 'short' }) : d.toLocaleDateString([], { month: 'short', day: 'numeric' }); };
+const v3 = () => Number(data && data.version) >= 3;
+const SVG_READ = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 12.5l4.5 4.5L15 8"/><path d="M11 16l1 1 9.5-9.5"/></svg>';
+const SVG_REPLY = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>';
+const escRe = x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** How to @mention someone: first name, or full name when two people share it. */
+function mentionLabel(p){ const f = first(p.name).toLowerCase(); return (data.people || []).filter(x => first(x.name).toLowerCase() === f).length > 1 ? p.name : first(p.name); }
+function audience(c){
+  const ppl = (data.people || []).filter(p => p.id !== data.meId);
+  if (!c || c.kind === 'dm') return [];
+  if (c.kind === 'group') return ppl.filter(p => (c.memberIds || []).indexOf(p.id) >= 0);
+  return ppl.filter(p => c.who === 'Managers' ? p.role === 'Manager' : /lead/i.test(c.who) ? p.role !== 'Staff' : true);
+}
+let mentRe = null, mentKey = '';
+function fmtMsg(text){
+  let h = esc(text); if (h.indexOf('@') < 0) return h;
+  const key = (data.people || []).map(p => p.id + p.name).join('|');
+  if (key !== mentKey){ mentKey = key; const labels = []; (data.people || []).forEach(p => { labels.push({ l: p.name, id: p.id }); if (mentionLabel(p) === p.name) return; labels.push({ l: first(p.name), id: p.id }); });
+    labels.sort((a, b) => b.l.length - a.l.length); mentRe = labels.length ? { re: new RegExp('@(' + labels.map(x => escRe(esc(x.l))).join('|') + ')(?![\\w])', 'gi'), labels } : null; }
+  if (!mentRe) return h;
+  return h.replace(mentRe.re, (m, n) => { const hit = mentRe.labels.find(x => esc(x.l).toLowerCase() === n.toLowerCase()); return `<span class="ment ${hit && hit.id === data.meId ? 'me' : ''}">${m}</span>`; });
+}
 const SVG_EDIT = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>';
 function viewChat(){
   if (chat.open) return viewConversation();
@@ -556,8 +577,14 @@ function viewChat(){
   const row = c => { const l = c.last, mine = l && first(l.from) === first(data.me.name) && l.from === data.me.name;
     const pre = !l ? (c.kind === 'group' ? esc(c.members.join(', ')) : 'No messages yet') : (mine ? 'You: ' : c.kind === 'dm' ? '' : esc(first(l.from)) + ': ') + esc(l.text);
     return `<button class="crow ${c.unread ? 'unread' : ''}" data-openchat="${esc(c.id)}">${avatar(c)}<span class="cbody"><span class="ctop"><b>${esc(c.name)}</b><span class="cwhen">${l ? shortWhen(l.at) : ''}</span></span><span class="cbot"><span class="cpre">${pre}</span>${c.unread ? `<span class="cn">${c.unread > 99 ? '99+' : c.unread}</span>` : ''}</span></span></button>`; };
+  const q = chat.q || '', searching = v3() && q.trim().length >= 2;
+  const hl = t => { const h = esc(t), i = h.toLowerCase().indexOf(esc(q.trim()).toLowerCase()); return i < 0 ? h : h.slice(0, i) + '<mark>' + h.slice(i, i + esc(q.trim()).length) + '</mark>' + h.slice(i + esc(q.trim()).length); };
+  const res = r => `<button class="crow" data-openfind="${esc(r.channel)}|${esc(r.id)}">${avatar({ id: r.channel, name: r.name, kind: r.kind })}<span class="cbody"><span class="ctop"><b>${esc(r.kind === 'dm' ? r.name : r.name)}</b><span class="cwhen">${shortWhen(r.at)}</span></span><span class="cpre wrap"><span class="sub">${esc(first(r.from))}:</span> ${hl(r.text)}</span></span></button>`;
+  const body = searching ? (chat.results ? chat.results.map(res).join('') || '<div class="empty">No messages match.</div>' : '<div class="empty">Searching…</div>')
+    : ch.map(row).join('') || '<div class="empty">No conversations yet. Tap the pencil to start one.</div>';
   return `<div class="chathead"><h1>Messages</h1><button class="iconbtn" data-newdm aria-label="New message">${SVG_EDIT}</button></div>
-    <div class="clist">${ch.map(row).join('') || '<div class="empty">No conversations yet. Tap the pencil to start one.</div>'}</div>`;
+    ${v3() ? `<div class="csearch"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><input type="search" data-csearch placeholder="Search messages" value="${esc(q)}" aria-label="Search messages" autocomplete="off">${q ? '<button class="cx" data-clearsearch aria-label="Clear search">×</button>' : ''}</div>` : ''}
+    <div class="clist">${body}</div>`;
 }
 function convName(){ const c = (data.channels || []).find(x => x.id === chat.open); if (c) return c.name; const other = chat.open.split('-').slice(1).find(x => x !== data.meId), p = (data.people || []).find(x => x.id === other); return p ? p.name : chat.dmName || 'Message'; }
 function convSub(c){ if (!c) return ''; if (c.kind === 'channel') return c.who === 'Everyone' ? '' : c.who; if (c.kind === 'group') return c.members.map(first).join(', '); return ''; }
@@ -571,16 +598,24 @@ function viewConversation(){
     const nextSep = next && (ymdOf(new Date(next.at)) !== ymdOf(new Date(m.at)) || gap(m, next) > 60);
     const lastR = !next || nextSep || next.fromId !== m.fromId || gap(m, next) > 5;
     const pic = m.photo ? picTag(m) : m.expired ? '<div class="msg exp"><i>Photo expired</i></div>' : '';
-    const meta = chat.meta === m.id ? `<div class="meta ${mine ? 'me' : ''}">${timeOf(m.at)}${mgr() && m.id !== 'tmp' ? ` · <button class="lnk" data-delmsg="${esc(m.id)}">Delete</button>` : ''}</div>` : '';
+    const real = m.id !== 'tmp', acks = m.acks || [];
+    const meta = chat.meta === m.id ? `<div class="meta ${mine ? 'me' : ''}">${timeOf(m.at)}${v3() && real ? ` · <button class="lnk" data-reply="${esc(m.id)}">Reply</button>` : ''}${v3() && real && !mine ? ` · <button class="lnk" data-ack="${esc(m.id)}">${m.ackMine ? 'Unmark read' : 'Mark read'}</button>` : ''}${mgr() && real ? ` · <button class="lnk" data-delmsg="${esc(m.id)}">Delete</button>` : ''}</div>` : '';
+    const quote = m.reply ? `<button type="button" class="quote" data-jump="${esc(m.reply.id)}"><b>${esc(m.reply.from ? (m.reply.from === data.me.name ? 'You' : first(m.reply.from)) : '')}</b><span>${m.reply.photo && !m.reply.text ? '📷 Photo' : esc(m.reply.text)}</span></button>` : '';
+    const ackPill = acks.length ? `<div class="ackrow ${mine ? 'me' : ''}"><button class="ackp ${m.ackMine ? 'mine' : ''}" data-acks="${esc(m.id)}" aria-label="Read by ${esc(acks.join(', '))}">${SVG_READ}${acks.length > 1 ? `<span>${acks.length}</span>` : ''}</button></div>` : '';
+    const isLastMine = mine && real && v3() && !msgs.slice(i + 1).some(x => x.id !== 'tmp');
+    const seenBy = isLastMine ? (chat.seen || []).filter(x => x.at && new Date(x.at) >= new Date(m.at)).map(x => first(x.name)) : [];
+    const seen = isLastMine && seenBy.length ? `<div class="seen">${!multi ? 'Seen' : 'Seen by ' + esc(seenBy.slice(0, 3).join(', ')) + (seenBy.length > 3 ? ` <button class="lnk" data-seenall>+${seenBy.length - 3}</button>` : '')}</div>` : '';
     return (sep ? `<div class="daysep"><b>${dayName(ymdOf(new Date(m.at)))}</b> ${timeOf(m.at)}</div>` : '')
       + (multi && !mine && firstR ? `<div class="from">${esc(first(m.from))}</div>` : '')
       + `<div class="mrow ${mine ? 'me' : ''} ${lastR ? 'last' : ''}">`
-      + `<div class="bub ${mine ? 'me' : ''} ${firstR ? 'first' : ''} ${lastR ? 'last' : ''} ${m.photo ? 'photo' : ''} ${m.id === 'tmp' ? 'tmp' : ''}" data-bub="${esc(m.id)}">${pic}${m.text ? `<div class="msg">${esc(m.text)}</div>` : ''}</div></div>` + meta;
+      + `<div class="bub ${mine ? 'me' : ''} ${firstR || m.reply ? 'first' : ''} ${lastR || acks.length ? 'last' : ''} ${m.photo && !m.reply ? 'photo' : ''} ${!real ? 'tmp' : ''} ${chat.flash === m.id ? 'flash' : ''}" data-bub="${esc(m.id)}" data-mine="${mine ? 1 : 0}">${quote}${pic}${m.text ? `<div class="msg">${fmtMsg(m.text)}</div>` : ''}</div><span class="swipeic" aria-hidden="true">${SVG_REPLY}</span></div>` + ackPill + meta + seen;
   }).join('');
   return `<div class="convo"><div class="chatbar"><button class="iconbtn back" data-closechat aria-label="Back"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
       <div class="who">${avatar(c, 32)}<div class="wtxt"><b>${esc(convName())}</b>${convSub(c) ? `<span>${esc(convSub(c))}</span>` : ''}</div></div>
       ${canEditChat() ? '<button class="lnk edit" data-editchat>Edit</button>' : '<span class="edit"></span>'}</div>
     <div class="msgs" id="msgs">${body || `<div class="hello">${avatar(c, 64)}<b>${esc(convName())}</b><span>No messages yet. Say hello 👋</span></div>`}</div>
+    <div class="mentbox" id="ment" hidden></div>
+    ${chat.reply ? `<div class="replybar"><span class="ri">${SVG_REPLY}</span><div><b>Replying to ${esc(chat.reply.from === data.me.name ? 'yourself' : first(chat.reply.from))}</b><span>${esc(chat.reply.text || '📷 Photo')}</span></div><button type="button" class="cx" data-unreply aria-label="Cancel reply">×</button></div>` : ''}
     ${chat.photo ? `<div class="pv"><img src="${chat.photo}" alt="Photo to send"><button type="button" class="pvx" data-unphoto aria-label="Remove photo">×</button></div>` : ''}
     <form class="composer" data-form="send">${Number(data.version) >= 2.7 ? `<label class="picbtn" title="Add a photo" aria-label="Add a photo"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><input type="file" accept="image/*" data-photo hidden onchange="pickPhoto(this)"></label>` : ''}<textarea name="text" rows="1" maxlength="2000" placeholder="${chat.photo ? 'Add a caption' : 'Message'}" aria-label="Message">${esc(chat.compose)}</textarea><button class="send" aria-label="Send" ${chat.sending ? 'disabled' : ''}><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="M5.5 11.5L12 5l6.5 6.5"/></svg></button></form></div>`;
 }
@@ -595,19 +630,32 @@ function editChatSheet(){
         : `<label class="f">Who sees it<select name="who">${['Everyone', 'Leads and managers', 'Managers'].map(o => `<option ${o === c.who ? 'selected' : ''}>${o}</option>`).join('')}</select></label>`}
       <button class="btn go">Save</button></form></div></div>`;
 }
-async function openChat(id, name, text, photo){
+async function openChat(id, name, text, photo, opt){
   chat.open = id; chat.dmName = name || chat.dmName; if (text === undefined) { chat.msgs = chat.msgs && chat.loaded === id ? chat.msgs : []; }
   render(); scrollChat();
   try {
-    const r = await post(Object.assign({ fn: 'chat', token: TOKEN, channel: id, text }, photo ? { photo } : {}));
+    const r = await post(Object.assign({ fn: 'chat', token: TOKEN, channel: id, text }, photo ? { photo } : {}, opt || {}));
     if (photo){ const mine = r.messages.filter(m => m.fromId === r.me && m.photo).pop(); if (mine && !picCache[mine.id]){ picCache[mine.id] = photo; idbPut(mine.id, photo); } }
     if (chat.open !== id) return;
-    chat.msgs = r.messages; chat.me = r.me; chat.loaded = id; data.channels = r.channels; save('pt-cache', JSON.stringify(data));
-    const near = isNearBottom(); render(); if (near || text !== undefined) scrollChat();
-  } catch (e) { const m = String(e.message || e); if (/^signin/.test(m)) return signOut(m.replace(/^signin:\s*/, '')); if (text !== undefined) { chat.compose = text; if (photo) chat.photo = photo; chat.msgs = (chat.msgs || []).filter(x => x.id !== 'tmp'); toast('Not sent: ' + m); render(); } }
+    chat.msgs = r.messages; chat.seen = r.seen || []; chat.me = r.me; chat.loaded = id; data.channels = r.channels; save('pt-cache', JSON.stringify(data));
+    const near = isNearBottom(); render(); if (opt && opt.find) jumpTo(opt.find); else if (near || text !== undefined) scrollChat();
+  } catch (e) { const m = String(e.message || e); if (/^signin/.test(m)) return signOut(m.replace(/^signin:\s*/, '')); if (text !== undefined) { chat.compose = text; if (photo) chat.photo = photo; if (opt && opt.replyTo && opt.reply) chat.reply = opt.reply; chat.msgs = (chat.msgs || []).filter(x => x.id !== 'tmp'); toast('Not sent: ' + m); render(); } }
   clearTimeout(chat.timer); chat.timer = setTimeout(() => { if (chat.open === id && tab === 'chat' && !document.hidden) openChat(id); }, 7000);
 }
-function stopChat(){ clearTimeout(chat.timer); chat.open = ''; }
+function stopChat(){ clearTimeout(chat.timer); chat.open = ''; chat.reply = null; chat.meta = ''; chat.flash = ''; }
+function jumpTo(id){ const el = document.querySelector(`[data-bub="${CSS.escape(id)}"]`);
+  if (!el){ if (chat.open) openChat(chat.open, null, undefined, undefined, { find: id }); return; }
+  chat.flash = id; el.classList.add('flash'); el.scrollIntoView({ block: 'center', behavior: 'smooth' }); setTimeout(() => { if (chat.flash === id) chat.flash = ''; el.classList.remove('flash'); }, 1600); }
+function toggleAck(id){ const m = (chat.msgs || []).find(x => x.id === id); if (!m || m.fromId === chat.me) return;
+  m.ackMine = m.ackMine ? 0 : 1; m.acks = (m.acks || []).filter(n => n !== data.me.name).concat(m.ackMine ? [data.me.name] : []);
+  chat.meta = ''; render(); if (navigator.vibrate) try { navigator.vibrate(12); } catch (_) {}
+  openChat(chat.open, null, undefined, undefined, { ack: id }); }
+function startReply(id){ const m = (chat.msgs || []).find(x => x.id === id); if (!m) return;
+  chat.reply = { id: m.id, from: m.from, text: m.text ? m.text.slice(0, 90) : '' }; chat.meta = ''; render(); const t = $('.composer textarea'); if (t) t.focus(); }
+let searchT = 0, searchN = 0;
+function keepSearch(fn){ const a = document.activeElement, keep = a && a.dataset && a.dataset.csearch !== undefined, pos = keep ? a.selectionStart : 0; fn(); if (keep){ const el = $('[data-csearch]'); if (el){ el.focus(); try { el.setSelectionRange(pos, pos); } catch (_) {} } } }
+function runSearch(){ const q = (chat.q || '').trim(); clearTimeout(searchT); chat.results = null; if (q.length < 2) return;
+  const n = ++searchN; searchT = setTimeout(() => post({ fn: 'chatSearch', token: TOKEN, q }).then(r => { if (n !== searchN || tab !== 'chat' || chat.open) return; chat.results = r.results; keepSearch(render); }).catch(e => { if (n === searchN){ chat.results = []; toast(e.message); } }), 350); }
 
 /* ---------- chat photos: shrunk on the phone before sending, cached on each phone after the first load ---------- */
 const picCache = {}, picLoading = {};
@@ -970,7 +1018,9 @@ function render(){
   document.body.classList.toggle('inchat', tab === 'chat' && !!chat.open);
   document.body.classList.toggle('wide', wide() && tab === 'schedule' && lead() && schedView !== 'mine');
   const vkey = tab + '|' + schedView + '|' + week + '|' + moreView, same = vkey === lastView, gw = $('.gridwrap'), keep = same && gw ? [gw.scrollTop, gw.scrollLeft] : null, wy = window.scrollY; lastView = vkey;
+  const ms0 = $('#msgs'), keepMs = ms0 && tab === 'chat' && chat.open ? [chat.open, ms0.scrollTop, ms0.scrollHeight - ms0.scrollTop - ms0.clientHeight] : null;
   $('#main').innerHTML = tab === 'tests' ? viewTests() : tab === 'lists' ? viewLists() : tab === 'schedule' ? viewSchedule() : tab === 'chat' ? viewChat() : tab === 'more' ? viewMore() : viewToday();
+  if (keepMs && chat.open === keepMs[0]){ const ms = $('#msgs'); if (ms) ms.scrollTop = keepMs[2] < 80 ? ms.scrollHeight : keepMs[1]; }
   if (same && tab !== 'chat'){ const g2 = $('.gridwrap'); if (keep && g2){ g2.scrollTop = keep[0]; g2.scrollLeft = keep[1]; } if (window.scrollY !== wy) window.scrollTo(0, wy); }   // a save or refresh redraws the page; stay where you were
   if (draft !== null){ const t = $('.composer textarea'); if (t){ t.value = draft; t.focus(); } }
   $('#overlay').innerHTML = runner ? viewRunner() : viewer ? viewViewer() : sheet ? (sheet.kind === 'shift' ? shiftSheet() : sheet.kind === 'publish' ? publishSheet() : sheet.kind === 'punch' ? punchSheet() : sheet.kind === 'editchat' ? editChatSheet() : pickSheet(sheet.kind)) : '';
@@ -1027,6 +1077,15 @@ document.addEventListener('click', async e => {
   if (d.closechat !== undefined){ stopChat(); render(); return; }
   if (d.newdm !== undefined){ sheet = { kind: 'dm' }; render(); return; }
   if (d.newgroup !== undefined){ sheet = { kind: 'group' }; render(); return; }
+  if (d.reply){ startReply(d.reply); return; }
+  if (d.unreply !== undefined){ chat.reply = null; render(); return; }
+  if (d.ack){ if (chat.open) toggleAck(d.ack); return; }
+  if (d.acks){ const m = (chat.msgs || []).find(x => x.id === d.acks); if (m) toast('Read by ' + (m.acks || []).map(n => n === data.me.name ? 'you' : first(n)).join(', ')); return; }
+  if (d.seenall !== undefined){ const c = curChat(), last = (chat.msgs || []).filter(m => m.fromId === chat.me).pop(); toast('Seen by ' + (chat.seen || []).filter(x => last && new Date(x.at) >= new Date(last.at)).map(x => first(x.name)).join(', ')); return; }
+  if (d.jump){ jumpTo(d.jump); return; }
+  if (d.openfind){ const [c, id] = d.openfind.split('|'); chat.msgs = []; openChat(c, null, undefined, undefined, { find: id }); return; }
+  if (d.clearsearch !== undefined){ chat.q = ''; chat.results = null; render(); const el = $('[data-csearch]'); if (el) el.focus(); return; }
+  if (d.ment){ const t = $('.composer textarea'); if (t){ const pos = t.selectionStart, before = t.value.slice(0, pos).replace(/@[\w]*$/, '@' + d.ment + ' '); t.value = before + t.value.slice(pos); t.focus(); t.setSelectionRange(before.length, before.length); } $('#ment').hidden = true; return; }
   if (d.editchat !== undefined){ sheet = { kind: 'editchat' }; render(); return; }
   if (d.newchannel !== undefined){ sheet = { kind: 'channel' }; render(); return; }
   if (d.dm){ sheet = null; const id = 'dm-' + [data.meId, d.dm].sort().join('-'); chat.msgs = []; openChat(id, d.dmname); return; }
@@ -1095,7 +1154,26 @@ document.addEventListener('input', e => {
       clearTimeout(wageTimer[w]); wageTimer[w] = setTimeout(() => act('setWage', { id: w, wage: val }), 900); } }
 });
 document.addEventListener('change', e => { if (e.target.name === 'day' && e.target.closest('form[data-form=avail]')){ const f = e.target.closest('form'); f.querySelector('[data-onlydate]').hidden = e.target.value !== 'date'; } });
-document.addEventListener('click', e => { const b = e.target.closest && e.target.closest('[data-bub]'); if (!b || e.target.closest('button')) return; chat.meta = chat.meta === b.dataset.bub ? '' : b.dataset.bub; const near = isNearBottom(); render(); if (near) scrollChat(); });
+let tch = null, noTap = 0;
+document.addEventListener('touchstart', e => { const b = e.target.closest && e.target.closest('[data-bub]'); if (!b || !v3() || b.dataset.bub === 'tmp' || e.touches.length > 1) { tch = null; return; }
+  const t = e.touches[0]; tch = { b, row: b.closest('.mrow'), x: t.clientX, y: t.clientY, dx: 0, h: false };
+  if (b.dataset.mine !== '1') tch.lp = setTimeout(() => { if (tch && !tch.h){ noTap = Date.now(); const id = b.dataset.bub; tch = null; toggleAck(id); } }, 450); }, { passive: true });
+document.addEventListener('touchmove', e => { if (!tch) return; const t = e.touches[0], dx = t.clientX - tch.x, dy = t.clientY - tch.y;
+  if (Math.abs(dx) > 8 || Math.abs(dy) > 8) clearTimeout(tch.lp);
+  if (!tch.h && Math.abs(dy) > Math.abs(dx)) { if (Math.abs(dy) > 8) tch = null; return; }
+  if (dx > 6) { tch.h = true; tch.dx = Math.min(dx, 80); tch.row.style.transform = `translateX(${tch.dx}px)`; tch.row.classList.toggle('armed', tch.dx > 55); } }, { passive: true });
+document.addEventListener('touchend', () => { if (!tch) return; clearTimeout(tch.lp); const { row, dx, b } = tch; tch = null;
+  if (row){ row.style.transition = 'transform .18s'; row.style.transform = ''; row.classList.remove('armed'); setTimeout(() => { row.style.transition = ''; }, 200); }
+  if (dx > 55){ noTap = Date.now(); if (navigator.vibrate) try { navigator.vibrate(10); } catch (_) {} startReply(b.dataset.bub); } }, { passive: true });
+document.addEventListener('contextmenu', e => { if (e.target.closest && e.target.closest('[data-bub]') && v3()) e.preventDefault(); });
+document.addEventListener('dblclick', e => { const b = e.target.closest && e.target.closest('[data-bub]'); if (b && v3() && b.dataset.mine !== '1' && b.dataset.bub !== 'tmp' && !('ontouchstart' in window)) { e.preventDefault(); toggleAck(b.dataset.bub); } });
+document.addEventListener('input', e => { const t = e.target;
+  if (t.dataset && t.dataset.csearch !== undefined){ chat.q = t.value; runSearch(); keepSearch(render); return; }
+  if (t.tagName === 'TEXTAREA' && t.closest && t.closest('.composer')){ const box = $('#ment'); if (!box) return;
+    const m = t.value.slice(0, t.selectionStart).match(/(?:^|\s)@([\w]*)$/), ppl = m ? audience(curChat()).filter(p => !m[1] || p.name.toLowerCase().split(' ').some(w => w.indexOf(m[1].toLowerCase()) === 0)).slice(0, 6) : [];
+    box.hidden = !ppl.length; box.innerHTML = ppl.map(p => `<button type="button" data-ment="${esc(mentionLabel(p))}">${avatar({ id: p.id, name: p.name }, 24)}${esc(p.name)}</button>`).join(''); } });
+document.addEventListener('pointerdown', e => { if (e.target.closest && e.target.closest('#ment')) e.preventDefault(); });
+document.addEventListener('click', e => { if (Date.now() - noTap < 500 && e.target.closest && e.target.closest('[data-bub]')) return; const b = e.target.closest && e.target.closest('[data-bub]'); if (!b || e.target.closest('button')) return; chat.meta = chat.meta === b.dataset.bub ? '' : b.dataset.bub; const near = isNearBottom(); render(); if (near) scrollChat(); });
 document.addEventListener('input', e => { const t = e.target; if (t.closest && t.closest('.composer') && t.tagName === 'TEXTAREA'){ t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 140) + 'px'; } });
 document.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && e.target.closest && e.target.closest('.composer') && !isIOS()){ e.preventDefault(); e.target.closest('form').requestSubmit(); } });
 
@@ -1112,8 +1190,9 @@ document.addEventListener('submit', async e => {
     return;
   }
   if (kind === 'send'){ const text = f.elements.namedItem('text').value.trim(), photo = chat.photo || ''; if (!text && !photo) return;
-    chat.compose = ''; chat.photo = ''; chat.msgs = (chat.msgs || []).concat({ id: 'tmp', fromId: chat.me || data.meId, from: data.me.name, at: new Date().toISOString(), text, photo: photo ? 1 : 0, local: photo }); render(); scrollChat();
-    const t = $('.composer textarea'); if (t) t.focus(); openChat(chat.open, null, text, photo || undefined); return; }
+    const reply = chat.reply; chat.reply = null; $('#ment') && ($('#ment').hidden = true);
+    chat.compose = ''; chat.photo = ''; chat.msgs = (chat.msgs || []).concat({ id: 'tmp', fromId: chat.me || data.meId, from: data.me.name, at: new Date().toISOString(), text, photo: photo ? 1 : 0, local: photo, reply: reply ? { id: reply.id, from: reply.from, text: reply.text } : null }); render(); scrollChat();
+    const t = $('.composer textarea'); if (t){ t.focus(); t.style.height = ''; } openChat(chat.open, null, text, photo || undefined, reply ? { replyTo: reply.id, reply } : undefined); return; }
   if (kind === 'shift'){ if (!v('name')){ toast('Pick who is working'); return; } const p = { id: sheet && sheet.id || '', name: v('name'), date: v('date'), start: v('start'), end: v('end'), position: v('position'), notes: v('notes') };
     if (p.end <= p.start){ toast('The end has to be after the start'); return; }
     const ex = p.id && (data.shifts || []).find(x => x.id === p.id);

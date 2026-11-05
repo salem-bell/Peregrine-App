@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '2.9';
+const VERSION = '3.0';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Off'];
 
@@ -25,7 +25,7 @@ const TABS = {
   'Availability':  ['ID', 'Name', 'Day or date', 'From', 'To', 'Note', 'Updated'],
   'Time clock':    ['ID', 'Name', 'Date', 'In', 'Out', 'Shift ID', 'Clock-in place', 'Clock-out place', 'Note', 'Edited by'],
   'Channels':      ['ID', 'Name', 'Kind', 'Members (user IDs; blank = everyone)', 'Who sees it', 'Created by', 'Created'],
-  'Messages':      ['ID', 'Channel ID', 'From ID', 'From', 'Sent', 'Text', 'Photo (Drive file)'],
+  'Messages':      ['ID', 'Channel ID', 'From ID', 'From', 'Sent', 'Text', 'Photo (Drive file)', 'Reply to (message ID)', 'Read marks (user IDs)'],
   'Chat reads':    ['User ID', 'Channel ID', 'Read at'],
   'Tests':         ['Test', 'Link (full address, or ?level=… to add to Settings › Test portal)', 'Results tab', 'Must have passed first', 'Who sees it', 'Order'],
   'Requests':      ['ID', 'Created', 'From', 'Type', 'Date', 'Details', 'Status', 'Decided by', 'Decided at', 'Note'],
@@ -230,7 +230,8 @@ function doPost(e) {
     if (body.fn === 'info') return json_(info_());
     if (body.fn === 'signIn') return json_(signIn_(body.name, body.code));
     if (body.fn === 'api') return json_(api_(body.token, body.p || {}));
-    if (body.fn === 'chat') return json_(chat_(body.token, body.channel, body.text, body.photo));
+    if (body.fn === 'chat') return json_(chat_(body.token, body.channel, body.text, body.photo, body));
+    if (body.fn === 'chatSearch') return json_(chatSearch_(body.token, body.q));
     if (body.fn === 'photo') return json_(photo_(body.token, body.id));
     if (body.fn === 'file') return json_(file_(body.token, body.id));
     if (body.fn === 'inventory') return json_(inventory_(body.token, body.counts));
@@ -837,7 +838,8 @@ function channels_(ss, me, users) {
   }).sort((a, b) => (a.kind === 'channel' ? 0 : 1) - (b.kind === 'channel' ? 0 : 1) || String((b.last || {}).at || '').localeCompare(String((a.last || {}).at || '')));
 }
 /** Opens a channel (and marks it read), optionally sending a message first. Light: doesn't rebuild the whole app state. */
-function chat_(token, channel, text, photo) {
+function chat_(token, channel, text, photo, opt) {
+  opt = opt || {};
   const ss = SpreadsheetApp.getActive(), me = who_(ss, token), users = rv_(ss, 'Users').filter(r => String(r[0]).trim());
   channel = String(channel || '');
   let ok = channels_(ss, me, users).some(c => c.id === channel);
@@ -846,22 +848,53 @@ function chat_(token, channel, text, photo) {
     ok = ids.length === 2 && ids.indexOf(me.id) >= 0 && ids.every(x => act.indexOf(x) >= 0) && channel === 'dm-' + ids.slice().sort().join('-');
   }
   if (!ok) throw new Error('You can\'t see that conversation');
+  const sending = (text !== undefined && String(text).trim()) || photo;
+  const replyTo = sending && opt.replyTo && rv_(ss, 'Messages', 3000).some(m => String(m[0]) === String(opt.replyTo) && String(m[1]) === channel) ? String(opt.replyTo) : '';
   const pid = photo ? savePhoto_(photo, channel) : '';   // Drive upload happens before the lock, so it never holds anyone else up
   const lock = LockService.getScriptLock(); lock.waitLock(15000);
   try {
-    if ((text !== undefined && String(text).trim()) || pid) {
-      if (pid) buildTab_(ss, 'Messages');            // adds the Photo column to older sheets
-      const sh = ss.getSheetByName('Messages'); sh.appendRow([newId_(12), channel, me.id, me.name, new Date(), clean_(text || '', 2000)].concat(pid ? [pid] : []));
+    if (sending) {
+      if (pid || replyTo) buildTab_(ss, 'Messages');  // adds the newer columns to older sheets
+      const sh = ss.getSheetByName('Messages'), row = [newId_(12), channel, me.id, me.name, new Date(), clean_(text || '', 2000)];
+      if (pid || replyTo) row.push(pid); if (replyTo) row.push(replyTo);
+      sh.appendRow(row);
+    }
+    if (opt.ack) {                                     // the one reaction: "read" – toggles
+      buildTab_(ss, 'Messages');
+      const sh = ss.getSheetByName('Messages'), v = tail_(sh, 3000), i = v.findIndex(m => String(m[0]) === String(opt.ack) && String(m[1]) === channel);
+      if (i >= 0 && String(v[i][2]) !== me.id) {
+        const row = sh.getLastRow() - v.length + 1 + i, cur = String(v[i][8] || '').split(',').filter(Boolean), at = cur.indexOf(me.id);
+        if (at >= 0) cur.splice(at, 1); else cur.push(me.id);
+        sh.getRange(row, 9).setValue(cur.join(','));
+      }
     }
     const rs = ss.getSheetByName('Chat reads'), rv = vals_(rs), i = rv.findIndex(r => String(r[0]) === me.id && String(r[1]) === channel);
     if (i >= 0) rs.getRange(i + 2, 3).setValue(new Date()); else rs.appendRow([me.id, channel, new Date()]);
     dirty_(['Chat reads', 'Messages']);
     SpreadsheetApp.flush();
   } finally { lock.releaseLock(); }
-  if ((text !== undefined && String(text).trim()) || pid) { try { pushChat_(ss, me, users, channel, String(text || '').trim(), !!pid); } catch (e) {} }
-  const msgs = rv_(ss, 'Messages', 3000).filter(m => String(m[1]) === channel).slice(-150)
-    .map(m => { const ph = String(m[6] || ''); return { id: String(m[0]), fromId: String(m[2]), from: String(m[3]), at: toIso_(m[4]), text: String(m[5]), photo: ph && ph !== 'expired' ? 1 : 0, expired: ph === 'expired' ? 1 : 0 }; });
-  return { ok: true, channel, me: me.id, messages: msgs, channels: channels_(ss, me, users) };
+  if (sending) { try { pushChat_(ss, me, users, channel, String(text || '').trim(), !!pid); } catch (e) {} }
+  const byId = {}; users.forEach(r => { byId[String(r[6])] = String(r[0]); });
+  const all = rv_(ss, 'Messages', 3000).filter(m => String(m[1]) === channel);
+  let from = Math.max(0, all.length - 150);
+  if (opt.find) { const f = all.findIndex(m => String(m[0]) === String(opt.find)); if (f >= 0 && f < from) from = Math.max(0, f - 20, all.length - 400); }
+  const snip = m => ({ id: String(m[0]), from: String(m[3]), text: String(m[5]).slice(0, 90), photo: m[6] && m[6] !== 'expired' ? 1 : 0 });
+  const msgs = all.slice(from).map(m => { const ph = String(m[6] || ''), rt = String(m[7] || ''), acks = String(m[8] || '').split(',').filter(x => byId[x]);
+    const orig = rt ? all.find(x => String(x[0]) === rt) : null;
+    return { id: String(m[0]), fromId: String(m[2]), from: String(m[3]), at: toIso_(m[4]), text: String(m[5]), photo: ph && ph !== 'expired' ? 1 : 0, expired: ph === 'expired' ? 1 : 0,
+      reply: rt ? (orig ? snip(orig) : { id: rt, from: '', text: 'Older message', photo: 0 }) : null, acks: acks.map(x => byId[x]), ackMine: acks.indexOf(me.id) >= 0 ? 1 : 0 }; });
+  const active = {}; users.filter(r => truthy_(r[3])).forEach(r => { active[String(r[6])] = 1; });
+  const seen = rv_(ss, 'Chat reads').filter(r => String(r[1]) === channel && String(r[0]) !== me.id && active[String(r[0])]).map(r => ({ name: byId[String(r[0])], at: toIso_(r[2]) }));
+  return { ok: true, channel, me: me.id, messages: msgs, seen, more: from > 0 ? 1 : 0, channels: channels_(ss, me, users) };
+}
+/** Search the recent messages (last 3,000) in every conversation this person can see. */
+function chatSearch_(token, q) {
+  const ss = SpreadsheetApp.getActive(), me = who_(ss, token), users = rv_(ss, 'Users').filter(r => String(r[0]).trim());
+  q = String(q || '').trim().toLowerCase(); if (q.length < 2) return { ok: true, results: [] };
+  const ch = {}; channels_(ss, me, users).forEach(c => { ch[c.id] = c; });
+  const res = rv_(ss, 'Messages', 3000).filter(m => ch[String(m[1])] && (String(m[5]).toLowerCase().indexOf(q) >= 0 || String(m[3]).toLowerCase().indexOf(q) === 0))
+    .slice(-60).reverse().map(m => { const c = ch[String(m[1])]; return { id: String(m[0]), channel: c.id, name: c.name, kind: c.kind, from: String(m[3]), at: toIso_(m[4]), text: String(m[5]).slice(0, 160) || (m[6] ? '📷 Photo' : '') }; });
+  return { ok: true, results: res };
 }
 
 /* ----- chat photos: one per message, kept in a private Drive folder, deleted after the set number of days ----- */
@@ -1120,7 +1153,18 @@ function pushChat_(ss, me, users, channel, text, photo) {
   else if (c.kind === 'channel') ids = active.filter(r => tierOk_({ role: role_(r[1]) }, c.who)).map(r => String(r[6]));
   else { const row = rv_(ss, 'Channels').find(r => String(r[0]) === channel); ids = String(row && row[3] || '').split(',').filter(x => x && x !== me.id); }
   const direct = c.kind !== 'channel', who = me.name.split(' ')[0];
-  push_(ss, ids.map(uid => ({ uid, kind: 'msg', direct, title: direct ? (c.kind === 'group' ? who + ' · ' + c.name : me.name) : '# ' + c.name + ' · ' + who, body: text ? text.slice(0, 200) : '📷 Photo', url: '?go=chat:' + channel, tag: 'chat-' + channel })));
+  const byId = {}; users.forEach(r => { byId[String(r[6])] = String(r[0]); });
+  const named = uid => mentions_(text, byId[uid], users);   // @Name: a mention counts as direct, so it gets through "direct messages only"
+  push_(ss, ids.map(uid => { const m = !direct && named(uid);
+    return { uid, kind: 'msg', direct: direct || m, title: m ? who + ' mentioned you in # ' + c.name : direct ? (c.kind === 'group' ? who + ' · ' + c.name : me.name) : '# ' + c.name + ' · ' + who, body: text ? text.slice(0, 200) : '📷 Photo', url: '?go=chat:' + channel, tag: 'chat-' + channel }; }));
+}
+/** True if the text @mentions this person by full name, or by first name when nobody else active shares it. */
+function mentions_(text, name, users) {
+  if (!text || !name || text.indexOf('@') < 0) return false;
+  const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), t = String(text), firstN = name.split(' ')[0];
+  if (new RegExp('@' + esc(name) + '(?![\\w])', 'i').test(t)) return true;
+  const dup = users.filter(r => truthy_(r[3]) && String(r[0]).split(' ')[0].toLowerCase() === firstN.toLowerCase()).length > 1;
+  return !dup && new RegExp('@' + esc(firstN) + '(?![\\w])', 'i').test(t);
 }
 
 /** A private calendar address per person. A new sign-in code changes it, so an old address stops working. */
