@@ -232,3 +232,38 @@ h2.q{font:500 1.15rem/1.4 var(--body);letter-spacing:0;text-transform:none;color
 .score{font:400 3rem/1 var(--head);letter-spacing:.04em;margin:18px 0 10px;color:var(--warn)} .score.ok{color:var(--ok)}
 @media (min-width:1000px){ .runner{left:220px} }
 .mywrap > *{max-width:760px}
+
+/* compact week grid: ~10+ people on one screen */
+body.wide main{padding-top:12px;padding-bottom:16px}
+body.wide main > .seg{margin-bottom:8px}
+.gridhead{margin:0 0 8px;gap:10px} .gridhead h1{font-size:1.3rem}
+.gridhead .labor b{font-size:1.05rem}
+.gridwrap{max-height:calc(100vh - 150px);max-height:calc(100dvh - 150px)}
+.grid{font-size:.78rem}
+.grid th,.grid td{padding:2px 4px}
+.grid thead th{padding:5px 6px;font-size:.7rem}
+.grid thead th .sub{display:inline;margin:0 0 0 4px;font-size:.66rem}
+.grid th.corner,.grid tbody th{width:255px}
+.grid th.corner .sub{display:block;font-size:.62rem}
+.grid tbody th{padding:2px 6px;vertical-align:middle}
+.grid tbody th b{font-size:.78rem}
+.grid tbody th .sub{display:inline;margin:0 0 0 4px;font-size:.64rem}
+.grid .who{align-items:center;gap:4px}
+.grid .who > div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.grid .handle{padding:2px 1px;font-size:.9rem}
+.grid .wagef{margin:0;gap:1px;font-size:.64rem;flex:none}
+.grid .wagef input.wage{width:46px;min-height:20px;height:20px;padding:0 3px;font-size:.7rem;border-radius:5px}
+.grid .mini{padding:3px 4px;font-size:.56rem}
+.grid td{height:30px}
+.grid .tot{width:72px;font-size:.72rem;padding:2px 6px}
+.grid .tot .money{margin:0;min-width:0} .grid .tot .pill{margin-top:1px;font-size:.58rem;padding:1px 4px}
+.grid tfoot th,.grid tfoot td{font-size:.7rem;padding:3px 6px}
+.grid .chip{display:flex;align-items:baseline;gap:4px;padding:2px 5px;margin:0 0 2px;border-radius:5px;border-left-width:3px;white-space:nowrap;overflow:hidden}
+.grid .chip:last-of-type{margin-bottom:0}
+.grid .chip b{font-size:.7rem;flex:none}
+.grid .chip span{font-size:.64rem;min-width:0}
+.grid .chip .tag{font-size:.52rem;margin:0;flex:none}
+.grid .cnote{font-size:.6rem;margin:0 0 1px;line-height:1.1}
+.grid .addc{width:16px;height:16px;right:2px;bottom:1px;font-size:.8rem}
+.gridhead .weeknav{gap:8px} .gridhead .btns{gap:6px;flex-wrap:nowrap} .gridhead .btn.sm{padding:6px 10px;font-size:.66rem}
+.gridhead .labor .sub{font-size:.68rem}
