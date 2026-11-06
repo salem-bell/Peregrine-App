@@ -41,11 +41,12 @@ export default {
     // signed calls from the sheet
     if (what === 'roster' || what === 'system') {
       const body = await req.text();
-      if (!same(await hmac(secret, body), req.headers.get('x-sig') || '')) return json({ error: 'bad signature' }, 401);
+      const want = await hmac(secret, body), got = req.headers.get('x-sig') || '';
+      if (!same(want, got)) { console.log(JSON.stringify({ refused: what, space, reason: got ? 'signature mismatch (check the sheet\'s Chat service secret)' : 'no signature' })); return json({ error: 'bad signature' }, 401); }
       return stub.fetch(new Request('https://do/' + what, { method: 'POST', body, headers: { 'x-space': space } }));
     }
     const who = await readTicket(env, space, url.searchParams.get('t'));
-    if (!who) return json({ error: 'expired' }, 401);
+    if (!who) { const t = String(url.searchParams.get('t') || ''); console.log(JSON.stringify({ refused: what, space, ticketLen: t.length, parts: t.split('.').length })); return json({ error: 'expired' }, 401); }
     const hdr = { 'x-space': space, 'x-who': JSON.stringify(who) };
     if (what === 'ws') {
       if (req.headers.get('upgrade') !== 'websocket') return json({ error: 'expected a WebSocket' }, 426);

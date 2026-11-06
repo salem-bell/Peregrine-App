@@ -18,3 +18,6 @@ new_sqlite_classes = ["Space"]
 # bucket_name = "team-chat-photos"
 
 # Secrets (wrangler secret put …): SECRET_FAMILY, SECRET_PEREGRINE – each must match that sheet's Settings › Chat service secret.
+
+[observability]
+enabled = true
