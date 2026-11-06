@@ -1,5 +1,5 @@
 # Live chat for the Peregrine Team and Bellah Family HQ apps.
-# One Durable Object ("space") per app holds its conversations; photos live in R2.
+# One Durable Object ("space") per app holds its conversations and photos (free plan, no card needed).
 name = "team-chat"
 main = "src/index.js"
 compatibility_date = "2026-10-01"
@@ -12,8 +12,9 @@ class_name = "Space"
 tag = "v1"
 new_sqlite_classes = ["Space"]
 
-[[r2_buckets]]
-binding = "PHOTOS"
-bucket_name = "team-chat-photos"
+# To keep photos in R2 instead (needs R2 switched on in the dashboard), uncomment:
+# [[r2_buckets]]
+# binding = "PHOTOS"
+# bucket_name = "team-chat-photos"
 
 # Secrets (wrangler secret put …): SECRET_FAMILY, SECRET_PEREGRINE – each must match that sheet's Settings › Chat service secret.

@@ -54,17 +54,20 @@ export default {
     if (what === 'photo' && req.method === 'POST') {           // upload first, then send the message with the returned key
       const type = req.headers.get('content-type') || '';
       if (!/^image\/(jpeg|png|webp)$/.test(type)) return json({ error: 'That photo couldn\'t be read – try another' }, 400);
-      const bytes = await req.arrayBuffer(); if (bytes.byteLength > 5 * 1024 * 1024) return json({ error: 'That photo is too big' }, 413);
+      const bytes = await req.arrayBuffer(); if (bytes.byteLength > (env.PHOTOS ? 5 : 1.9) * 1024 * 1024) return json({ error: 'That photo is too big' }, 413);
       const key = space + '/' + who.u + '/' + crypto.randomUUID().replace(/-/g, '').slice(0, 20);
-      await env.PHOTOS.put(key, bytes, { httpMetadata: { contentType: type } });
+      if (env.PHOTOS) await env.PHOTOS.put(key, bytes, { httpMetadata: { contentType: type } });     // R2 when it's switched on
+      else { const r = await stub.fetch(new Request('https://do/photoput', { method: 'POST', body: bytes, headers: { ...hdr, 'x-key': key, 'content-type': type } })); if (!r.ok) return r; }
       return json({ ok: true, key });
     }
     if (what === 'photo' && arg) {                              // a message's photo, only for people who can see that conversation
       const r = await stub.fetch(new Request('https://do/photo?id=' + encodeURIComponent(arg), { headers: hdr }));
       if (!r.ok) return r;
-      const { key } = await r.json(), obj = await env.PHOTOS.get(key);
+      const { key } = await r.json(), cache = { 'cache-control': 'private, max-age=31536000, immutable', ...CORS };
+      if (!env.PHOTOS) { const p = await stub.fetch(new Request('https://do/photoget?key=' + encodeURIComponent(key), { headers: hdr })); return new Response(p.body, { status: p.status, headers: { 'content-type': p.headers.get('content-type') || 'application/json', ...(p.ok ? cache : CORS) } }); }
+      const obj = await env.PHOTOS.get(key);
       if (!obj) return json({ error: 'That photo has expired' }, 404);
-      return new Response(obj.body, { headers: { 'content-type': obj.httpMetadata && obj.httpMetadata.contentType || 'image/jpeg', 'cache-control': 'private, max-age=31536000, immutable', ...CORS } });
+      return new Response(obj.body, { headers: { 'content-type': obj.httpMetadata && obj.httpMetadata.contentType || 'image/jpeg', ...cache } });
     }
     return json({ error: 'not found' }, 404);
   }
@@ -80,7 +83,8 @@ export class Space {
       CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, ch TEXT, uid TEXT, name TEXT, at INTEGER, text TEXT, photo TEXT, reply TEXT);
       CREATE INDEX IF NOT EXISTS messages_ch_at ON messages (ch, at);
       CREATE TABLE IF NOT EXISTS acks (mid TEXT, uid TEXT, PRIMARY KEY (mid, uid));
-      CREATE TABLE IF NOT EXISTS reads (uid TEXT, ch TEXT, at INTEGER, PRIMARY KEY (uid, ch));`);
+      CREATE TABLE IF NOT EXISTS reads (uid TEXT, ch TEXT, at INTEGER, PRIMARY KEY (uid, ch));
+      CREATE TABLE IF NOT EXISTS photos (key TEXT PRIMARY KEY, type TEXT, data BLOB, at INTEGER);`);
   }
   /* ---------- small helpers ---------- */
   q(sql, ...a) { return [...this.sql.exec(sql, ...a)]; }
@@ -159,6 +163,15 @@ export class Space {
       if (!m.photo || m.photo === 'expired') return json({ error: 'That photo has expired' }, 404);
       return json({ key: m.photo });
     }
+    if (url.pathname === '/photoput') {                         // photos kept in this database (when R2 isn't switched on)
+      const key = req.headers.get('x-key') || ''; if (key.indexOf(this.space() + '/' + who.u + '/') !== 0) return json({ error: 'bad photo key' }, 400);
+      this.sql.exec('INSERT OR REPLACE INTO photos (key, type, data, at) VALUES (?, ?, ?, ?)', key, req.headers.get('content-type') || 'image/jpeg', await req.arrayBuffer(), Date.now());
+      return json({ ok: true });
+    }
+    if (url.pathname === '/photoget') {
+      const p = this.one('SELECT type, data FROM photos WHERE key = ?', url.searchParams.get('key') || '');
+      return p ? new Response(p.data, { headers: { 'content-type': p.type } }) : json({ error: 'That photo has expired' }, 404);
+    }
     if (url.pathname === '/ws') {
       const pair = new WebSocketPair(), [client, server] = Object.values(pair);
       this.ctx.acceptWebSocket(server, [who.u]);
@@ -225,7 +238,7 @@ export class Space {
       case 'del': {
         const m = this.one('SELECT * FROM messages WHERE id = ?', String(msg.id)); if (!m) return reply({ t: 'ok' });
         if (!(me.tier >= R.deleteAny || (R.deleteOwn && m.uid === me.id)) || me.ro) return fail(R.deleteOwn ? 'You can only delete your own messages' : 'Only managers can delete messages');
-        if (m.photo && m.photo !== 'expired') this.ctx.waitUntil(this.env.PHOTOS.delete(m.photo));
+        if (m.photo && m.photo !== 'expired') this.ctx.waitUntil(this.dropPhoto(m.photo));
         this.sql.exec('DELETE FROM messages WHERE id = ?', m.id); this.sql.exec('DELETE FROM acks WHERE mid = ?', m.id);
         this.fanout(m.ch, () => ({ t: 'deleted', ch: m.ch, id: m.id }));
         return reply({ t: 'ok' });
@@ -303,7 +316,10 @@ export class Space {
   async alarm() {
     const days = this.meta('photoDays', 60), cut = Date.now() - days * 864e5;
     const old = this.q("SELECT id, photo FROM messages WHERE photo != '' AND photo != 'expired' AND at < ? LIMIT 500", cut);
-    for (const m of old) { try { await this.env.PHOTOS.delete(m.photo); } catch (_) {} this.sql.exec("UPDATE messages SET photo = 'expired' WHERE id = ?", m.id); }
+    for (const m of old) { try { await this.dropPhoto(m.photo); } catch (_) {} this.sql.exec("UPDATE messages SET photo = 'expired' WHERE id = ?", m.id); }
+    // photos uploaded but never sent (closed the app mid-send): gone after a day
+    if (!this.env.PHOTOS) this.sql.exec('DELETE FROM photos WHERE at < ? AND key NOT IN (SELECT photo FROM messages)', Date.now() - 864e5);
     this.ctx.storage.setAlarm(Date.now() + 3600e3);
   }
+  async dropPhoto(key) { if (this.env.PHOTOS) await this.env.PHOTOS.delete(key); else this.sql.exec('DELETE FROM photos WHERE key = ?', key); }
 }
