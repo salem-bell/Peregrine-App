@@ -350,6 +350,7 @@ mark{background:rgba(210,146,41,.32);color:inherit;border-radius:3px;padding:0 1
 .ackp{all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:3px;height:22px;padding:0 7px;border-radius:11px;background:var(--card);border:1.5px solid var(--paper);color:var(--muted);font:600 .72rem/1 var(--body);box-shadow:0 1px 2px rgba(0,0,0,.12)}
 .ackp.mine{color:var(--accent)}
 .seen{align-self:flex-end;font-size:.72rem;color:var(--muted);margin:0 4px 6px}
+.mstat{align-self:flex-end;display:flex;align-items:center;gap:3px;font-size:.68rem;line-height:1;color:var(--muted);margin:-1px 6px 8px;opacity:.85;font-style:italic;letter-spacing:.01em}.mstat svg{flex:none}.mstat.st-seen{color:var(--accent);opacity:1}.mstat.st-sending{opacity:.6}.mstat .lnk{font-size:inherit;font-style:normal}
 #ment{display:flex;gap:6px;overflow-x:auto;padding:8px 10px 0;scrollbar-width:none} #ment[hidden]{display:none}
 #ment button{all:unset;cursor:pointer;flex:none;display:flex;align-items:center;gap:7px;padding:4px 12px 4px 4px;border-radius:18px;background:var(--card);border:1px solid var(--line);font-size:.88rem}
 .replybar{display:flex;align-items:center;gap:10px;margin:0;padding:8px 10px 0 14px}

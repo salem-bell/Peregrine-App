@@ -669,6 +669,12 @@ const shortWhen = iso => { if (!iso) return ''; const d = new Date(iso), day = y
   return day === T() ? timeOf(iso) : day === plus(T(), -1) ? 'Yesterday' : diff < 6 ? d.toLocaleDateString([], { weekday: 'short' }) : d.toLocaleDateString([], { month: 'short', day: 'numeric' }); };
 const v3 = () => Number(data && data.version) >= 3;
 const SVG_READ = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 12.5l4.5 4.5L15 8"/><path d="M11 16l1 1 9.5-9.5"/></svg>';
+const STAT_IC = {   // small status marks under your newest message
+  sending: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 4.8V8l2.2 1.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+  sent: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  delivered: '<svg viewBox="0 0 20 16" width="17" height="14" aria-hidden="true"><path d="M1.8 8.5l3 3 6-7M8.3 10.6l.9.9 6-7" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+};
+STAT_IC.seen = STAT_IC.delivered;
 const SVG_REPLY = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>';
 const escRe = x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /** How to @mention someone: first name, or full name when two people share it. */
@@ -724,10 +730,10 @@ function viewConversation(){
     const isLastMine = mine && i === msgs.length - 1 && v3();
     const after = x => x.at && new Date(x.at) >= new Date(m.at);
     const seenAll = isLastMine && real ? (chat.seen || []).filter(after) : [], seenBy = seenAll.map(x => first(x.name));
-    const status = !isLastMine ? '' : !real ? 'Sending…'
-      : seenBy.length ? (!multi ? 'Seen ' + timeOf(seenAll[0].at) : 'Seen by ' + esc(seenBy.slice(0, 3).join(', ')) + (seenBy.length > 3 ? ` <button class="lnk" data-cseen>+${seenBy.length - 3}</button>` : ''))
-      : (chat.dlv || []).some(after) ? 'Delivered' : 'Sent';
-    const seen = status ? `<div class="seen">${status}</div>` : '';
+    const kind = !isLastMine ? '' : !real ? 'sending' : seenBy.length ? 'seen' : (chat.dlv || []).some(after) ? 'delivered' : 'sent';
+    const label = kind === 'seen' ? (!multi ? 'Seen ' + timeOf(seenAll[0].at) : 'Seen by ' + esc(seenBy.slice(0, 3).join(', ')) + (seenBy.length > 3 ? ` <button class="lnk" data-cseen>+${seenBy.length - 3}</button>` : ''))
+      : { sending: 'Sending', sent: 'Sent', delivered: 'Delivered' }[kind];
+    const seen = kind ? `<div class="mstat st-${kind}">${STAT_IC[kind]}<span>${label}</span></div>` : '';
     return (sep ? `<div class="daysep"><b>${dayName(ymdOf(new Date(m.at)))}</b> ${timeOf(m.at)}</div>` : '')
       + (multi && !mine && firstR ? `<div class="from">${esc(first(m.from))}</div>` : '')
       + `<div class="mrow ${mine ? 'me' : ''} ${lastR ? 'last' : ''}">`
