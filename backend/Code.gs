@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '3.2';
+const VERSION = '3.3';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Off'];
 
@@ -61,6 +61,8 @@ const SETTINGS = [
   ['Inventory tabs',               'Coffee, In-house, Costco, Paper goods, Other', 'The tabs in that sheet that hold items (same columns: Item, Category, Vendor, Unit, On hand, Par, Case size, Counted on…).'],
   ['Push service address',         '',                          'Your Cloudflare Worker address (https://peregrine-push….workers.dev). Blank = no push notifications.'],
   ['Push service secret',          '',                          'Must match SECRET in the Worker. Don\'t share it.'],
+  ['Chat service address',         '',                          'Live Messages (Cloudflare team-chat Worker), e.g. https://team-chat….workers.dev. Blank = Messages run on this sheet (slower; messages saved in the Messages tab).'],
+  ['Chat service secret',          '',                          'Must match SECRET_PEREGRINE in the team-chat Worker. Don\'t share it.'],
   ['Push public key',              '',                          'Must match VAPID_PUBLIC in the Worker.'],
   ['Delete chat photos after (days)', '60',                     'Photos sent in Messages are deleted from Drive after this many days. The message stays, marked "Photo expired".'],
   ['Test results sheet',           'https://docs.google.com/spreadsheets/d/1dl8gi2SkPfYOjBzX0syp2WkWssg7t-rpZChpeZNm5QQ/edit', 'The sheet the tests write results to. The app shows each person their own results.'],
@@ -230,6 +232,8 @@ function doPost(e) {
     if (body.fn === 'info') return json_(info_());
     if (body.fn === 'signIn') return json_(signIn_(body.name, body.code));
     if (body.fn === 'api') return json_(api_(body.token, body.p || {}));
+    if (body.fn === 'chatTicket') return json_(chatTicket_(body.token));
+    if (body.fn === 'chatPush') return json_(chatPush_(body.args && body.args[0], body.args && body.args[1]));
     if (body.fn === 'chat') return json_(chat_(body.token, body.channel, body.text, body.photo, body));
     if (body.fn === 'chatSearch') return json_(chatSearch_(body.token, body.q));
     if (body.fn === 'photo') return json_(photo_(body.token, body.id));
@@ -410,8 +414,9 @@ function state_(ss, me, slim) {
   // Prep requests for upcoming shifts
   out.prep = prepList_(ss, me, tz);
 
-  // Chat (channel list + unread counts; messages load separately)
-  out.channels = channels_(ss, me, users);
+  // Chat: live service (the app connects to it itself) or, without one, the channel list from this sheet
+  if (chatLive_(ss)) { out.chat = { url: setting_(ss, 'Chat service address').replace(/\/+$/, '') }; out.channels = []; }
+  else out.channels = channels_(ss, me, users);
 
 
   }
@@ -647,7 +652,9 @@ function act_(ss, me, p, touched) {
         } catch (e) {}
         // In the app: a note in the schedule channel, so everyone gets an unread badge.
         const ch = vals_(tab('Channels')).find(r => String(r[0]) === 'schedule') || vals_(tab('Channels')).find(r => /schedule/i.test(String(r[1])) && String(r[2] || 'channel') === 'channel');
-        if (ch) tab('Messages').appendRow([newId_(12), String(ch[0]), me.id, me.name, new Date(), '📅 The schedule for ' + range + (hadBefore ? ' was updated' : ' is posted') + '. Check the Schedule tab.' + (hadBefore ? ' (' + Object.keys(affected).length + (Object.keys(affected).length === 1 ? ' person' : ' people') + ' affected)' : '')]);
+        const note = '📅 The schedule for ' + range + (hadBefore ? ' was updated' : ' is posted') + '. Check the Schedule tab.' + (hadBefore ? ' (' + Object.keys(affected).length + (Object.keys(affected).length === 1 ? ' person' : ' people') + ' affected)' : '');
+        if (chatLive_(ss)) { try { chatSystem_(ss, { ch: ch ? String(ch[0]) : 'schedule', match: 'schedule', text: note, uid: me.id, name: me.name }); } catch (e) {} }
+        else if (ch) tab('Messages').appendRow([newId_(12), String(ch[0]), me.id, me.name, new Date(), '📅 The schedule for ' + range + (hadBefore ? ' was updated' : ' is posted') + '. Check the Schedule tab.' + (hadBefore ? ' (' + Object.keys(affected).length + (Object.keys(affected).length === 1 ? ' person' : ' people') + ' affected)' : '')]);
       }
       audit('Published the schedule for ' + range + ' (' + published + ' shifts, ' + removed + ' removed)');
       return { published, removed, emailed, noEmail };
@@ -1322,3 +1329,54 @@ function nextId_(sh, prefix) {
   return prefix + pad_(n + 1);
 }
 function findRow_(sh, id) { const v = vals_(sh); for (let i = 0; i < v.length; i++) if (String(v[i][0]) === String(id)) return i + 2; return 0; }
+
+/* ============================================================
+   Live Messages (v3.3): the team-chat Cloudflare Worker holds conversations; this sheet vouches for who's who.
+   - chatTicket_: a signed 24-hour chat pass for the signed-in person (+ keeps the service's list of people current)
+   - chatPush_:   the service asks for notifications; this sheet knows everyone's settings and phones
+   - chatSystem_: a note from the sheet into a channel (e.g. the schedule is posted)
+   ============================================================ */
+function chatLive_(ss) { return !!(setting_(ss, 'Chat service address') && setting_(ss, 'Chat service secret')); }
+const b64u_ = bytes => Utilities.base64EncodeWebSafe(bytes).replace(/=+$/, '');
+function chatSign_(secret, text) { return b64u_(Utilities.computeHmacSha256Signature(text, secret)); }
+function chatTier_(role) { return role === 'Manager' ? 2 : role === 'Lead' ? 1 : 0; }
+function selfUrl_() { try { return ScriptApp.getService().getUrl().replace(/\/a\/macros\/[^/]+\//, '/macros/'); } catch (e) { return ''; } }
+function chatRoster_(ss) {
+  const users = rv_(ss, 'Users').filter(r => String(r[0]).trim() && r[6]);
+  const seed = rv_(ss, 'Channels').filter(r => r[0] && r[1]).map(r => ({ id: String(r[0]), name: String(r[1]), kind: String(r[2] || 'channel'), members: String(r[3] || ''), who: String(r[4] || 'Everyone'), by: String(r[5] || '') }));
+  return { space: 'peregrine', relay: selfUrl_(), photoDays: Number(setting_(ss, 'Delete chat photos after (days)')) || 60,
+    rules: { makeChannel: 1, editChannel: 1, deleteAny: 2, deleteOwn: false, whoLabels: { 0: 'Everyone', 1: 'Leads and managers', 2: 'Managers' }, channelHint: 'Only leads and managers can make channels – start a group instead' },
+    people: users.map(r => ({ id: String(r[6]), name: String(r[0]).trim(), tier: chatTier_(role_(r[1])), ro: false, active: truthy_(r[3]) })), channels: seed };
+}
+function chatPost_(ss, path, obj) {
+  const url = setting_(ss, 'Chat service address').replace(/\/+$/, '') + '/s/peregrine/' + path, body = JSON.stringify(obj);
+  const res = UrlFetchApp.fetch(url, { method: 'post', contentType: 'application/json', payload: body, headers: { 'x-sig': chatSign_(setting_(ss, 'Chat service secret'), body) }, muteHttpExceptions: true });
+  if (res.getResponseCode() !== 200) throw new Error('The chat service answered ' + res.getResponseCode() + ' – check Settings › Chat service address and secret');
+  return JSON.parse(res.getContentText());
+}
+/** Sends the list of people to the service when it has changed (or every 6 hours). */
+function chatSyncRoster_(ss, force) {
+  const r = chatRoster_(ss), h = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify(r.people) + JSON.stringify(r.rules) + r.relay)), c = CacheService.getScriptCache();
+  if (!force && c.get('chatRoster') === h) return;
+  chatPost_(ss, 'roster', r); c.put('chatRoster', h, 21600);
+}
+function chatTicket_(token) {
+  const ss = SpreadsheetApp.getActive(), me = who_(ss, token);
+  if (!chatLive_(ss)) throw new Error('Live chat isn\'t set up (Settings › Chat service address)');
+  chatSyncRoster_(ss);
+  const exp = Math.floor(Date.now() / 1000) + 86400, body = b64u_(Utilities.newBlob(JSON.stringify({ s: 'peregrine', u: me.id, n: me.name, t: chatTier_(me.role), ro: false, e: exp })).getBytes());
+  return { ok: true, url: setting_(ss, 'Chat service address').replace(/\/+$/, ''), space: 'peregrine', ticket: body + '.' + chatSign_(setting_(ss, 'Chat service secret'), body), exp };
+}
+function chatSystem_(ss, note) { chatSyncRoster_(ss); return chatPost_(ss, 'system', note); }
+/** Called by the chat service after a message: notify the people it lists (respecting their settings and @mentions). */
+function chatPush_(payload, sig) {
+  const ss = SpreadsheetApp.getActive(), secret = setting_(ss, 'Chat service secret');
+  if (!secret || !payload || chatSign_(secret, String(payload)) !== String(sig || '')) throw new Error('bad signature');
+  const p = JSON.parse(payload); if (Math.abs(Date.now() - Number(p.at || 0)) > 300000) throw new Error('too old');
+  const users = rv_(ss, 'Users').filter(r => String(r[0]).trim()), byId = {}; users.forEach(r => { byId[String(r[6])] = String(r[0]); });
+  const direct = p.kind !== 'channel', who = String(p.from && p.from.name || '').split(' ')[0], text = String(p.text || '');
+  push_(ss, (p.to || []).filter(uid => byId[uid]).map(uid => { const m = !direct && mentions_(text, byId[uid], users);
+    return { uid, kind: 'msg', direct: direct || m, title: m ? who + ' mentioned you in # ' + p.name : direct ? (p.kind === 'group' ? who + ' · ' + p.name : String(p.from.name)) : '# ' + p.name + ' · ' + who,
+      body: text ? text.slice(0, 200) : '📷 Photo', url: '?go=chat:' + p.ch, tag: 'chat-' + p.ch }; }));
+  return { ok: true };
+}

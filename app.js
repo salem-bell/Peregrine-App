@@ -15,6 +15,80 @@ let week = '', sheet = null, chat = { open: '', msgs: [], timer: null, sending: 
 try { const c = load('pt-cache'); if (c && TOKEN) data = JSON.parse(c); } catch (_) {}
 
 /* ---------- server ---------- */
+/* ===== Live chat connection (shared by Bellah Family HQ and Peregrine Team) =====
+ * One WebSocket to the chat service. Asks get an answer (promise); everything else the service sends
+ * (new messages, read marks, "seen", deletes, list changes, who's online) goes to on(msg).
+ * Reconnects on its own with a growing wait, fetches a fresh chat pass when the old one runs out,
+ * and pauses while the app is hidden for a while so phones don't keep a connection open in a pocket.
+ */
+function LiveChat(o){   // o: { url, space, ticket: () => Promise<{ticket, exp}>, on(msg), onUp(), onDown() }
+  let ws = null, pass = null, tries = 0, wait = 0, ping = 0, idle = 0, up = false, stopped = false, n = 0;
+  const pend = {}, queue = [];
+  const base = () => String(o.url).replace(/\/+$/, '');
+  async function getPass(){
+    if (pass && pass.exp * 1000 - Date.now() > 5 * 60000) return pass.ticket;
+    pass = await o.ticket(); return pass.ticket;
+  }
+  async function connect(){
+    if (stopped || ws || document.hidden) return;
+    clearTimeout(wait);
+    let t; try { t = await getPass(); } catch (e) { if (/unauthorized|^signin/.test(String(e && e.message))) { stop(); return; } return later(); }
+    if (stopped || ws) return;
+    let opened = false;
+    const s = ws = new WebSocket(base().replace(/^http/, 'ws') + '/s/' + o.space + '/ws?t=' + encodeURIComponent(t));
+    s.onopen = () => { opened = true; };
+    s.onmessage = e => {
+      let d; try { d = JSON.parse(e.data); } catch (_) { return; }
+      if (d.t === 'hello'){ up = true; tries = 0; clearInterval(ping); ping = setInterval(() => raw({ t: 'ping' }), 25000); queue.splice(0).forEach(x => s.send(x)); }
+      if (d.t === 'err' && d.code === 'expired'){ pass = null; }
+      if (d.rid && pend[d.rid]){ const p = pend[d.rid]; delete pend[d.rid]; clearTimeout(p.to); if (d.t === 'err') p.no(new Error(d.msg || 'Something went wrong')); else p.yes(d); return; }
+      if (d.t === 'pong') return;
+      try { o.on(d); } catch (err) { console.error(err); }
+      if (d.t === 'hello' && o.onUp) try { o.onUp(); } catch (err) { console.error(err); }
+    };
+    s.onclose = ev => {
+      if (ws === s) ws = null; const was = up; up = false; clearInterval(ping);
+      if (!opened || ev.code === 4001) pass = null;           // refused at the door: usually an old pass
+      Object.keys(pend).forEach(k => { const p = pend[k]; delete pend[k]; clearTimeout(p.to); p.no(new Error('The connection dropped – try again')); });
+      if (was && o.onDown) try { o.onDown(); } catch (_) {}
+      if (!stopped) later();
+    };
+    s.onerror = () => {};
+  }
+  function later(){ clearTimeout(wait); const ms = Math.min(30000, 800 * Math.pow(2, tries++)) * (0.7 + Math.random() * 0.6); wait = setTimeout(connect, ms); }
+  function raw(x){ const s = JSON.stringify(x); if (ws && up) { try { ws.send(s); } catch (_) {} } else { queue.push(s); if (queue.length > 50) queue.shift(); connect(); } }
+  /** Fire and forget (read marks, acks, leaving a conversation). */
+  function send(x){ raw(x); }
+  /** A question with an answer: open, send, search, new/edit channel, delete. */
+  function ask(x, ms){
+    const rid = 'r' + (++n) + Math.random().toString(36).slice(2, 6);
+    return new Promise((yes, no) => { pend[rid] = { yes, no, to: setTimeout(() => { if (pend[rid]) { delete pend[rid]; no(new Error('No answer from the chat – check your connection')); } }, ms || 15000) }; raw(Object.assign({ rid }, x)); });
+  }
+  /** Photos: uploaded first, then sent as part of the message. */
+  async function upload(dataUrl){
+    const blob = await (await fetch(dataUrl)).blob(), t = await getPass();
+    const r = await fetch(base() + '/s/' + o.space + '/photo?t=' + encodeURIComponent(t), { method: 'POST', body: blob, headers: { 'content-type': blob.type || 'image/jpeg' } });
+    const j = await r.json().catch(() => ({})); if (!r.ok || !j.key) { if (r.status === 401) pass = null; throw new Error(j.error || 'The photo didn\'t upload'); }
+    return j.key;
+  }
+  async function photo(id){
+    const t = await getPass(), r = await fetch(base() + '/s/' + o.space + '/photo/' + encodeURIComponent(id) + '?t=' + encodeURIComponent(t));
+    if (!r.ok) { const j = await r.json().catch(() => ({})); if (r.status === 401) pass = null; throw new Error(j.error || 'Couldn\'t load the photo'); }
+    const b = await r.blob();
+    return await new Promise((yes, no) => { const f = new FileReader(); f.onload = () => yes(f.result); f.onerror = () => no(new Error('Couldn\'t read the photo')); f.readAsDataURL(b); });
+  }
+  function stop(){ stopped = true; clearTimeout(wait); clearTimeout(idle); clearInterval(ping); if (ws) try { ws.close(1000); } catch (_) {} ws = null; up = false; }
+  document.addEventListener('visibilitychange', () => {
+    if (stopped) return;
+    clearTimeout(idle);
+    if (document.hidden) idle = setTimeout(() => { if (document.hidden && ws) try { ws.close(1000); } catch (_) {} }, 60000);
+    else { tries = 0; connect(); }
+  });
+  window.addEventListener('online', () => { if (!stopped) { tries = 0; connect(); } });
+  connect();
+  return { send, ask, upload, photo, stop, get up(){ return up; } };
+}
+
 async function post(body){
   if (!API) throw new Error('This app isn\'t connected to its server yet (config.js).');
   const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 45000);
@@ -61,7 +135,7 @@ async function flush(){
   if (typeof got.ms === 'number') console.info('[Peregrine] saved ' + batch.length + ' change' + (batch.length === 1 ? '' : 's') + ' – server ' + (got.ms / 1000).toFixed(1) + 's');
   if (!queue.length){   // nothing newer waiting: show the server's copy (a newer edit would otherwise be wiped from the screen)
     seqShown = ++seqStarted; busy = {}; offline = false;
-    const keep = data; data = got.partial ? Object.assign({}, keep, got) : got; delete data.results; delete data.partial;
+    const keep = data; data = got.partial ? Object.assign({}, keep, got) : got; delete data.results; delete data.partial; liveSync();
     save('pt-cache', JSON.stringify(data)); render();
   }
   batch.forEach((b, i) => b.res(res[i] && res[i].error ? null : Object.assign({}, data, { result: res[i] })));
@@ -85,10 +159,10 @@ async function refresh(p){
     if (isAct && !pending) setTimeout(() => refresh(), 300);
     render(); return null;
   }
-  data = got; offline = false; save('pt-cache', JSON.stringify(data)); render(); pushCheck(); if (pendingGo){ const g = pendingGo; pendingGo = ''; goTo(g); } return got;
+  data = got; offline = false; liveSync(); save('pt-cache', JSON.stringify(data)); render(); pushCheck(); if (pendingGo){ const g = pendingGo; pendingGo = ''; goTo(g); } return got;
 }
 function saving(){ const el = $('#saving'); if (el) el.hidden = !pending; }
-function signOut(msg){ TOKEN = ''; data = null; save('pt-token', null); save('pt-cache', null); stopChat(); render(); if (msg) toast(msg.charAt(0).toUpperCase() + msg.slice(1)); }
+function signOut(msg){ stopChat(); liveEnd(); TOKEN = ''; data = null; save('pt-token', null); save('pt-cache', null); render(); if (msg) toast(msg.charAt(0).toUpperCase() + msg.slice(1)); }
 
 /* ---------- formatting ---------- */
 const pad = n => String(n).padStart(2, '0');
@@ -572,7 +646,7 @@ const initials = n => { const w = String(n || '?').trim().split(/\s+/); return (
 const avColor = k => { let h = 0; for (const ch of String(k)) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return AV[h % AV.length]; };
 /* "Last active": the server knows when each person last used the app (to within a minute or so). Under 5 minutes counts as active now. */
 const otherId = c => c && c.kind === 'dm' ? String(c.id).split('-').slice(1).find(x => x !== data.meId) : c && !c.kind ? c.id : '';
-const activeMs = id => Number((data.active || {})[id] || 0);
+const activeMs = id => liveOnline.has(id) && data.active && id in data.active ? Date.now() : Number((data.active || {})[id] || 0);
 const isActive = id => !!id && id !== data.meId && Date.now() - activeMs(id) < 5 * 60000;
 function activeLabel(id){
   const ms = activeMs(id); if (!ms || id === data.meId) return ''; const m = Math.floor((Date.now() - ms) / 60000);
@@ -677,6 +751,7 @@ function editChatSheet(){
 async function openChat(id, name, text, photo, opt){
   chat.open = id; chat.dmName = name || chat.dmName; if (text === undefined) { chat.msgs = chat.msgs && chat.loaded === id ? chat.msgs : []; }
   render(); scrollChat();
+  if (LIVE) return liveOpen(id, text, photo, opt);
   try {
     const r = await post(Object.assign({ fn: 'chat', token: TOKEN, channel: id, text }, photo ? { photo } : {}, opt || {}));
     if (photo){ const mine = r.messages.filter(m => m.fromId === r.me && m.photo).pop(); if (mine && !picCache[mine.id]){ picCache[mine.id] = photo; idbPut(mine.id, photo); } }
@@ -686,20 +761,81 @@ async function openChat(id, name, text, photo, opt){
   } catch (e) { const m = String(e.message || e); if (/^signin/.test(m)) return signOut(m.replace(/^signin:\s*/, '')); if (text !== undefined) { chat.compose = text; if (photo) chat.photo = photo; if (opt && opt.replyTo && opt.reply) chat.reply = opt.reply; chat.msgs = (chat.msgs || []).filter(x => x.id !== 'tmp'); toast('Not sent: ' + m); render(); } }
   clearTimeout(chat.timer); chat.timer = setTimeout(() => { if (chat.open === id && tab === 'chat' && !document.hidden) openChat(id); }, 7000);
 }
-function stopChat(){ clearTimeout(chat.timer); chat.open = ''; chat.reply = null; chat.meta = ''; chat.flash = ''; }
+function stopChat(){ if (LIVE && chat.open) LIVE.send({ t: 'close' }); clearTimeout(chat.timer); chat.open = ''; chat.reply = null; chat.meta = ''; chat.flash = ''; }
 function jumpTo(id){ const el = document.querySelector(`[data-bub="${CSS.escape(id)}"]`);
   if (!el){ if (chat.open) openChat(chat.open, null, undefined, undefined, { find: id }); return; }
   chat.flash = id; el.classList.add('flash'); el.scrollIntoView({ block: 'center', behavior: 'smooth' }); setTimeout(() => { if (chat.flash === id) chat.flash = ''; el.classList.remove('flash'); }, 1600); }
 function toggleAck(id){ const m = (chat.msgs || []).find(x => x.id === id); if (!m || m.fromId === chat.me) return;
   m.ackMine = m.ackMine ? 0 : 1; m.acks = (m.acks || []).filter(n => n !== data.me.name).concat(m.ackMine ? [data.me.name] : []);
   chat.meta = ''; render(); if (navigator.vibrate) try { navigator.vibrate(12); } catch (_) {}
+  if (LIVE){ LIVE.send({ t: 'ack', id }); return; }
   openChat(chat.open, null, undefined, undefined, { ack: id }); }
 function startReply(id){ const m = (chat.msgs || []).find(x => x.id === id); if (!m) return;
   chat.reply = { id: m.id, from: m.from, text: m.text ? m.text.slice(0, 90) : '' }; chat.meta = ''; render(); const t = $('.composer textarea'); if (t) t.focus(); }
 let searchT = 0, searchN = 0;
 function keepSearch(fn){ const a = document.activeElement, keep = a && a.dataset && a.dataset.csearch !== undefined, pos = keep ? a.selectionStart : 0; fn(); if (keep){ const el = $('[data-csearch]'); if (el){ el.focus(); try { el.setSelectionRange(pos, pos); } catch (_) {} } } }
 function runSearch(){ const q = (chat.q || '').trim(); clearTimeout(searchT); chat.results = null; if (q.length < 2) return;
-  const n = ++searchN; searchT = setTimeout(() => post({ fn: 'chatSearch', token: TOKEN, q }).then(r => { if (n !== searchN || tab !== 'chat' || chat.open) return; chat.results = r.results; keepSearch(render); }).catch(e => { if (n === searchN){ chat.results = []; toast(e.message); } }), 350); }
+  const n = ++searchN; searchT = setTimeout(() => (LIVE ? LIVE.ask({ t: 'search', q }) : post({ fn: 'chatSearch', token: TOKEN, q })).then(r => { if (n !== searchN || tab !== 'chat' || chat.open) return; chat.results = r.results; keepSearch(render); }).catch(e => { if (n === searchN){ chat.results = []; toast(e.message); } }), 350); }
+
+/* ----- live chat: when the sheet's Settings has a Chat service address, messages go straight to the chat service ----- */
+let LIVE = null, liveList = null, liveMe = '', liveOnline = new Set(), paintT = 0, paintAfter = [];
+function liveSync(){
+  const url = data && data.chat && data.chat.url;
+  if (!url){ liveEnd(); return; }
+  if (liveList) data.channels = liveList;          // the sheet no longer sends the list; the service does
+  if (LIVE) return;
+  LIVE = LiveChat({ url, space: 'peregrine', ticket: () => post({ fn: 'chatTicket', token: TOKEN }), on: liveOn,
+    onUp: () => { if (chat.open && tab === 'chat' && !document.hidden) openChat(chat.open); } });
+}
+function liveEnd(){ if (LIVE){ LIVE.stop(); LIVE = null; } liveList = null; liveOnline = new Set(); }
+function paint(after){ if (after) paintAfter.push(after); clearTimeout(paintT); paintT = setTimeout(() => { if (!data) return; const near = isNearBottom(); render(); paintAfter.splice(0).forEach(f => f(near)); }, 40); }
+const byLast = (a, b) => String((b.last || {}).at || '').localeCompare(String((a.last || {}).at || '')) || (a.kind === 'channel' ? -1 : 1);
+const liveMsg = m => Object.assign(m, { ackMine: (m.ackIds || []).indexOf(liveMe) >= 0 ? 1 : 0 });
+function setLiveList(list){ liveList = (list || []).slice().sort(byLast); if (data){ data.channels = liveList; save('pt-cache', JSON.stringify(data)); } }
+function lastOf(m){ return { from: m.from, text: (m.text || '').slice(0, 80) || (m.photo ? '📷 Photo' : ''), at: m.at }; }
+function liveOn(d){
+  if (!data) return;
+  if (d.t === 'hello'){ liveMe = chat.me = d.me; setLiveList(d.channels); liveOnline = new Set(d.online || []); paint(); return; }
+  if (d.t === 'channels'){ setLiveList(d.channels); paint(); return; }
+  if (d.t === 'online'){ liveOnline = new Set(d.online || []); paint(); return; }
+  const here = !!d.ch && d.ch === chat.open && chat.loaded === d.ch && tab === 'chat' && !document.hidden;
+  if (d.t === 'msg'){
+    const m = liveMsg(d.m), c = (liveList || []).find(x => x.id === d.ch);
+    if (!c) LIVE.send({ t: 'list' });                 // a brand-new private message or group
+    else { c.last = lastOf(m); if (!here && m.fromId !== liveMe) c.unread = (c.unread || 0) + 1; liveList.sort(byLast); }
+    if (here){ if (!chat.msgs.some(x => x.id === m.id)) chat.msgs = chat.msgs.concat(m); LIVE.send({ t: 'read', ch: d.ch }); paint(near => { if (near) scrollChat(); }); return; }
+    paint(); return;
+  }
+  if (!here) return;
+  if (d.t === 'acks'){ const m = chat.msgs.find(x => x.id === d.id); if (m){ m.acks = d.acks; m.ackIds = d.ackIds; liveMsg(m); paint(); } return; }
+  if (d.t === 'seen'){ chat.seen = (chat.seen || []).filter(x => x.id !== d.id).concat({ id: d.id, name: d.name, at: d.at }); paint(); return; }
+  if (d.t === 'deleted'){ chat.msgs = chat.msgs.filter(x => x.id !== d.id); paint(); return; }
+}
+async function liveOpen(id, text, photo, opt){
+  opt = opt || {};
+  try {
+    if (text !== undefined){
+      const key = photo ? await LIVE.upload(photo) : '';
+      const r = await LIVE.ask({ t: 'send', ch: id, text: text || '', photo: key, reply: opt.replyTo || '', tmp: 'tmp' }), m = liveMsg(r.m);
+      if (photo){ picCache[m.id] = photo; idbPut(m.id, photo); }
+      const c = (liveList || []).find(x => x.id === id); if (c){ c.last = lastOf(m); liveList.sort(byLast); } else LIVE.send({ t: 'list' });
+      if (chat.open !== id) return;
+      const i = chat.msgs.findIndex(x => x.id === 'tmp'); if (i >= 0) chat.msgs.splice(i, 1);
+      if (!chat.msgs.some(x => x.id === m.id)) chat.msgs.push(m);
+      render(); scrollChat(); return;
+    }
+    const r = await LIVE.ask({ t: 'open', ch: id, find: opt.find || '' });
+    if (chat.open !== id) return;
+    chat.msgs = r.messages.map(liveMsg); chat.seen = r.seen || []; chat.me = liveMe; chat.loaded = id;
+    const c = (liveList || []).find(x => x.id === id); if (c) c.unread = 0;
+    const near = isNearBottom(); render(); if (opt.find) jumpTo(opt.find); else if (near) scrollChat();
+  } catch (e) {
+    const m = String(e && e.message || e).replace(/^(Error|Exception):\s*/, '');
+    if (text !== undefined){ chat.compose = text || ''; if (photo) chat.photo = photo; if (opt.reply) chat.reply = opt.reply; const i = (chat.msgs || []).findIndex(x => x.id === 'tmp'); if (i >= 0) chat.msgs.splice(i, 1); toast('Not sent: ' + m); render(); }
+    else if (chat.loaded !== id) toast(m);
+  }
+}
+function liveMake(p, done){ LIVE.ask(Object.assign({ t: 'newch' }, p)).then(r => { toast(done); if (r.id) openChat(r.id); }, e => toast(e.message)); }
 
 /* ---------- chat photos: shrunk on the phone before sending, cached on each phone after the first load ---------- */
 const picCache = {}, picLoading = {};
@@ -720,7 +856,7 @@ function loadPic(id){
 function pumpPics(){
   while (picActive < 2 && picQueue.length){
     const id = picQueue.shift(); picActive++;
-    post({ fn: 'photo', token: TOKEN, id }).then(r => { const src = 'data:' + r.mime + ';base64,' + r.data; picCache[id] = src; idbPut(id, src); showPic(id, src); })
+    (LIVE ? LIVE.photo(id) : post({ fn: 'photo', token: TOKEN, id }).then(r => 'data:' + r.mime + ';base64,' + r.data)).then(src => { picCache[id] = src; idbPut(id, src); showPic(id, src); })
       .catch(e => { delete picLoading[id]; document.querySelectorAll(`[data-pic="${CSS.escape(id)}"] span`).forEach(x => { x.textContent = /expired|gone/i.test(String(e.message)) ? 'Photo expired' : 'Couldn\'t load – tap to retry'; }); })
       .finally(() => { picActive--; pumpPics(); });
   }
@@ -1180,7 +1316,7 @@ document.addEventListener('click', async e => {
   if (d.pushpref){ const P = data.push.prefs = data.push.prefs || {}; const v = d.v; if (d.pushpref === 'msg') P.msg = v; else P[d.pushpref] = v === '1'; render(); act('pushPrefs', { [d.pushpref]: v }); return; }
   if (d.pic){ const m = (chat.msgs || []).find(x => x.id === d.pic), src = (m && m.local) || picCache[d.pic]; if (src) zoomPic(src); else loadPic(d.pic); return; }
   if (d.unphoto !== undefined){ const t = $('.composer textarea'); if (t) chat.compose = t.value; chat.photo = ''; render(); return; }
-  if (d.delmsg){ if (!confirm('Delete this message?')) return; chat.msgs = chat.msgs.filter(m => m.id !== d.delmsg); render(); await act('deleteMessage', { id: d.delmsg }); openChat(chat.open); return; }
+  if (d.delmsg){ if (!confirm('Delete this message?')) return; chat.msgs = chat.msgs.filter(m => m.id !== d.delmsg); render(); if (LIVE){ LIVE.ask({ t: 'del', id: d.delmsg }).catch(e => { toast(e.message); openChat(chat.open); }); return; } await act('deleteMessage', { id: d.delmsg }); openChat(chat.open); return; }
   if (d.newcode){ if (!confirm('Give ' + d.name + ' a new code? Their old code stops working and they are signed out everywhere.')) return; showCode[d.newcode] = true; act('newCode', { id: d.newcode }).then(r => { if (r) toast('New code made – tell ' + first(d.name)); }); return; }
   if (d.active){ if (d.to === '0' && !confirm('Turn off ' + d.name + '? They are signed out right away and cannot sign in.')) return; act('setActive', { id: d.active, active: d.to }); return; }
 });
@@ -1263,9 +1399,10 @@ document.addEventListener('submit', async e => {
     if (c.kind === 'group'){ const m = [...f.querySelectorAll('input[name=m]:checked')].map(x => x.value); if (!m.length){ toast('Pick at least one other person'); return; } p.members = m.concat(data.meId).join(','); }
     else p.who = v('who');
     c.name = p.name; if (p.who) c.who = p.who; sheet = null; render();
+    if (LIVE){ LIVE.ask(Object.assign({ t: 'editch' }, p)).then(() => toast('Saved'), e => { toast(e.message); LIVE.send({ t: 'list' }); }); return; }
     act('editChannel', p).then(r => { if (r) { toast('Saved'); if (chat.open === c.id) openChat(c.id); } }); return; }
-  if (kind === 'group'){ const members = [...f.querySelectorAll('input[name=m]:checked')].map(x => x.value).join(','); sheet = null; act('newChannel', { kind: 'group', name: v('name'), members }).then(r => { if (r) toast('Group made'); }); return; }
-  if (kind === 'channel'){ sheet = null; act('newChannel', { kind: 'channel', name: v('name'), who: v('who') }).then(r => { if (r) toast('Channel made'); }); return; }
+  if (kind === 'group'){ const members = [...f.querySelectorAll('input[name=m]:checked')].map(x => x.value).join(','); sheet = null; if (LIVE){ render(); liveMake({ kind: 'group', name: v('name'), members }, 'Group made'); return; } act('newChannel', { kind: 'group', name: v('name'), members }).then(r => { if (r) toast('Group made'); }); return; }
+  if (kind === 'channel'){ sheet = null; if (LIVE){ render(); liveMake({ kind: 'channel', name: v('name'), who: v('who') }, 'Channel made'); return; } act('newChannel', { kind: 'channel', name: v('name'), who: v('who') }).then(r => { if (r) toast('Channel made'); }); return; }
   if (kind === 'announce'){ if (!v('title')){ toast('Add a title'); return; } act('announce', { title: v('title'), message: f.elements.namedItem('message').value, pinned: v('pinned'), mustAck: v('mustAck') }).then(r => { if (r) toast('Posted'); }); f.reset(); return; }
   if (kind === 'request'){ (data.requests = data.requests || []).unshift({ id: 'tmp' + Date.now(), from: data.me.name, type: v('type'), date: v('date'), details: v('details'), status: 'Pending', created: new Date().toISOString() }); render(); act('request', { type: v('type'), date: v('date'), details: v('details') }).then(r => { if (r) toast('Sent to managers'); }); f.reset(); return; }
   if (kind === 'user'){
@@ -1320,7 +1457,7 @@ document.addEventListener('drop', e => {
 });
 WIDE.addEventListener && WIDE.addEventListener('change', () => { if (data) render(); });
 const typing = () => { const a = document.activeElement; return (a && /INPUT|TEXTAREA|SELECT/.test(a.tagName)) || !!runner; };
-document.addEventListener('visibilitychange', () => { if (document.hidden || !TOKEN) return; if (chat.open && tab === 'chat') openChat(chat.open); else if (!pending && !typing() && !sheet) refresh(); });
+document.addEventListener('visibilitychange', () => { if (LIVE && chat.open && tab === 'chat' && document.hidden) LIVE.send({ t: 'close' }); if (document.hidden || !TOKEN) return; if (chat.open && tab === 'chat') openChat(chat.open); else if (!pending && !typing() && !sheet) refresh(); });
 setInterval(() => { if (!document.hidden && TOKEN && !pending && !typing() && !sheet && !viewer && !chat.open) refresh(); }, 90000);
 window.addEventListener('online', () => { if (TOKEN) refresh(); });
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; if (!TOKEN) render(); });
