@@ -32,7 +32,7 @@ async function readTicket(env, space, t) {
 export default {
   async fetch(req, env) {
     if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
-    const url = new URL(req.url), m = url.pathname.match(/^\/s\/(family|peregrine)\/(ws|roster|system|photo)(?:\/([\w.-]+))?$/);
+    const url = new URL(req.url), m = url.pathname.match(/^\/s\/(family|peregrine)\/(ws|roster|system|photo|dlv)(?:\/([\w.-]+))?$/);
     if (url.pathname === '/' || url.pathname === '/health') return json({ ok: true, service: 'team-chat' });
     if (!m) return json({ error: 'not found' }, 404);
     const [, space, what, arg] = m, secret = env[SPACES[space]];
@@ -48,6 +48,10 @@ export default {
     const who = await readTicket(env, space, url.searchParams.get('t'));
     if (!who) { const t = String(url.searchParams.get('t') || ''); console.log(JSON.stringify({ refused: what, space, ticketLen: t.length, parts: t.split('.').length })); return json({ error: 'expired' }, 401); }
     const hdr = { 'x-space': space, 'x-who': JSON.stringify(who) };
+    if (what === 'dlv' && req.method === 'POST') {                // the phone got the notification: "Delivered"
+      const b = await req.json().catch(() => ({}));
+      return stub.fetch(new Request('https://do/dlv', { method: 'POST', body: JSON.stringify({ ch: String(b.ch || '') }), headers: hdr }));
+    }
     if (what === 'ws') {
       if (req.headers.get('upgrade') !== 'websocket') return json({ error: 'expected a WebSocket' }, 426);
       return stub.fetch(new Request('https://do/ws', { headers: { ...hdr, upgrade: 'websocket' } }));
@@ -173,6 +177,11 @@ export class Space {
       if (!this.canSee(me, m.ch)) return json({ error: 'You can\'t see that conversation' }, 403);
       if (!m.photo || m.photo === 'expired') return json({ error: 'That photo has expired' }, 404);
       return json({ key: m.photo });
+    }
+    if (url.pathname === '/dlv') {
+      const { ch } = await req.json(), me = this.me(who);
+      if (ch && me.active && this.canSee(me, ch)) this.delivered(ch, [me.id]);
+      return json({ ok: true });
     }
     if (url.pathname === '/photoput') {                         // photos kept in this database (when R2 isn't switched on)
       const key = req.headers.get('x-key') || ''; if (key.indexOf(this.space() + '/' + who.u + '/') !== 0) return json({ error: 'bad photo key' }, 400);

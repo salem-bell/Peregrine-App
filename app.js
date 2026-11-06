@@ -27,7 +27,10 @@ function LiveChat(o){   // o: { url, space, ticket: () => Promise<{ticket, exp}>
   const base = () => String(o.url).replace(/\/+$/, '');
   async function getPass(){
     if (pass && pass.exp * 1000 - Date.now() > 5 * 60000) return pass.ticket;
-    pass = await o.ticket(); return pass.ticket;
+    pass = await o.ticket();
+    // kept where the notification handler can reach it, so a notification arriving counts as "Delivered"
+    try { const c = await caches.open('chat-pass'); await c.put('/chat-pass', new Response(JSON.stringify({ url: base(), space: o.space, ticket: pass.ticket, exp: pass.exp }))); } catch (_) {}
+    return pass.ticket;
   }
   async function connect(){
     if (stopped || ws || document.hidden) return;
@@ -77,7 +80,7 @@ function LiveChat(o){   // o: { url, space, ticket: () => Promise<{ticket, exp}>
     const b = await r.blob();
     return await new Promise((yes, no) => { const f = new FileReader(); f.onload = () => yes(f.result); f.onerror = () => no(new Error('Couldn\'t read the photo')); f.readAsDataURL(b); });
   }
-  function stop(){ stopped = true; clearTimeout(wait); clearTimeout(idle); clearInterval(ping); if (ws) try { ws.close(1000); } catch (_) {} ws = null; up = false; }
+  function stop(){ try { caches.delete('chat-pass'); } catch (_) {} stopped = true; clearTimeout(wait); clearTimeout(idle); clearInterval(ping); if (ws) try { ws.close(1000); } catch (_) {} ws = null; up = false; }
   document.addEventListener('visibilitychange', () => {
     if (stopped) return;
     clearTimeout(idle);

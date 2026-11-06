@@ -1,13 +1,13 @@
 // Keeps the app shell on the phone so it opens instantly and works offline.
 // Bump VERSION whenever app files change so phones pick up the new version.
-const VERSION = 'pt-3.3.4';
+const VERSION = 'pt-3.3.5';
 const SHELL = ['./', 'index.html', 'app.css', 'app.js', 'config.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'brand/bird-gold.png', 'brand/falcon.png', 'brand/branch.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', e => {
-  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION && k !== 'pt-files').map(k => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION && k !== 'pt-files' && k !== 'chat-pass').map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
 // App files: try the network first (so updates show up), fall back to the saved copy when offline.
 // Requests to the server (Google) are never cached here.
@@ -23,10 +23,19 @@ self.addEventListener('fetch', e => {
 });
 
 // Push notifications (sent by the shop's Cloudflare Worker). Tapping one opens the right screen.
+/* A message notification reached this phone: tell the chat service it was delivered. */
+async function chatDelivered(url){
+  const m = /^\?go=chat:(.+)$/.exec(String(url || '')); if (!m) return;
+  try {
+    const c = await caches.open('chat-pass'), r = await c.match('/chat-pass'); if (!r) return;
+    const p = await r.json(); if (!p.ticket || p.exp * 1000 < Date.now()) return;
+    await fetch(p.url + '/s/' + p.space + '/dlv?t=' + encodeURIComponent(p.ticket), { method: 'POST', body: JSON.stringify({ ch: decodeURIComponent(m[1]) }) });
+  } catch (_) {}
+}
 self.addEventListener('push', e => {
   let d = {}; try { d = e.data ? e.data.json() : {}; } catch (_) { d = { body: e.data ? e.data.text() : '' }; }
-  e.waitUntil(self.registration.showNotification(d.title || 'Peregrine', { body: d.body || '', tag: d.tag || undefined, renotify: !!d.tag,
-    icon: 'icons/icon-192.png', data: { go: String(d.url || '').replace(/^\?go=/, '') } }));
+  e.waitUntil(Promise.all([self.registration.showNotification(d.title || 'Peregrine', { body: d.body || '', tag: d.tag || undefined, renotify: !!d.tag,
+    icon: 'icons/icon-192.png', data: { go: String(d.url || '').replace(/^\?go=/, '') } }), chatDelivered(d.url)]));
 });
 self.addEventListener('notificationclick', e => {
   e.notification.close();
