@@ -720,9 +720,14 @@ function viewConversation(){
     const meta = chat.meta === m.id ? `<div class="meta ${mine ? 'me' : ''}">${timeOf(m.at)}${v3() && real ? ` · <button class="lnk" data-reply="${esc(m.id)}">Reply</button>` : ''}${v3() && real && !mine ? ` · <button class="lnk" data-ack="${esc(m.id)}">${m.ackMine ? 'Unmark read' : 'Mark read'}</button>` : ''}${mgr() && real ? ` · <button class="lnk" data-delmsg="${esc(m.id)}">Delete</button>` : ''}</div>` : '';
     const quote = m.reply ? `<button type="button" class="quote" data-jump="${esc(m.reply.id)}"><b>${esc(m.reply.from ? (m.reply.from === data.me.name ? 'You' : first(m.reply.from)) : '')}</b><span>${m.reply.photo && !m.reply.text ? '📷 Photo' : esc(m.reply.text)}</span></button>` : '';
     const ackPill = acks.length ? `<div class="ackrow ${mine ? 'me' : ''}"><button class="ackp ${m.ackMine ? 'mine' : ''}" data-acks="${esc(m.id)}" aria-label="Read by ${esc(acks.join(', '))}">${SVG_READ}${acks.length > 1 ? `<span>${acks.length}</span>` : ''}</button></div>` : '';
-    const isLastMine = mine && real && v3() && !msgs.slice(i + 1).some(x => x.id !== 'tmp');
-    const seenBy = isLastMine ? (chat.seen || []).filter(x => x.at && new Date(x.at) >= new Date(m.at)).map(x => first(x.name)) : [];
-    const seen = isLastMine && seenBy.length ? `<div class="seen">${!multi ? 'Seen' : 'Seen by ' + esc(seenBy.slice(0, 3).join(', ')) + (seenBy.length > 3 ? ` <button class="lnk" data-seenall>+${seenBy.length - 3}</button>` : '')}</div>` : '';
+    // Under your newest message: Sending… → Sent → Delivered → Seen
+    const isLastMine = mine && i === msgs.length - 1 && v3();
+    const after = x => x.at && new Date(x.at) >= new Date(m.at);
+    const seenAll = isLastMine && real ? (chat.seen || []).filter(after) : [], seenBy = seenAll.map(x => first(x.name));
+    const status = !isLastMine ? '' : !real ? 'Sending…'
+      : seenBy.length ? (!multi ? 'Seen ' + timeOf(seenAll[0].at) : 'Seen by ' + esc(seenBy.slice(0, 3).join(', ')) + (seenBy.length > 3 ? ` <button class="lnk" data-cseen>+${seenBy.length - 3}</button>` : ''))
+      : (chat.dlv || []).some(after) ? 'Delivered' : 'Sent';
+    const seen = status ? `<div class="seen">${status}</div>` : '';
     return (sep ? `<div class="daysep"><b>${dayName(ymdOf(new Date(m.at)))}</b> ${timeOf(m.at)}</div>` : '')
       + (multi && !mine && firstR ? `<div class="from">${esc(first(m.from))}</div>` : '')
       + `<div class="mrow ${mine ? 'me' : ''} ${lastR ? 'last' : ''}">`
@@ -749,7 +754,7 @@ function editChatSheet(){
       <button class="btn go">Save</button></form></div></div>`;
 }
 async function openChat(id, name, text, photo, opt){
-  chat.open = id; chat.dmName = name || chat.dmName; if (text === undefined) { chat.msgs = chat.msgs && chat.loaded === id ? chat.msgs : []; }
+  chat.open = id; chat.dmName = name || chat.dmName; if (text === undefined && chat.loaded !== id) { chat.msgs = []; chat.seen = []; chat.dlv = []; }
   render(); scrollChat();
   if (LIVE) return liveOpen(id, text, photo, opt);
   try {
@@ -809,6 +814,7 @@ function liveOn(d){
   if (!here) return;
   if (d.t === 'acks'){ const m = chat.msgs.find(x => x.id === d.id); if (m){ m.acks = d.acks; m.ackIds = d.ackIds; liveMsg(m); paint(); } return; }
   if (d.t === 'seen'){ chat.seen = (chat.seen || []).filter(x => x.id !== d.id).concat({ id: d.id, name: d.name, at: d.at }); paint(); return; }
+  if (d.t === 'dlv'){ chat.dlv = (chat.dlv || []).filter(x => x.id !== d.id).concat({ id: d.id, name: d.name, at: d.at }); paint(); return; }
   if (d.t === 'deleted'){ chat.msgs = chat.msgs.filter(x => x.id !== d.id); paint(); return; }
 }
 async function liveOpen(id, text, photo, opt){
@@ -826,7 +832,7 @@ async function liveOpen(id, text, photo, opt){
     }
     const r = await LIVE.ask({ t: 'open', ch: id, find: opt.find || '' });
     if (chat.open !== id) return;
-    chat.msgs = r.messages.map(liveMsg); chat.seen = r.seen || []; chat.me = liveMe || chat.me; chat.loaded = id;
+    chat.msgs = r.messages.map(liveMsg); chat.seen = r.seen || []; chat.dlv = r.dlv || []; chat.me = liveMe || chat.me; chat.loaded = id;
     const c = (liveList || []).find(x => x.id === id); if (c) c.unread = 0;
     const near = isNearBottom(); render(); if (opt.find) jumpTo(opt.find); else if (near) scrollChat();
   } catch (e) {

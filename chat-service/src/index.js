@@ -85,6 +85,7 @@ export class Space {
       CREATE INDEX IF NOT EXISTS messages_ch_at ON messages (ch, at);
       CREATE TABLE IF NOT EXISTS acks (mid TEXT, uid TEXT, PRIMARY KEY (mid, uid));
       CREATE TABLE IF NOT EXISTS reads (uid TEXT, ch TEXT, at INTEGER, PRIMARY KEY (uid, ch));
+      CREATE TABLE IF NOT EXISTS dlv (uid TEXT, ch TEXT, at INTEGER, PRIMARY KEY (uid, ch));
       CREATE TABLE IF NOT EXISTS photos (key TEXT PRIMARY KEY, type TEXT, data BLOB, at INTEGER);`);
   }
   /* ---------- small helpers ---------- */
@@ -139,9 +140,18 @@ export class Space {
     let limit = MAX_HISTORY;
     if (find) { const f = this.one('SELECT at FROM messages WHERE id = ? AND ch = ?', find, ch); if (f) { const newer = this.one('SELECT COUNT(*) AS n FROM messages WHERE ch = ? AND at >= ?', ch, f.at).n; limit = Math.min(400, Math.max(limit, newer + 20)); } }
     const rows = this.q('SELECT * FROM messages WHERE ch = ? ORDER BY at DESC LIMIT ?', ch, limit).reverse();
-    return { ch, messages: rows.map(m => this.shape(m, names)), seen: this.seen(me, ch), more: total > rows.length ? 1 : 0 };
+    return { ch, messages: rows.map(m => this.shape(m, names)), seen: this.seen(me, ch), dlv: this.dlv(me, ch), more: total > rows.length ? 1 : 0 };
   }
   seen(me, ch) { return this.q('SELECT r.uid AS uid, r.at AS at, p.name AS name FROM reads r JOIN people p ON p.id = r.uid WHERE r.ch = ? AND r.uid != ? AND p.active = 1', ch, me.id).map(r => ({ id: r.uid, name: r.name, at: new Date(r.at).toISOString() })); }
+  dlv(me, ch) { return this.q('SELECT d.uid AS uid, d.at AS at, p.name AS name FROM dlv d JOIN people p ON p.id = d.uid WHERE d.ch = ? AND d.uid != ? AND p.active = 1', ch, me.id).map(r => ({ id: r.uid, name: r.name, at: new Date(r.at).toISOString() })); }
+  /** "Delivered": the conversation reached these people's app (an open connection, or the next time they open it). */
+  delivered(ch, ids) {
+    const at = Date.now(), names = this.names();
+    ids.forEach(u => {
+      this.sql.exec('INSERT INTO dlv (uid, ch, at) VALUES (?, ?, ?) ON CONFLICT(uid, ch) DO UPDATE SET at = excluded.at', u, ch, at);
+      this.fanout(ch, (them, ta) => ta.who.u !== u && ta.open === ch ? { t: 'dlv', ch, id: u, name: names[u] || '', at: new Date(at).toISOString() } : null);
+    });
+  }
   markRead(me, ch) { const now = Date.now(); this.sql.exec('INSERT INTO reads (uid, ch, at) VALUES (?, ?, ?) ON CONFLICT(uid, ch) DO UPDATE SET at = excluded.at', me.id, ch, now); return now; }
   /* ---------- live connections ---------- */
   sockets() { return this.ctx.getWebSockets().map(ws => { let a = null; try { a = ws.deserializeAttachment(); } catch (_) {} return { ws, a }; }).filter(x => x.a); }
@@ -178,7 +188,9 @@ export class Space {
       this.ctx.acceptWebSocket(server, [who.u]);
       server.serializeAttachment({ who, open: '', sid: crypto.randomUUID() });
       const me = this.me(who);
-      this.send(server, { t: 'hello', me: me.id, channels: me.active ? this.channelsFor(me) : [], online: this.online() });
+      const list = me.active ? this.channelsFor(me) : [];
+      this.send(server, { t: 'hello', me: me.id, channels: list, online: this.online() });
+      list.forEach(c => { const d = this.one('SELECT at FROM dlv WHERE uid = ? AND ch = ?', me.id, c.id), n = this.one('SELECT MAX(at) AS at FROM messages WHERE ch = ? AND uid != ?', c.id, me.id); if (n && n.at && (!d || d.at < n.at)) this.delivered(c.id, [me.id]); });
       this.presence();
       return new Response(null, { status: 101, webSocket: client });
     }
@@ -223,7 +235,8 @@ export class Space {
         this.markRead(me, ch);
         const m = this.shape(this.one('SELECT * FROM messages WHERE id = ?', id), this.names());
         reply({ t: 'sent', tmp: msg.tmp, ch, m });
-        this.fanout(ch, (them, ta) => ta.sid === a.sid ? null : { t: 'msg', ch, m });
+        const got = new Set(); this.fanout(ch, (them, ta) => { if (ta.sid === a.sid) return null; if (them.id !== me.id) got.add(them.id); return { t: 'msg', ch, m }; });
+        this.delivered(ch, [...got]);
         this.ctx.waitUntil(this.relayPush(me, ch, text, !!photo));
         return;
       }
@@ -300,7 +313,7 @@ export class Space {
     const id = 'm' + crypto.randomUUID().replace(/-/g, '').slice(0, 12);
     this.sql.exec('INSERT INTO messages (id, ch, uid, name, at, text, photo, reply) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, c.id, String(b.uid || 'system'), String(b.name || 'Dashboard'), Date.now(), String(b.text || '').slice(0, 2000), '', '');
     const m = this.shape(this.one('SELECT * FROM messages WHERE id = ?', id), this.names());
-    this.fanout(c.id, () => ({ t: 'msg', ch: c.id, m }));
+    const got = new Set(); this.fanout(c.id, (them) => { got.add(them.id); return { t: 'msg', ch: c.id, m }; }); this.delivered(c.id, [...got]);
     return json({ ok: true, id });
   }
   /** Ask the sheet to send notifications (it knows everyone's settings and phones). */
