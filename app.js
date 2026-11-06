@@ -710,7 +710,7 @@ function viewConversation(){
   const msgs = chat.msgs || [], c = curChat() || { id: chat.open, name: convName(), kind: 'dm' }, multi = c.kind !== 'dm';
   const gap = (a, b) => Math.abs(new Date(b.at) - new Date(a.at)) / 6e4;
   const body = msgs.map((m, i) => {
-    const prev = msgs[i - 1], next = msgs[i + 1], mine = m.fromId === chat.me;
+    const prev = msgs[i - 1], next = msgs[i + 1], mine = m.id === 'tmp' || m.fromId === (chat.me || data.meId);
     const sep = !prev || ymdOf(new Date(m.at)) !== ymdOf(new Date(prev.at)) || gap(prev, m) > 60;
     const firstR = sep || prev.fromId !== m.fromId || gap(prev, m) > 5;
     const nextSep = next && (ymdOf(new Date(next.at)) !== ymdOf(new Date(m.at)) || gap(m, next) > 60);
@@ -826,7 +826,7 @@ async function liveOpen(id, text, photo, opt){
     }
     const r = await LIVE.ask({ t: 'open', ch: id, find: opt.find || '' });
     if (chat.open !== id) return;
-    chat.msgs = r.messages.map(liveMsg); chat.seen = r.seen || []; chat.me = liveMe; chat.loaded = id;
+    chat.msgs = r.messages.map(liveMsg); chat.seen = r.seen || []; chat.me = liveMe || chat.me; chat.loaded = id;
     const c = (liveList || []).find(x => x.id === id); if (c) c.unread = 0;
     const near = isNearBottom(); render(); if (opt.find) jumpTo(opt.find); else if (near) scrollChat();
   } catch (e) {
