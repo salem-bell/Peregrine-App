@@ -672,6 +672,8 @@ const shortWhen = iso => { if (!iso) return ''; const d = new Date(iso), day = y
   return day === T() ? timeOf(iso) : day === plus(T(), -1) ? 'Yesterday' : diff < 6 ? d.toLocaleDateString([], { weekday: 'short' }) : d.toLocaleDateString([], { month: 'short', day: 'numeric' }); };
 const v3 = () => Number(data && data.version) >= 3;
 const SVG_READ = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 12.5l4.5 4.5L15 8"/><path d="M11 16l1 1 9.5-9.5"/></svg>';
+// Status marks bring their own style (an old cached page may not have it)
+(function(){ if (document.getElementById('mstat-css')) return; const st = document.createElement('style'); st.id = 'mstat-css'; st.textContent = '.mstat{align-self:flex-end;display:flex;align-items:center;gap:3px;font-size:.68rem;line-height:1;color:var(--muted);margin:-1px 6px 8px;opacity:.85;font-style:italic;letter-spacing:.01em}.mstat svg{flex:none}.mstat.st-seen{color:var(--accent);opacity:1}.mstat.st-sending{opacity:.6}.mstat .lnk{font-size:inherit;font-style:normal}'; document.head.appendChild(st); })();
 const STAT_IC = {   // small status marks under your newest message
   sending: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 4.8V8l2.2 1.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
   sent: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
