@@ -1382,7 +1382,7 @@ document.addEventListener('submit', async e => {
   if (kind === 'send'){ const text = f.elements.namedItem('text').value.trim(), photo = chat.photo || ''; if (!text && !photo) return;
     const reply = chat.reply; chat.reply = null; $('#ment') && ($('#ment').hidden = true);
     chat.compose = ''; chat.photo = ''; chat.msgs = (chat.msgs || []).concat({ id: 'tmp', fromId: chat.me || data.meId, from: data.me.name, at: new Date().toISOString(), text, photo: photo ? 1 : 0, local: photo, reply: reply ? { id: reply.id, from: reply.from, text: reply.text } : null }); render(); scrollChat();
-    const t = $('.composer textarea'); if (t){ t.focus(); t.style.height = ''; } openChat(chat.open, null, text, photo || undefined, reply ? { replyTo: reply.id, reply } : undefined); return; }
+    const t = $('.composer textarea'); if (t){ t.value = ''; t.focus(); t.style.height = ''; } openChat(chat.open, null, text, photo || undefined, reply ? { replyTo: reply.id, reply } : undefined); return; }
   if (kind === 'shift'){ if (!v('name')){ toast('Pick who is working'); return; } const p = { id: sheet && sheet.id || '', name: v('name'), date: v('date'), start: v('start'), end: v('end'), position: v('position'), notes: v('notes') };
     if (p.end <= p.start){ toast('The end has to be after the start'); return; }
     const ex = p.id && (data.shifts || []).find(x => x.id === p.id);
