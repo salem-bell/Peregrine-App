@@ -1,6 +1,6 @@
 // Keeps the app shell on the phone so it opens instantly and works offline.
 // Bump VERSION whenever app files change so phones pick up the new version.
-const VERSION = 'pt-3.3.6';
+const VERSION = 'pt-3.3.7';
 const SHELL = ['./', 'index.html', 'app.css', 'app.js', 'config.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'brand/bird-gold.png', 'brand/falcon.png', 'brand/branch.png'];
 
 self.addEventListener('install', e => {
@@ -24,6 +24,14 @@ self.addEventListener('fetch', e => {
 
 // Push notifications (sent by the shop's Cloudflare Worker). Tapping one opens the right screen.
 /* A message notification reached this phone: tell the chat service it was delivered. */
+/* A message arrived while the app was closed: one more on the icon badge. (The app sets the exact number when it opens.) */
+async function chatBadge(url){
+  if (!/^\?go=chat:/.test(String(url || '')) || !self.navigator || !('setAppBadge' in self.navigator)) return;
+  try {
+    const c = await caches.open('chat-pass'), r = await c.match('/badge'), n = (r ? Number(await r.text()) || 0 : 0) + 1;
+    await c.put('/badge', new Response(String(n))); await self.navigator.setAppBadge(n);
+  } catch (_) {}
+}
 async function chatDelivered(url){
   const m = /^\?go=chat:(.+)$/.exec(String(url || '')); if (!m) return;
   try {
@@ -35,7 +43,7 @@ async function chatDelivered(url){
 self.addEventListener('push', e => {
   let d = {}; try { d = e.data ? e.data.json() : {}; } catch (_) { d = { body: e.data ? e.data.text() : '' }; }
   e.waitUntil(Promise.all([self.registration.showNotification(d.title || 'Peregrine', { body: d.body || '', tag: d.tag || undefined, renotify: !!d.tag,
-    icon: 'icons/icon-192.png', data: { go: String(d.url || '').replace(/^\?go=/, '') } }), chatDelivered(d.url)]));
+    icon: 'icons/icon-192.png', data: { go: String(d.url || '').replace(/^\?go=/, '') } }), chatDelivered(d.url), chatBadge(d.url)]));
 });
 self.addEventListener('notificationclick', e => {
   e.notification.close();

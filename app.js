@@ -1201,7 +1201,16 @@ function viewMoreList(){
 // Desktop sidebar: Today first, Tests shown (see .home / .deskonly in app.css).
 const TABS = [['schedule', 'Schedule', '▦'], ['chat', 'Chat', '✉︎'], ['today', 'Today', '☀︎', 'home'], ['lists', 'Lists', '✓'], ['tests', 'Tests', '✎', 'deskonly'], ['more', 'More', '☰']];
 let lastView = '';
+/* ----- icon badge: unread messages as a number on the app icon (installed apps; iPhone needs notifications on) ----- */
+let lastBadge = -1;
+function syncBadge(){
+  const n = data && data.channels ? data.channels.reduce((a, c) => a + (Number(c.unread) || 0), 0) : 0;
+  if (n === lastBadge) return; lastBadge = n;
+  try { if ('setAppBadge' in navigator) (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {}); } catch (_) {}
+  try { caches.open('chat-pass').then(c => c.put('/badge', new Response(String(n)))).catch(() => {}); } catch (_) {}   // the notification handler counts up from here
+}
 function render(){
+  syncBadge();
   if (rowDrag){ rowDrag.later = true; return; }       // don't redraw under a finger mid-drag
   $('#offline').hidden = !offline;
   if (!TOKEN || !data){ $('#tabs').hidden = true; $('#refresh').hidden = true; $('#overlay').innerHTML = ''; $('#shop').textContent = load('pt-shop') || 'Peregrine'; $('#main').innerHTML = TOKEN ? '<div class="empty">Loading…</div>' : viewSignIn(); return; }
