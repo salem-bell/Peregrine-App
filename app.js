@@ -10,7 +10,7 @@ const standalone = () => window.matchMedia('(display-mode: standalone)').matches
 const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
 let TOKEN = load('pt-token') || '', data = null, offline = false, tab = load('pt-tab') || 'today';
-let listTab = '', schedMine = load('pt-mine') === '1', moreView = '', busy = {}, installEvt = null, showCode = {}, editUser = null, justAdded = null;
+let inviteFor = '', listTab = '', schedMine = load('pt-mine') === '1', moreView = '', busy = {}, installEvt = null, showCode = {}, editUser = null, justAdded = null;
 let week = '', sheet = null, chat = { open: '', msgs: [], timer: null, sending: false, compose: '' }, tsWeek = '', tsPerson = '', viewer = null, tsMode = load('pt-tsmode') || 'week', tsDate = '';
 try { const c = load('pt-cache'); if (c && TOKEN) data = JSON.parse(c); } catch (_) {}
 
@@ -342,8 +342,21 @@ function rangeReport(from, to, name){
   });
 }
 
+/* ---------- invite links: a manager sends one link; it opens the app with that person's name and code filled in ----------
+   The link is the app address + #join=<name and code>. The part after # never leaves the phone (it isn't sent to any server).
+   A new code for that person makes the old link stop working. */
+const b64uEnc = t => btoa(unescape(encodeURIComponent(t))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const b64uDec = t => decodeURIComponent(escape(atob(t.replace(/-/g, '+').replace(/_/g, '/'))));
+const appHome = () => location.origin + location.pathname.replace(/index\.html$/, '');
+const inviteLink = u => appHome() + '#join=' + b64uEnc(JSON.stringify({ n: u.name, c: u.code }));
+const inviteText = u => `Hi ${first(u.name)}! Here's the Peregrine team app – schedule, time clock, messages and checklists.\n\nOpen this link on your phone: ${inviteLink(u)}\n\nThen add it to your home screen. Your sign-in: first name ${first(u.name)}, code ${u.code}.`;
+let invite = null;
+try { const m = location.hash.match(/^#join=([\w-]+)/); if (m){ const j = JSON.parse(b64uDec(m[1])); if (j && j.n && /^\d{4}$/.test(String(j.c))) invite = { n: String(j.n).slice(0, 60), c: String(j.c) }; } } catch (_) {}
+if (invite && !(isIOS() && !standalone())) history.replaceState(null, '', location.pathname + location.search);   // iPhone: kept until they add it to the home screen
+
 /* ---------- screens ---------- */
 function viewSignIn(){
+  if (invite) return viewWelcome();
   const hint = !standalone() ? (isIOS()
     ? `<div class="hint"><b>Put it on your home screen:</b> tap <b>Share</b> <span aria-hidden="true">⬆︎</span> at the bottom of Safari, then <b>Add to Home Screen</b>. Open it from there and sign in.</div>`
     : installEvt ? `<div class="hint"><b>Install the app</b> for one-tap access. <button class="btn sm go" data-install>Install</button></div>`
@@ -354,6 +367,22 @@ function viewSignIn(){
       <label class="f">4-digit code<input name="code" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="current-password" class="code" style="text-align:center"></label>
       <button class="btn go">Sign in</button></form></div>
     <p class="sub" style="text-align:center">Don't know your code? Ask a manager.</p><i class="sprig" aria-hidden="true"></i></div>`;
+}
+
+/** What someone sees when they open their invite link. */
+function viewWelcome(){
+  const i = invite, fn = first(i.n), shop = esc((data && data.name) || load('pt-shop') || 'Peregrine');
+  const steps = standalone() ? '' : isIOS()
+    ? `<div class="card"><div class="row" style="display:block"><b>1. Put the app on your home screen</b><div class="sub" style="margin-top:4px">Tap <b>Share</b> <span aria-hidden="true">⬆︎</span> at the bottom of Safari, then <b>Add to Home Screen</b>, then <b>Add</b>.</div></div>
+        <div class="row" style="display:block"><b>2. Open Peregrine from your home screen and sign in</b><div class="sub" style="margin-top:4px">First name <b>${esc(fn)}</b> · code <span class="code">${esc(i.c)}</span><br>Screenshot this so you have it.</div></div></div>`
+    : `<div class="card"><div class="row" style="display:block"><b>1. Sign in below</b> – your name and code are already filled in.</div>
+        <div class="row" style="display:block"><b>2. Install the app</b><div class="sub" style="margin-top:4px">${installEvt ? '<button class="btn sm go" data-install>Install</button>' : 'In Chrome, tap <b>⋮</b> then <b>Add to Home screen</b> (or <b>Install app</b>).'}</div></div></div>`;
+  return `<div class="signin"><img class="logo" src="brand/falcon.png" alt=""><p class="big">Welcome, ${esc(fn)}</p><p class="sub" style="text-align:center;margin:0 0 18px">You're on the ${shop} team</p>
+    ${steps}<div class="card"><form class="stack" data-form="signin">
+      <label class="f">First name<input name="name" autocomplete="username" autocapitalize="words" spellcheck="false" maxlength="60" value="${esc(i.n)}"></label>
+      <label class="f">4-digit code<input name="code" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="current-password" class="code" style="text-align:center" value="${esc(i.c)}"></label>
+      <button class="btn go">${isIOS() && !standalone() ? 'Sign in here in Safari instead' : 'Sign in'}</button></form></div>
+    <p class="sub" style="text-align:center">Code not working? Ask a manager for a new link.</p><i class="sprig" aria-hidden="true"></i></div>`;
 }
 
 /** Must-read announcements cover the app until each one is acknowledged. */
@@ -1248,9 +1277,15 @@ async function submitTest(){
 const back = to => `<button class="btn sm" data-more="${to || ''}" style="margin-bottom:6px">‹ ${to ? 'Back' : 'More'}</button>`;
 function viewTeam(){
   const us = (data.users || []).slice().sort((a, b) => (b.active - a.active) || a.name.localeCompare(b.name));
-  const added = justAdded && us.find(u => u.name === justAdded);
-  const addedCard = added ? `<div class="hint"><b>${esc(added.name)} is on the team.</b> Their code is <span class="code">${esc(added.code)}</span><br>Send them the app link and this code.
-      <div class="btns" style="margin-top:8px">${added.phone ? `<a class="btn sm go" href="sms:${esc(added.phone.replace(/[^\d+]/g, ''))}${isIOS() ? '&' : '?'}body=${encodeURIComponent('Peregrine team app: ' + location.href.split('#')[0] + '\nFirst name: ' + first(added.name) + '\nCode: ' + added.code + '\nOpen it, then add it to your home screen.')}">Text it</a>` : ''}<button class="btn sm" data-dismiss>Done</button></div></div>` : '';
+  const added = justAdded && us.find(u => u.name === justAdded), inv = added || (inviteFor && us.find(u => u.id === inviteFor));
+  const addedCard = inv ? `<div class="hint" id="invite"><b>${added ? esc(inv.name) + ' is on the team.' : 'Invite ' + esc(inv.name)}</b>
+      <div class="sub" style="margin:4px 0 8px">Send this link. It opens the app with ${esc(first(inv.name))}'s name and code (<b>${esc(inv.code)}</b>) filled in, and shows how to put it on the home screen.</div>
+      <input class="linkbox" readonly value="${esc(inviteLink(inv))}" aria-label="Invite link" onclick="this.select()">
+      <div class="btns" style="margin-top:8px">${navigator.share ? `<button class="btn sm go" data-shareinvite="${esc(inv.id)}">Share…</button>` : ''}<button class="btn sm ${navigator.share ? '' : 'go'}" data-copyinvite="${esc(inv.id)}">Copy</button>
+        ${inv.phone ? `<a class="btn sm" href="sms:${esc(inv.phone.replace(/[^\d+]/g, ''))}${isIOS() ? '&' : '?'}body=${encodeURIComponent(inviteText(inv))}">Text it</a>` : ''}
+        ${inv.email ? `<a class="btn sm" href="mailto:${esc(inv.email)}?subject=${encodeURIComponent('Your Peregrine team app')}&body=${encodeURIComponent(inviteText(inv))}">Email it</a>` : ''}
+        <button class="btn sm" data-dismiss>Done</button></div>
+      <div class="sub" style="margin-top:6px">Giving ${esc(first(inv.name))} a new code makes this link stop working – send a new one.</div></div>` : '';
   const form = u => `<form class="stack" data-form="user" ${u ? `data-id="${esc(u.id)}"` : ''}>
       <label class="f">Name<input name="name" maxlength="60" value="${esc(u ? u.name : '')}" placeholder="First and last name"></label>
       <label class="f">Role<select name="role">${['Staff', 'Lead', 'Manager'].map(r => `<option ${u && u.role === r ? 'selected' : ''}>${r}</option>`).join('')}</select></label>
@@ -1260,7 +1295,7 @@ function viewTeam(){
   const row = u => editUser === u.id ? `<div class="row" style="display:block;padding:0">${form(u)}</div>` : `<div class="row" style="display:block;${u.active ? '' : 'opacity:.55'}">
       <div style="display:flex;gap:8px;align-items:center"><b style="flex:1">${esc(u.name)}</b><span class="pill ${u.role === 'Manager' ? 'warn' : u.role === 'Lead' ? 'ok' : 'mute'}">${esc(u.role)}</span>${u.active ? '' : '<span class="pill mute">Off</span>'}</div>
       <div class="sub">${u.wage ? money(u.wage, true) + '/h · ' : ''}${u.email ? (u.reminders === 'Off' ? 'Reminders off' : 'Reminders: ' + esc(u.reminders)) : 'No email – no reminders'}</div><div class="sub">${u.phone ? esc(u.phone) + ' · ' : ''}Code ${showCode[u.id] ? `<b>${esc(u.code)}</b>` : '••••'} <button class="btn sm" data-showcode="${esc(u.id)}" style="padding:4px 8px;min-height:0">${showCode[u.id] ? 'Hide' : 'Show'}</button></div>
-      <div class="btns" style="margin-top:8px"><button class="btn sm" data-edit="${esc(u.id)}">Edit</button><button class="btn sm" data-newcode="${esc(u.id)}" data-name="${esc(u.name)}">New code</button>
+      <div class="btns" style="margin-top:8px">${u.active ? `<button class="btn sm go" data-invite="${esc(u.id)}">Invite link</button>` : ''}<button class="btn sm" data-edit="${esc(u.id)}">Edit</button><button class="btn sm" data-newcode="${esc(u.id)}" data-name="${esc(u.name)}">New code</button>
         <button class="btn sm" data-active="${esc(u.id)}" data-to="${u.active ? 0 : 1}" data-name="${esc(u.name)}">${u.active ? 'Turn off' : 'Turn on'}</button></div></div>`;
   return `${back()}<h1>Team</h1>${addedCard}<div class="card">${us.map(row).join('')}</div>
     <h2>Schedule lineup</h2><p class="sub" style="margin:0 4px 8px">Drag ⠿ to set the order people appear on the schedule. Hidden people stay on the team (they can still sign in); they just don't take up a row.</p>
@@ -1373,7 +1408,11 @@ document.addEventListener('click', async e => {
   if (d.showcode){ showCode[d.showcode] = !showCode[d.showcode]; render(); return; }
   if (d.edit){ editUser = d.edit; render(); return; }
   if (d.canceledit !== undefined){ editUser = null; render(); return; }
-  if (d.dismiss !== undefined){ justAdded = null; render(); return; }
+  if (d.dismiss !== undefined){ justAdded = null; inviteFor = ''; render(); return; }
+  if (d.invite){ inviteFor = d.invite; justAdded = null; render(); const el = $('#invite'); if (el) el.scrollIntoView({ block: 'start' }); return; }
+  if (d.shareinvite || d.copyinvite){ const u = (data.users || []).find(x => x.id === (d.shareinvite || d.copyinvite)); if (!u) return;
+    if (d.shareinvite){ navigator.share({ title: 'Peregrine team app', text: inviteText(u).replace(inviteLink(u), '').replace(/\n\n\n/, '\n\n'), url: inviteLink(u) }).catch(() => {}); return; }
+    (navigator.clipboard ? navigator.clipboard.writeText(inviteText(u)) : Promise.reject()).then(() => toast('Invite copied – paste it in a text'), () => { const i = $('#invite .linkbox'); if (i){ i.select(); document.execCommand('copy'); toast('Link copied'); } }); return; }
   if (d.closesheet !== undefined){ sheet = null; render(); return; }
   if (d.taketest){ startTest(d.taketest); return; }
   if (d.closetest !== undefined){ if (runner && !runner.done && Object.keys(runner.a || {}).length && !confirm('Leave the test? Your answers stay saved on this phone.')) return; runner = null; render(); if (tab === 'tests') loadTests(); return; }
@@ -1494,7 +1533,7 @@ document.addEventListener('submit', async e => {
     const name = v('name'), code = v('code');
     if (!name || !/^\d{4}$/.test(code)){ toast('Type your first name and your 4-digit code'); return; }
     btn.disabled = true; btn.textContent = 'Signing in…';
-    try { const r = await post({ fn: 'signIn', name, code }); TOKEN = r.token; save('pt-token', TOKEN); save('pt-last', name); data = null; tab = 'today'; render(); refresh(); }
+    try { const r = await post({ fn: 'signIn', name, code }); TOKEN = r.token; save('pt-token', TOKEN); save('pt-last', invite ? first(name) : name); if (invite || /^#join=/.test(location.hash)) history.replaceState(null, '', location.pathname + location.search); invite = null; data = null; tab = 'today'; render(); refresh(); }
     catch (err) { btn.disabled = false; btn.textContent = 'Sign in'; toast(String(err.message || err) === 'timeout' ? 'The server took too long – try again' : String(err.message || err)); }
     return;
   }
@@ -1593,5 +1632,6 @@ if (theme() !== 'auto') setTheme(theme());
 let pendingGo = new URLSearchParams(location.search).get('go') || '';
 if (pendingGo) history.replaceState(null, '', location.pathname);
 if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', e => { if (e.data && e.data.go !== undefined) goTo(e.data.go); });
+if (invite && TOKEN){ const who = invite.n; invite = null; history.replaceState(null, '', location.pathname + location.search); setTimeout(() => toast('That invite is for ' + first(who) + ' – sign out first to use it on this phone'), 600); }
 render();
 if (TOKEN) refresh();
