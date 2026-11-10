@@ -1,13 +1,15 @@
 /**
- * team-data – fast loads for the Peregrine Team app.
+ * team-data – fast loads for the Peregrine Team app and Bellah Family HQ.
+ * Each app is a "space" (peregrine, family) with its own Durable Object and its own secret (DATA_SECRET_PEREGRINE, DATA_SECRET_FAMILY).
  *
  * The Google Sheet (Apps Script) is still where everything lives and where every save goes.
  * After changes it builds each person's app data (exactly what the app would get from the Sheet)
- * and pushes it here, signed with DATA_SECRET. The app then loads its data from here instead of
+ * and pushes it here, signed with that space's secret. The app then loads its data from here instead of
  * waiting on Google: one small read from Cloudflare instead of a cold start plus a dozen sheet reads.
  *
- * Sign-in: the app's token is checked here the same way the Sheet checks it (HMAC of user id, code,
- * sign-in version and issue time), using the people list and signing key the Sheet pushes.
+ * Sign-in: the app's sign-in is checked here the same way the Sheet checks it. For a signed sign-in
+ * ("X.<who>.<issued>.<sig>") the Sheet sends, per person, the text it signs before the issue time and the
+ * signing key, so this service can redo the HMAC. For a Family private link it sends only a SHA-256 of the link key.
  * Anything this service can't answer (no data yet, stale data, unknown token) it refuses, and the
  * app quietly asks the Sheet instead – so nothing breaks if this service is down or out of date.
  */
@@ -23,23 +25,24 @@ async function mac(secret, text) {
 function same(a, b) { a = String(a); b = String(b); if (a.length !== b.length) return false; let x = 0; for (let i = 0; i < a.length; i++) x |= a.charCodeAt(i) ^ b.charCodeAt(i); return x === 0; }
 const MAX_AGE = 20 * 60000;        // data older than this is refused (the Sheet pushes at least every 15 minutes)
 
+const SPACES = { peregrine: 'DATA_SECRET_PEREGRINE', family: 'DATA_SECRET_FAMILY' };
 export default {
   async fetch(req, env) {
     if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url = new URL(req.url);
     if (url.pathname === '/' || url.pathname === '/health') return json({ ok: true, service: 'team-data' });
-    if (!env.DATA_SECRET) return json({ error: 'DATA_SECRET is not set' }, 503);
-    const stub = env.STORE.get(env.STORE.idFromName('peregrine'));
-    if (url.pathname === '/push' && req.method === 'POST') {      // from the Sheet
+    const m = url.pathname.match(/^\/s\/(peregrine|family)\/(push|state)$/);
+    if (!m || req.method !== 'POST') return json({ error: 'not found' }, 404);
+    const [, space, what] = m, secret = env[SPACES[space]];
+    if (!secret) return json({ error: SPACES[space] + ' is not set', fallback: true }, 503);
+    const stub = env.STORE.get(env.STORE.idFromName(space));
+    if (what === 'push') {      // from the Sheet
       const body = await req.text();
-      if (!same(b64u(await mac(env.DATA_SECRET, body)), req.headers.get('x-sig') || '')) return json({ error: 'bad signature' }, 401);
+      if (!same(b64u(await mac(secret, body)), req.headers.get('x-sig') || '')) return json({ error: 'bad signature' }, 401);
       return stub.fetch('https://do/push', { method: 'POST', body });
     }
-    if (url.pathname === '/state' && req.method === 'POST') {     // from the app (text/plain body, so no CORS preflight)
-      let token = ''; try { token = String(JSON.parse(await req.text()).token || ''); } catch (_) {}
-      return stub.fetch('https://do/state', { method: 'POST', body: JSON.stringify({ token }) });
-    }
-    return json({ error: 'not found' }, 404);
+    let token = ''; try { token = String(JSON.parse(await req.text()).token || ''); } catch (_) {}   // from the app (text/plain body, so no CORS preflight)
+    return stub.fetch('https://do/state', { method: 'POST', body: JSON.stringify({ token }) });
   }
 };
 
@@ -61,17 +64,17 @@ export class Store {
     if (url.pathname === '/state') return this.state(b.token);
     return json({ error: 'not found' }, 404);
   }
-  /** b: { at, tz, today, tokenKey, reauthDays, roster: [{id, code, ver}], states: {id: json}, drop: [ids], full } */
+  /** b: { at, tz, today, tokenKey, roster: [{ id, match, pre, days }], states: {id: json} }
+     match: "T.<id>" / "S.<who>" for signed sign-ins (pre = the signed text before the issue time), "L.<sha256 of a private link key>" for links. */
   push(b) {
     if (!b || !Array.isArray(b.roster) || !b.tokenKey) return json({ error: 'bad push' }, 400);
-    const meta = { at: Number(b.at) || Date.now(), tz: String(b.tz || 'America/Chicago'), today: String(b.today || ''), tokenKey: String(b.tokenKey), reauthDays: Number(b.reauthDays) || 0,
-      roster: Object.fromEntries(b.roster.map(r => [String(r.id), { code: String(r.code), ver: Number(r.ver) || 1 }])) };
-    const now = Date.now();
+    const meta = { at: Number(b.at) || Date.now(), tz: String(b.tz || 'America/Chicago'), today: String(b.today || ''), tokenKey: String(b.tokenKey),
+      roster: Object.fromEntries(b.roster.filter(r => r && r.id && r.match).map(r => [String(r.match), { id: String(r.id), pre: String(r.pre || ''), days: Number(r.days) || 0 }])) };
+    const now = Date.now(), ids = [...new Set(Object.values(meta.roster).map(r => r.id))];
     this.ctx.storage.transactionSync(() => {
       this.sql.exec("INSERT OR REPLACE INTO meta (k, v) VALUES ('m', ?)", JSON.stringify(meta));
       Object.entries(b.states || {}).forEach(([id, s]) => this.sql.exec('INSERT OR REPLACE INTO states (id, json, at) VALUES (?, ?, ?)', id, typeof s === 'string' ? s : JSON.stringify(s), meta.at));
       // anyone no longer on the list (turned off, removed) loses their copy; everyone else's copy is marked as checked just now
-      const ids = Object.keys(meta.roster);
       [...this.sql.exec('SELECT id FROM states')].forEach(r => { if (ids.indexOf(r.id) < 0) this.sql.exec('DELETE FROM states WHERE id = ?', r.id); });
       this.sql.exec('UPDATE states SET at = ?', meta.at);
     });
@@ -80,12 +83,21 @@ export class Store {
     const have = [...this.sql.exec('SELECT id FROM states')].map(r => r.id);
     return json({ ok: true, stored: Object.keys(b.states || {}).length, ms: Date.now() - now, seen, have });
   }
+  async who(meta, token) {
+    token = String(token || ''); if (!token || token.length > 400) return null;
+    const p = token.split('.');
+    if (p.length === 4 && /^[A-Z]$/.test(p[0])) {
+      const r = meta.roster[p[0] + '.' + p[1]]; if (!r || !r.pre || !/^\d+$/.test(p[2])) return null;
+      if (!same(hex(await mac(meta.tokenKey, r.pre + p[2])).slice(0, 32), p[3])) return null;
+      if (r.days > 0 && Date.now() - Number(p[2]) > r.days * 864e5) return null;
+      return r.id;
+    }
+    const r = meta.roster['L.' + hex(await crypto.subtle.digest('SHA-256', enc.encode(token)))];
+    return r ? r.id : null;
+  }
   async state(token) {
     const meta = this.getMeta(); if (!meta) return json({ error: 'no data yet', fallback: true }, 409);
-    const [t, id, issued, sig] = String(token || '').split('.'), r = meta.roster[id];
-    if (t !== 'T' || !id || !r || !issued || !sig) return json({ error: 'unknown', fallback: true }, 401);
-    if (!same(hex(await mac(meta.tokenKey, [id, r.code, r.ver, issued].join('|'))).slice(0, 32), sig)) return json({ error: 'unknown', fallback: true }, 401);
-    if (meta.reauthDays > 0 && Date.now() - Number(issued) > meta.reauthDays * 864e5) return json({ error: 'expired', fallback: true }, 401);
+    const id = await this.who(meta, token); if (!id) return json({ error: 'unknown', fallback: true }, 401);
     const row = [...this.sql.exec('SELECT json, at FROM states WHERE id = ?', id)][0];
     if (!row) return json({ error: 'no data for you yet', fallback: true }, 409);
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: meta.tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());

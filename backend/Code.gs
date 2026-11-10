@@ -65,7 +65,7 @@ const SETTINGS = [
   ['Push service secret',          '',                          'Must match SECRET in the Worker. Don\'t share it.'],
   ['Chat service address',         '',                          'Live Messages (Cloudflare team-chat Worker), e.g. https://team-chat….workers.dev. Blank = Messages run on this sheet (slower; messages saved in the Messages tab).'],
   ['Data service address',         '',                          'Fast loading (Cloudflare team-data Worker), e.g. https://team-data….workers.dev. Blank = the app loads straight from this sheet (slower).'],
-  ['Data service secret',          '',                          'Must match DATA_SECRET in the team-data Worker. Don\'t share it.'],
+  ['Data service secret',          '',                          'Must match DATA_SECRET_PEREGRINE in the team-data Worker. Don\'t share it.'],
   ['Chat service secret',          '',                          'Must match SECRET_PEREGRINE in the team-chat Worker. Don\'t share it.'],
   ['Push public key',              '',                          'Must match VAPID_PUBLIC in the Worker.'],
   ['Delete chat photos after (days)', '60',                     'Photos sent in Messages are deleted from Drive after this many days. The message stays, marked "Photo expired".'],
@@ -1434,9 +1434,11 @@ function pushData_(force) {
         hashes[me.id] = h; if (old[me.id] !== h) states[me.id] = txt;
       } catch (e) { console.warn('fast loading: couldn\'t build data for ' + me.name + ': ' + e); }
     });
-    const body = JSON.stringify({ at: started, tz, today, tokenKey: props.getProperty('SECRET') || 'x', reauthDays: Number(setting_(ss, 'Ask for the code again every') || 60),
-      roster: users.map(r => ({ id: String(r[6]), code: String(r[2]).trim(), ver: Number(r[7]) || 1 })), states });
-    const res = UrlFetchApp.fetch(setting_(ss, 'Data service address').replace(/\/+$/, '') + '/push', { method: 'post', contentType: 'application/json; charset=utf-8',
+    const days = Number(setting_(ss, 'Ask for the code again every') || 60);
+    // what sig_() signs before the issue time, so the Worker can check sign-ins the same way who_() does
+    const body = JSON.stringify({ at: started, tz, today, tokenKey: props.getProperty('SECRET') || 'x',
+      roster: users.map(r => ({ id: String(r[6]), match: 'T.' + r[6], pre: [r[6], String(r[2]).trim(), Number(r[7]) || 1, ''].join('|'), days })), states });
+    const res = UrlFetchApp.fetch(setting_(ss, 'Data service address').replace(/\/+$/, '') + '/s/peregrine/push', { method: 'post', contentType: 'application/json; charset=utf-8',
       payload: Utilities.newBlob(body).getBytes(), headers: { 'x-sig': chatSign_(setting_(ss, 'Data service secret'), body) }, muteHttpExceptions: true });
     if (res.getResponseCode() !== 200) throw new Error('The data service answered ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 200) + ' – check Settings › Data service address and secret');
     const out = JSON.parse(res.getContentText());
@@ -1459,7 +1461,7 @@ function setupFastLoading() {
   if (!String(rows[row('Data service secret') - 1][1]).trim()) { sh.getRange(row('Data service secret'), 2).setValue(newId_(40)); dirty_('Settings'); }
   if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'pushDataTick')) ScriptApp.newTrigger('pushDataTick').timeBased().everyMinutes(1).create();
   MEMO_ = {};
-  if (!dataLive_(ss)) { ui.alert('Almost there', 'Paste the team-data Worker address into Settings › Data service address, and put the Data service secret into the Worker (DATA_SECRET). Then run this again.', ui.ButtonSet.OK); return; }
+  if (!dataLive_(ss)) { ui.alert('Almost there', 'Paste the team-data Worker address into Settings › Data service address, and put the Data service secret into the Worker (DATA_SECRET_PEREGRINE). Then run this again.', ui.ButtonSet.OK); return; }
   try { const r = pushData_(true); ui.alert('Fast loading is on', 'Sent ' + r.people + ' people\'s data (' + r.kb + ' KB) in ' + (r.ms / 1000).toFixed(1) + 's. From now on the app loads from Cloudflare, and changes reach it within about a minute.', ui.ButtonSet.OK); }
   catch (e) { ui.alert('Fast loading isn\'t working yet', String(e.message || e), ui.ButtonSet.OK); }
 }

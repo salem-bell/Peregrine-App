@@ -125,7 +125,7 @@ async function edgeLoad(){
   const ctl = new AbortController(), rec = { ctl, at: Date.now(), read: true }, t0 = Date.now(), t = setTimeout(() => ctl.abort(), 6000);
   INFLIGHT.add(rec);
   try {
-    const r = await fetch(EDGE + '/state', { method: 'POST', body: JSON.stringify({ token: TOKEN }), signal: ctl.signal });
+    const r = await fetch(EDGE + '/s/peregrine/state', { method: 'POST', body: JSON.stringify({ token: TOKEN }), signal: ctl.signal });
     if (!r.ok) return null;
     const at = Number(r.headers.get('x-pushed-at') || 0), out = await r.json();
     if (!out || !out.ok || at < lastWriteAt) return null;

@@ -1,4 +1,4 @@
-# Fast loads for the Peregrine Team app.
+# Fast loads for the Peregrine Team app and Bellah Family HQ (one Durable Object per app).
 # The Google Sheet builds each person's app data and pushes it here; the app loads it from here in a fraction of a second.
 # Saves still go straight to the Sheet. One Durable Object with SQLite storage (works on the free plan).
 name = "team-data"
@@ -13,7 +13,7 @@ class_name = "Store"
 tag = "v1"
 new_sqlite_classes = ["Store"]
 
-# Secret (wrangler secret put DATA_SECRET): must match the Sheet's Settings › Data service secret.
+# Secrets (wrangler secret put …): DATA_SECRET_PEREGRINE, DATA_SECRET_FAMILY – each must match that sheet's Settings › Data service secret.
 
 [observability]
 enabled = true

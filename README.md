@@ -36,7 +36,7 @@ Everyone uses the same app address. Each person signs in with their **first name
 6. **Team › 2. Show sign-in codes** in the Sheet – send the app address to the team and each person their own code.
 
 **Updating the server later:** paste the new `Code.gs`, then Deploy › Manage deployments › pencil › Version: *New version* › Deploy (the URL stays the same).
-**Fast loading (optional):** `data-service/` is a Cloudflare Worker (`team-data`) that keeps a ready-made copy of each person's data so the app loads in well under a second. The Sheet pushes to it every minute when something changed (Team › *Fast loading: turn on / check* starts that). Saves still go to the Sheet. If the Worker is down or behind, the app loads from the Sheet as before. Deploy with `cd data-service && npx wrangler deploy`, then `npx wrangler secret put DATA_SECRET` (same value as Settings › *Data service secret*).
+**Fast loading (optional):** `data-service/` is a Cloudflare Worker (`team-data`) that keeps a ready-made copy of each person's data so the app loads in well under a second. The Sheet pushes to it every minute when something changed (Team › *Fast loading: turn on / check* starts that). Saves still go to the Sheet. If the Worker is down or behind, the app loads from the Sheet as before. Deploy with `cd data-service && npx wrangler deploy`, then `npx wrangler secret put DATA_SECRET_PEREGRINE` (same value as Settings › *Data service secret*).
 **Updating the app:** change files here and bump `VERSION` in `sw.js` so phones pick it up.
 
 ## Putting it on a phone
