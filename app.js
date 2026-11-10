@@ -3,8 +3,11 @@
 const API = window.PEREGRINE_API || '';
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const load = k => { try { return localStorage.getItem(k); } catch (_) { return null; } };
-const save = (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (_) {} };
+// Each location (Richardson, Westcliffe) is its own copy of the app on the same web address, so everything this phone keeps
+// is named per location (config.js sets PT_NS, e.g. "wc-"): someone who works at both stays signed in to both, separately.
+const NS = window.PT_NS || '';
+const load = k => { try { return localStorage.getItem(NS + k); } catch (_) { return null; } };
+const save = (k, v) => { try { v === null ? localStorage.removeItem(NS + k) : localStorage.setItem(NS + k, v); } catch (_) {} };
 const WIDE = window.matchMedia('(min-width: 1000px)'); const wide = () => WIDE.matches;
 const standalone = () => window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
 const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -29,7 +32,7 @@ function LiveChat(o){   // o: { url, space, ticket: () => Promise<{ticket, exp}>
     if (pass && pass.exp * 1000 - Date.now() > 5 * 60000) return pass.ticket;
     pass = await o.ticket();
     // kept where the notification handler can reach it, so a notification arriving counts as "Delivered"
-    try { const c = await caches.open('chat-pass'); await c.put('/chat-pass', new Response(JSON.stringify({ url: base(), space: o.space, ticket: pass.ticket, exp: pass.exp }))); } catch (_) {}
+    try { const c = await caches.open(NS + 'chat-pass'); await c.put('/chat-pass', new Response(JSON.stringify({ url: base(), space: o.space, ticket: pass.ticket, exp: pass.exp }))); } catch (_) {}
     return pass.ticket;
   }
   async function connect(){
@@ -80,7 +83,7 @@ function LiveChat(o){   // o: { url, space, ticket: () => Promise<{ticket, exp}>
     const b = await r.blob();
     return await new Promise((yes, no) => { const f = new FileReader(); f.onload = () => yes(f.result); f.onerror = () => no(new Error('Couldn\'t read the photo')); f.readAsDataURL(b); });
   }
-  function stop(){ try { caches.delete('chat-pass'); } catch (_) {} stopped = true; clearTimeout(wait); clearTimeout(idle); clearInterval(ping); if (ws) try { ws.close(1000); } catch (_) {} ws = null; up = false; }
+  function stop(){ try { caches.delete(NS + 'chat-pass'); } catch (_) {} stopped = true; clearTimeout(wait); clearTimeout(idle); clearInterval(ping); if (ws) try { ws.close(1000); } catch (_) {} ws = null; up = false; }
   document.addEventListener('visibilitychange', () => {
     if (stopped) return;
     clearTimeout(idle);
@@ -125,7 +128,7 @@ async function edgeLoad(){
   const ctl = new AbortController(), rec = { ctl, at: Date.now(), read: true }, t0 = Date.now(), t = setTimeout(() => ctl.abort(), 6000);
   INFLIGHT.add(rec);
   try {
-    const r = await fetch(EDGE + '/s/peregrine/state', { method: 'POST', body: JSON.stringify({ token: TOKEN }), signal: ctl.signal });
+    const r = await fetch(EDGE + '/s/' + ((data && data.space) || window.PT_SPACE || 'peregrine') + '/state', { method: 'POST', body: JSON.stringify({ token: TOKEN }), signal: ctl.signal });
     if (!r.ok) return null;
     const at = Number(r.headers.get('x-pushed-at') || 0), out = await r.json();
     if (!out || !out.ok || at < lastWriteAt) return null;
@@ -362,7 +365,7 @@ function viewSignIn(){
     ? `<div class="hint"><b>Put it on your home screen:</b> tap <b>Share</b> <span aria-hidden="true">⬆︎</span> at the bottom of Safari, then <b>Add to Home Screen</b>. Open it from there and sign in.</div>`
     : installEvt ? `<div class="hint"><b>Install the app</b> for one-tap access. <button class="btn sm go" data-install>Install</button></div>`
     : `<div class="hint"><b>Put it on your home screen:</b> in Chrome, tap <b>⋮</b> then <b>Add to Home screen</b> (or <b>Install app</b>).</div>`) : '';
-  return `<div class="signin"><img class="logo" src="brand/falcon.png" alt=""><p class="big">${esc((data && data.name) || load('pt-shop') || 'Peregrine')}</p><p class="sub" style="text-align:center;margin:0 0 18px">Team sign-in</p>
+  return `<div class="signin"><img class="logo" src="brand/falcon.png" alt=""><p class="big">${esc((data && data.name) || load('pt-shop') || window.PT_NAME || 'Peregrine')}</p><p class="sub" style="text-align:center;margin:0 0 18px">Team sign-in</p>
     ${invite && invite.err ? `<div class="hint">${esc(invite.err)}</div>` : ''}${hint}<div class="card"><form class="stack" data-form="signin">
       <label class="f">First name<input name="name" autocomplete="username" autocapitalize="words" spellcheck="false" maxlength="60" value="${esc(load('pt-last') || '')}"></label>
       <label class="f">4-digit code<input name="code" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="current-password" class="code" style="text-align:center"></label>
@@ -372,7 +375,7 @@ function viewSignIn(){
 
 /** What someone sees when they open their invite link: add phone + email, and the account is made. */
 function viewWelcome(){
-  const i = invite, shop = esc(i.shop || (data && data.name) || load('pt-shop') || 'Peregrine');
+  const i = invite, shop = esc(i.shop || (data && data.name) || load('pt-shop') || window.PT_NAME || 'Peregrine');
   if (!i.first) return `<div class="signin"><img class="logo" src="brand/falcon.png" alt=""><p class="big">Welcome</p><div class="empty">Opening your invite…</div></div>`;
   return `<div class="signin"><img class="logo" src="brand/falcon.png" alt=""><p class="big">Welcome, ${esc(i.first)}</p><p class="sub" style="text-align:center;margin:0 0 18px">Set up your ${shop} team account</p>
     <div class="card"><form class="stack" data-form="join">
@@ -933,7 +936,7 @@ function liveSync(){
   if (!url){ liveEnd(); return; }
   if (liveList) data.channels = liveList;          // the sheet no longer sends the list; the service does
   if (LIVE) return;
-  LIVE = LiveChat({ url, space: 'peregrine', ticket: () => post({ fn: 'chatTicket', token: TOKEN }), on: liveOn,
+  LIVE = LiveChat({ url, space: data.space || 'peregrine', ticket: () => post({ fn: 'chatTicket', token: TOKEN }), on: liveOn,
     onUp: () => { if (chat.open && tab === 'chat' && !document.hidden) openChat(chat.open); } });
 }
 function liveEnd(){ if (LIVE){ LIVE.stop(); LIVE = null; } liveList = null; liveOnline = new Set(); }
@@ -1198,10 +1201,10 @@ async function openPdf(id){
   try {
     const r = await post({ fn: 'file', token: TOKEN, id });
     const bin = atob(r.data); bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    try { const c = await caches.open('pt-files'); await c.put(key, new Response(bytes, { headers: { 'Content-Type': 'application/pdf' } })); } catch (_) {}
+    try { const c = await caches.open(NS + 'pt-files'); await c.put(key, new Response(bytes, { headers: { 'Content-Type': 'application/pdf' } })); } catch (_) {}
   } catch (e) {
     const m = String(e.message || e); if (/^signin/.test(m)) return signOut(m.replace(/^signin:\s*/, ''));
-    try { const c = await caches.open('pt-files'), hit = await c.match(key); if (hit) { bytes = new Uint8Array(await hit.arrayBuffer()); fromCache = true; } } catch (_) {}
+    try { const c = await caches.open(NS + 'pt-files'), hit = await c.match(key); if (hit) { bytes = new Uint8Array(await hit.arrayBuffer()); fromCache = true; } } catch (_) {}
     if (!bytes) { viewer = null; render(); toast(m === 'timeout' ? 'That file took too long – try again' : m); return; }
   }
   if (!viewer || viewer.id !== id) return;
@@ -1349,14 +1352,14 @@ function syncBadge(){
   const n = data && data.channels ? data.channels.reduce((a, c) => a + (Number(c.unread) || 0), 0) : 0;
   if (n === lastBadge) return; lastBadge = n;
   try { if ('setAppBadge' in navigator) (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {}); } catch (_) {}
-  try { caches.open('chat-pass').then(c => c.put('/badge', new Response(String(n)))).catch(() => {}); } catch (_) {}   // the notification handler counts up from here
+  try { caches.open(NS + 'chat-pass').then(c => c.put('/badge', new Response(String(n)))).catch(() => {}); } catch (_) {}   // the notification handler counts up from here
 }
 function render(){
   syncBadge();
   if (rowDrag){ rowDrag.later = true; return; }       // don't redraw under a finger mid-drag
   $('#offline').hidden = !offline;
   if (joined && TOKEN){ $('#tabs').hidden = true; $('#refresh').hidden = true; $('#overlay').innerHTML = ''; $('#main').innerHTML = viewJoined(); return; }
-  if (!TOKEN || !data){ $('#tabs').hidden = true; $('#refresh').hidden = true; $('#overlay').innerHTML = ''; $('#shop').textContent = load('pt-shop') || 'Peregrine'; $('#main').innerHTML = TOKEN ? '<div class="empty">Loading…</div>' : viewSignIn(); return; }
+  if (!TOKEN || !data){ $('#tabs').hidden = true; $('#refresh').hidden = true; $('#overlay').innerHTML = ''; $('#shop').textContent = load('pt-shop') || window.PT_NAME || 'Peregrine'; $('#main').innerHTML = TOKEN ? '<div class="empty">Loading…</div>' : viewSignIn(); return; }
   data.meId = data.me.id;
   const short = String(data.name || 'Peregrine').replace(/\s+(coffee|roasters?|roastery|co\.?)\b.*$/i, '') || data.name; $('#shop').textContent = short; save('pt-shop', short); $('#refresh').hidden = false;
   const gate = mustRead();
@@ -1649,7 +1652,7 @@ setInterval(() => { if (!document.hidden && TOKEN && !pending && !typing() && !s
 window.addEventListener('online', () => { unstick(); if (TOKEN) refresh(); });
 window.addEventListener('pageshow', e => { if (e.persisted && TOKEN){ unstick(); refresh(); } });   // reopened from the phone's app switcher
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; if (!TOKEN) render(); });
-if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register(window.PT_SW || 'sw.js').catch(() => {});
 
 if (theme() !== 'auto') setTheme(theme());
 let pendingGo = new URLSearchParams(location.search).get('go') || '';

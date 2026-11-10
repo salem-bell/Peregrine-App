@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '3.6';
+const VERSION = '3.7';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Off'];
 
@@ -64,6 +64,7 @@ const SETTINGS = [
   ['Push service address',         '',                          'Your Cloudflare Worker address (https://peregrine-push….workers.dev). Blank = no push notifications.'],
   ['Push service secret',          '',                          'Must match SECRET in the Worker. Don\'t share it.'],
   ['Chat service address',         '',                          'Live Messages (Cloudflare team-chat Worker), e.g. https://team-chat….workers.dev. Blank = Messages run on this sheet (slower; messages saved in the Messages tab).'],
+  ['Location key',                 'peregrine',                 'Keeps each location apart on the Cloudflare chat and fast-loading services: peregrine for Richardson, westcliffe for Westcliffe. Change only when setting up a new location.'],
   ['Data service address',         '',                          'Fast loading (Cloudflare team-data Worker), e.g. https://team-data….workers.dev. Blank = the app loads straight from this sheet (slower).'],
   ['Data service secret',          '',                          'Must match DATA_SECRET_PEREGRINE in the team-data Worker. Don\'t share it.'],
   ['Chat service secret',          '',                          'Must match SECRET_PEREGRINE in the team-chat Worker. Don\'t share it.'],
@@ -351,7 +352,7 @@ function state_(ss, me, slim) {
   if (isMgr && rv_(ss, 'Users').some(r => String(r[0]).trim() && (!r[6] || !/^\d{4}$/.test(String(r[2]))))) { fixUsers_(ss, false); dirty_('Users'); }
   const users = rv_(ss, 'Users').filter(r => String(r[0]).trim());
   const active = users.filter(r => truthy_(r[3])).map(r => String(r[0]));
-  const out = { ok: true, version: VERSION, today, updated: new Date().toISOString(), edge: dataLive_(ss) ? setting_(ss, 'Data service address').replace(/\/+$/, '') : '', name: setting_(ss, 'Shop name') || 'Team', me: { name: me.name, role: me.role, id: me.id, email: String(users.find(r => String(r[6]) === me.id)[5] || ''), reminders: remindMode_(ss, users.find(r => String(r[6]) === me.id)), cal: calKey_(users.find(r => String(r[6]) === me.id)) },
+  const out = { ok: true, version: VERSION, today, space: space_(ss), updated: new Date().toISOString(), edge: dataLive_(ss) ? setting_(ss, 'Data service address').replace(/\/+$/, '') : '', name: setting_(ss, 'Shop name') || 'Team', me: { name: me.name, role: me.role, id: me.id, email: String(users.find(r => String(r[6]) === me.id)[5] || ''), reminders: remindMode_(ss, users.find(r => String(r[6]) === me.id)), cal: calKey_(users.find(r => String(r[6]) === me.id)) },
     reminders: { on: !/^off$/i.test(setting_(ss, 'Shift reminder emails')), night: setting_(ss, 'Night-before reminder at') || '19:00', hours: Number(setting_(ss, 'Hours-before reminder')) || 2 }, team: active,
     people: users.filter(r => truthy_(r[3]) && r[6]).map(r => ({ id: String(r[6]), name: String(r[0]), role: role_(r[1]), onSchedule: onSched_(r), order: Number(r[12]) || 0 })) };
   out.active = activeMap_(ss, users, me);
@@ -1374,12 +1375,12 @@ function selfUrl_() { try { return ScriptApp.getService().getUrl().replace(/\/a\
 function chatRoster_(ss) {
   const users = rv_(ss, 'Users').filter(r => String(r[0]).trim() && r[6]);
   const seed = rv_(ss, 'Channels').filter(r => r[0] && r[1]).map(r => ({ id: String(r[0]), name: String(r[1]), kind: String(r[2] || 'channel'), members: String(r[3] || ''), who: String(r[4] || 'Everyone'), by: String(r[5] || '') }));
-  return { space: 'peregrine', relay: selfUrl_(), photoDays: Number(setting_(ss, 'Delete chat photos after (days)')) || 60,
+  return { space: space_(ss), relay: selfUrl_(), photoDays: Number(setting_(ss, 'Delete chat photos after (days)')) || 60,
     rules: { makeChannel: 1, editChannel: 1, deleteAny: 2, deleteOwn: false, whoLabels: { 0: 'Everyone', 1: 'Leads and managers', 2: 'Managers' }, channelHint: 'Only leads and managers can make channels – start a group instead' },
     people: users.map(r => ({ id: String(r[6]), name: String(r[0]).trim(), tier: chatTier_(role_(r[1])), ro: false, active: truthy_(r[3]) })), channels: seed };
 }
 function chatPost_(ss, path, obj) {
-  const url = setting_(ss, 'Chat service address').replace(/\/+$/, '') + '/s/peregrine/' + path, body = JSON.stringify(obj);
+  const url = setting_(ss, 'Chat service address').replace(/\/+$/, '') + '/s/' + space_(ss) + '/' + path, body = JSON.stringify(obj);
   const res = UrlFetchApp.fetch(url, { method: 'post', contentType: 'application/json; charset=utf-8', payload: Utilities.newBlob(body).getBytes(), headers: { 'x-sig': chatSign_(setting_(ss, 'Chat service secret'), body) }, muteHttpExceptions: true });
   if (res.getResponseCode() !== 200) throw new Error('The chat service answered ' + res.getResponseCode() + ' – check Settings › Chat service address and secret');
   return JSON.parse(res.getContentText());
@@ -1394,8 +1395,8 @@ function chatTicket_(token) {
   const ss = SpreadsheetApp.getActive(), me = who_(ss, token);
   if (!chatLive_(ss)) throw new Error('Live chat isn\'t set up (Settings › Chat service address)');
   chatSyncRoster_(ss);
-  const exp = Math.floor(Date.now() / 1000) + 86400, body = b64u_(Utilities.newBlob(JSON.stringify({ s: 'peregrine', u: me.id, n: me.name, t: chatTier_(me.role), ro: false, e: exp })).getBytes());
-  return { ok: true, url: setting_(ss, 'Chat service address').replace(/\/+$/, ''), space: 'peregrine', ticket: body + '.' + chatSign_(setting_(ss, 'Chat service secret'), body), exp };
+  const exp = Math.floor(Date.now() / 1000) + 86400, body = b64u_(Utilities.newBlob(JSON.stringify({ s: space_(ss), u: me.id, n: me.name, t: chatTier_(me.role), ro: false, e: exp })).getBytes());
+  return { ok: true, url: setting_(ss, 'Chat service address').replace(/\/+$/, ''), space: space_(ss), ticket: body + '.' + chatSign_(setting_(ss, 'Chat service secret'), body), exp };
 }
 function chatSystem_(ss, note) { chatSyncRoster_(ss); return chatPost_(ss, 'system', note); }
 /** Called by the chat service after a message: notify the people it lists (respecting their settings and @mentions). */
@@ -1418,6 +1419,8 @@ function chatPush_(payload, sig) {
    fraction of a second; saves still come here. At least every 14 minutes it re-sends so the Worker knows the data is current.
    If the Worker is down or behind, the app quietly loads from here instead.
    ============================================================ */
+/** This location's name on the Cloudflare services (Settings › Location key). */
+function space_(ss) { return (setting_(ss, 'Location key') || 'peregrine').toLowerCase().replace(/[^a-z]/g, '') || 'peregrine'; }
 function dataLive_(ss) { return !!(setting_(ss, 'Data service address') && setting_(ss, 'Data service secret')); }
 function pushDataTick() { try { pushData_(false); } catch (e) { console.warn('fast loading: ' + e); } }
 function pushData_(force) {
@@ -1442,7 +1445,7 @@ function pushData_(force) {
     // what sig_() signs before the issue time, so the Worker can check sign-ins the same way who_() does
     const body = JSON.stringify({ at: started, tz, today, tokenKey: props.getProperty('SECRET') || 'x',
       roster: users.map(r => ({ id: String(r[6]), match: 'T.' + r[6], pre: [r[6], String(r[2]).trim(), Number(r[7]) || 1, ''].join('|'), days })), states });
-    const res = UrlFetchApp.fetch(setting_(ss, 'Data service address').replace(/\/+$/, '') + '/s/peregrine/push', { method: 'post', contentType: 'application/json; charset=utf-8',
+    const res = UrlFetchApp.fetch(setting_(ss, 'Data service address').replace(/\/+$/, '') + '/s/' + space_(ss) + '/push', { method: 'post', contentType: 'application/json; charset=utf-8',
       payload: Utilities.newBlob(body).getBytes(), headers: { 'x-sig': chatSign_(setting_(ss, 'Data service secret'), body) }, muteHttpExceptions: true });
     if (res.getResponseCode() !== 200) throw new Error('The data service answered ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 200) + ' – check Settings › Data service address and secret');
     const out = JSON.parse(res.getContentText());

@@ -6,6 +6,11 @@ A phone app for the Peregrine Coffee Roasters team: checklists, schedule, announ
 - **Data:** a Google Sheet ("Peregrine Team"). Nothing about the team is stored in this repository.
 - **Server:** `backend/Code.gs`, a Google Apps Script bound to that Sheet. The app talks to it over HTTPS.
 
+## Locations
+- **Richardson** – https://salem-bell.github.io/Peregrine-App/ (sheet "Peregrine Team").
+- **Westcliffe** – https://salem-bell.github.io/Peregrine-App/westcliffe/ (sheet "Peregrine Westcliffe Team"). Same app files; `westcliffe/` holds only its own config.js (its sheet's web app address), manifest and service worker. Phones keep each location's sign-in and data apart (names start with `wc-`), so someone can be on both. Settings › *Location key* (`peregrine` / `westcliffe`) keeps them apart on the Cloudflare chat and fast-loading services.
+- Every app update reaches both. A new Code.gs goes into **both** sheets.
+
 ## Roles
 
 | | Staff | Lead | Manager |

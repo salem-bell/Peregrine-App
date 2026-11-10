@@ -13,7 +13,7 @@ class_name = "Store"
 tag = "v1"
 new_sqlite_classes = ["Store"]
 
-# Secrets (wrangler secret put …): DATA_SECRET_PEREGRINE, DATA_SECRET_FAMILY – each must match that sheet's Settings › Data service secret.
+# Secrets (wrangler secret put …): DATA_SECRET_PEREGRINE, DATA_SECRET_WESTCLIFFE, DATA_SECRET_FAMILY – each must match that sheet's Settings › Data service secret.
 
 [observability]
 enabled = true

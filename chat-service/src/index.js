@@ -1,7 +1,7 @@
 /**
  * team-chat – live messages for the Peregrine Team app and Bellah Family HQ.
  *
- * Each app is a "space" (family, peregrine) with its own Durable Object and SQLite database:
+ * Each app is a "space" (family, peregrine, westcliffe) with its own Durable Object and SQLite database:
  * channels, groups and private messages, read marks, who-has-read, search, photos (R2).
  * Apps connect over a WebSocket and get every change within a second.
  *
@@ -9,7 +9,7 @@
  * person, and pushes the list of people + roles ("roster") here, signed with the same per-space secret.
  * Notifications go back out through the sheet (it knows everyone's notification settings and phones).
  */
-const SPACES = { family: 'SECRET_FAMILY', peregrine: 'SECRET_PEREGRINE' };
+const SPACES = { family: 'SECRET_FAMILY', peregrine: 'SECRET_PEREGRINE', westcliffe: 'SECRET_WESTCLIFFE' };
 const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET,POST,OPTIONS', 'access-control-allow-headers': 'content-type,x-sig' };
 const json = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: { 'content-type': 'application/json', ...CORS } });
 const enc = new TextEncoder();
@@ -32,7 +32,7 @@ async function readTicket(env, space, t) {
 export default {
   async fetch(req, env) {
     if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
-    const url = new URL(req.url), m = url.pathname.match(/^\/s\/(family|peregrine)\/(ws|roster|system|photo|dlv)(?:\/([\w.-]+))?$/);
+    const url = new URL(req.url), m = url.pathname.match(/^\/s\/(family|peregrine|westcliffe)\/(ws|roster|system|photo|dlv)(?:\/([\w.-]+))?$/);
     if (url.pathname === '/' || url.pathname === '/health') return json({ ok: true, service: 'team-chat' });
     if (!m) return json({ error: 'not found' }, 404);
     const [, space, what, arg] = m, secret = env[SPACES[space]];

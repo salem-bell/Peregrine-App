@@ -1,13 +1,15 @@
 // Keeps the app shell on the phone so it opens instantly and works offline.
 // Bump VERSION whenever app files change so phones pick up the new version.
-const VERSION = 'pt-3.4.2';
-const SHELL = ['./', 'index.html', 'app.css', 'app.js', 'config.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'brand/bird-gold.png', 'brand/falcon.png', 'brand/branch.png'];
+// Another location (westcliffe/sw.js) loads this file after setting PT_NS (its cache names), PT_ROOT (where the shared files are) and PT_SHELL.
+const NS = self.PT_NS || '', ROOT = self.PT_ROOT || '';
+const VERSION = NS + 'pt-3.4.3';
+const SHELL = self.PT_SHELL || ['./', 'index.html', 'app.css', 'app.js', 'config.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'brand/bird-gold.png', 'brand/falcon.png', 'brand/branch.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));   // straight from the server, never the browser's cache
 });
 self.addEventListener('activate', e => {
-  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION && k !== 'pt-files' && k !== 'chat-pass').map(k => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k.indexOf(NS + 'pt-') === 0 && k !== VERSION && k !== NS + 'pt-files').map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
 // App files: try the network first (so updates show up), fall back to the saved copy when offline.
 // Requests to the server (Google) are never cached here.
@@ -28,14 +30,14 @@ self.addEventListener('fetch', e => {
 async function chatBadge(url){
   if (!/^\?go=chat:/.test(String(url || '')) || !self.navigator || !('setAppBadge' in self.navigator)) return;
   try {
-    const c = await caches.open('chat-pass'), r = await c.match('/badge'), n = (r ? Number(await r.text()) || 0 : 0) + 1;
+    const c = await caches.open(NS + 'chat-pass'), r = await c.match('/badge'), n = (r ? Number(await r.text()) || 0 : 0) + 1;
     await c.put('/badge', new Response(String(n))); await self.navigator.setAppBadge(n);
   } catch (_) {}
 }
 async function chatDelivered(url){
   const m = /^\?go=chat:(.+)$/.exec(String(url || '')); if (!m) return;
   try {
-    const c = await caches.open('chat-pass'), r = await c.match('/chat-pass'); if (!r) return;
+    const c = await caches.open(NS + 'chat-pass'), r = await c.match('/chat-pass'); if (!r) return;
     const p = await r.json(); if (!p.ticket || p.exp * 1000 < Date.now()) return;
     await fetch(p.url + '/s/' + p.space + '/dlv?t=' + encodeURIComponent(p.ticket), { method: 'POST', body: JSON.stringify({ ch: decodeURIComponent(m[1]) }) });
   } catch (_) {}
@@ -43,7 +45,7 @@ async function chatDelivered(url){
 self.addEventListener('push', e => {
   let d = {}; try { d = e.data ? e.data.json() : {}; } catch (_) { d = { body: e.data ? e.data.text() : '' }; }
   e.waitUntil(Promise.all([self.registration.showNotification(d.title || 'Peregrine', { body: d.body || '', tag: d.tag || undefined, renotify: !!d.tag,
-    icon: 'icons/icon-192.png', data: { go: String(d.url || '').replace(/^\?go=/, '') } }), chatDelivered(d.url), chatBadge(d.url)]));
+    icon: ROOT + 'icons/icon-192.png', data: { go: String(d.url || '').replace(/^\?go=/, '') } }), chatDelivered(d.url), chatBadge(d.url)]));
 });
 self.addEventListener('notificationclick', e => {
   e.notification.close();

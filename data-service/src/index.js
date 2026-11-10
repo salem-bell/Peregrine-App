@@ -1,6 +1,6 @@
 /**
  * team-data – fast loads for the Peregrine Team app and Bellah Family HQ.
- * Each app is a "space" (peregrine, family) with its own Durable Object and its own secret (DATA_SECRET_PEREGRINE, DATA_SECRET_FAMILY).
+ * Each app is a "space" (peregrine, westcliffe, family) with its own Durable Object and its own secret (DATA_SECRET_PEREGRINE, …).
  *
  * The Google Sheet (Apps Script) is still where everything lives and where every save goes.
  * After changes it builds each person's app data (exactly what the app would get from the Sheet)
@@ -25,13 +25,13 @@ async function mac(secret, text) {
 function same(a, b) { a = String(a); b = String(b); if (a.length !== b.length) return false; let x = 0; for (let i = 0; i < a.length; i++) x |= a.charCodeAt(i) ^ b.charCodeAt(i); return x === 0; }
 const MAX_AGE = 20 * 60000;        // data older than this is refused (the Sheet pushes at least every 15 minutes)
 
-const SPACES = { peregrine: 'DATA_SECRET_PEREGRINE', family: 'DATA_SECRET_FAMILY' };
+const SPACES = { peregrine: 'DATA_SECRET_PEREGRINE', westcliffe: 'DATA_SECRET_WESTCLIFFE', family: 'DATA_SECRET_FAMILY' };
 export default {
   async fetch(req, env) {
     if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url = new URL(req.url);
     if (url.pathname === '/' || url.pathname === '/health') return json({ ok: true, service: 'team-data' });
-    const m = url.pathname.match(/^\/s\/(peregrine|family)\/(push|state)$/);
+    const m = url.pathname.match(/^\/s\/(peregrine|westcliffe|family)\/(push|state)$/);
     if (!m || req.method !== 'POST') return json({ error: 'not found' }, 404);
     const [, space, what] = m, secret = env[SPACES[space]];
     if (!secret) return json({ error: SPACES[space] + ' is not set', fallback: true }, 503);
