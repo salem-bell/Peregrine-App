@@ -11,7 +11,7 @@ const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.
 
 let TOKEN = load('pt-token') || '', data = null, offline = false, tab = load('pt-tab') || 'today';
 let listTab = '', schedMine = load('pt-mine') === '1', moreView = '', busy = {}, installEvt = null, showCode = {}, editUser = null, justAdded = null;
-let week = '', sheet = null, chat = { open: '', msgs: [], timer: null, sending: false, compose: '' }, tsWeek = '', tsPerson = '', viewer = null;
+let week = '', sheet = null, chat = { open: '', msgs: [], timer: null, sending: false, compose: '' }, tsWeek = '', tsPerson = '', viewer = null, tsMode = load('pt-tsmode') || 'week', tsDate = '';
 try { const c = load('pt-cache'); if (c && TOKEN) data = JSON.parse(c); } catch (_) {}
 
 /* ---------- server ---------- */
@@ -221,12 +221,12 @@ function lineup(){       // active people, manager-chosen order first, then by r
 const shown = p => p.onSchedule !== false;
 
 /* ---------- wage estimates (managers only; wages never reach staff phones) ---------- */
-const wageOf = n => { const u = (data.users || []).find(x => x.name === n); return u ? Number(u.wage) || 0 : 0; };
+const wageOf = n => { const u = (data.users || []).find(x => x.name === n); return u ? Number(u.wage) || 0 : (data.myPay && n === data.me.name ? Number(data.myPay.wage) || 0 : 0); };
 const money = (x, cents) => '$' + (cents ? (Math.round(x * 100) / 100).toFixed(2) : Math.round(x).toLocaleString());
 /** items: [{key, name, date, sort, h}] within one Mon–Sun week. Overtime past the weekly threshold, in time order, at the overtime rate. */
-function labor(items){
-  const P = data.pay || { ot: 40, otRate: 1.5, extra: 0 }, k = 1 + (Number(P.extra) || 0) / 100;
-  const out = { byKey: {}, byPerson: {}, byDay: {}, hoursByPerson: {}, ot: {}, total: 0, missing: [] }, groups = {};
+function labor(items, o){
+  const P = data.pay || data.myPay || { ot: 40, otRate: 1.5, extra: 0 }, k = o && o.noExtra ? 1 : 1 + (Number(P.extra) || 0) / 100;
+  const out = { byKey: {}, otByKey: {}, byPerson: {}, byDay: {}, hoursByPerson: {}, ot: {}, total: 0, missing: [] }, groups = {};
   items.forEach(i => (groups[i.name] = groups[i.name] || []).push(i));
   Object.keys(groups).forEach(n => {
     const w = wageOf(n); if (!w) out.missing.push(n);
@@ -235,7 +235,7 @@ function labor(items){
       const reg = Math.max(0, Math.min(i.h, P.ot - acc)), over = i.h - reg; acc += i.h;
       const c = (reg * w + over * w * P.otRate) * k;
       out.byKey[i.key] = c; out.byPerson[n] = (out.byPerson[n] || 0) + c; out.byDay[i.date] = (out.byDay[i.date] || 0) + c; out.total += c;
-      out.hoursByPerson[n] = acc; if (over > 0) out.ot[n] = (out.ot[n] || 0) + over;
+      out.hoursByPerson[n] = acc; if (over > 0){ out.ot[n] = (out.ot[n] || 0) + over; out.otByKey[i.key] = over; }
     });
   });
   return out;
@@ -243,6 +243,30 @@ function labor(items){
 const shiftItems = list => list.map(s => ({ key: s.id, name: s.name, date: s.date, sort: s.date + s.start, h: Math.max(0, mins(s.end) - mins(s.start)) / 60 }));
 const punchItems = list => list.filter(p => p.in && p.out).map(p => ({ key: p.id, name: p.name, date: p.date, sort: p.in, h: Math.max(0, new Date(p.out) - new Date(p.in)) / 36e5 }));
 const weekShifts = wk => (data.shifts || []).filter(s => notGone(s) && s.date >= wk && s.date <= plus(wk, 6));
+/** Punches with any open one counted up to right now (older than 16h = a missed clock-out, left out). */
+const punchesNow = name => (data.punches || []).filter(p => p.in && (!name || p.name === name))
+  .map(p => p.out ? p : Date.now() - new Date(p.in) < 16 * 36e5 ? Object.assign({}, p, { out: new Date().toISOString(), running: true }) : null).filter(Boolean);
+/** Hours and cost for the days from..to. Each Mon–Sun week is worked out whole (so overtime lands on the right days), then only the days in range are added up. */
+function costIn(items, from, to, o){
+  const out = { total: 0, hours: 0, byPerson: {}, byDay: {}, hoursByPerson: {}, hoursByDay: {}, ot: {}, missing: [] };
+  [...new Set(items.filter(i => i.date >= from && i.date <= to).map(i => monday(i.date)))].forEach(wk => {
+    const inWk = items.filter(i => i.date >= wk && i.date <= plus(wk, 6)), L = labor(inWk, o);
+    inWk.filter(i => i.date >= from && i.date <= to).forEach(i => { const c = L.byKey[i.key] || 0, n = i.name;
+      out.total += c; out.hours += i.h; out.byPerson[n] = (out.byPerson[n] || 0) + c; out.byDay[i.date] = (out.byDay[i.date] || 0) + c;
+      out.hoursByPerson[n] = (out.hoursByPerson[n] || 0) + i.h; out.hoursByDay[i.date] = (out.hoursByDay[i.date] || 0) + i.h;
+      if (L.otByKey[i.key]) out.ot[n] = (out.ot[n] || 0) + L.otByKey[i.key]; });
+    L.missing.forEach(n => { if (out.missing.indexOf(n) < 0) out.missing.push(n); });
+  });
+  return out;
+}
+/** The pay period a date falls in: Weekly, Every 2 weeks (from the "Pay period starts on" date) or Twice a month (1st–15th, 16th–end). */
+function periodOf(d){
+  const P = data.period || { kind: 'biweek', start: '' };
+  if (P.kind === 'semi'){ const ym = d.slice(0, 8), [y, m, dd] = d.split('-').map(Number); return dd <= 15 ? [ym + '01', ym + '15'] : [ym + '16', ym + pad(new Date(y, m, 0).getDate())]; }
+  const len = P.kind === 'week' ? 7 : 14, anchor = P.start || '2026-01-05', off = ((Math.round((pd(d) - pd(anchor)) / 864e5) % len) + len) % len, from = plus(d, -off);
+  return [from, plus(from, len - 1)];
+}
+const rangeOf = (mode, d) => mode === 'day' ? [d, d] : mode === 'period' ? periodOf(d) : [monday(d), plus(monday(d), 6)];
 /** Live estimate for the shift being edited, counting the rest of that person's week (so overtime shows up). */
 function shiftEstimate(f){
   const g = n => (f.elements.namedItem(n) || {}).value || '', name = g('name'), date = g('date'), start = g('start'), end = g('end');
@@ -255,13 +279,14 @@ function shiftEstimate(f){
 }
 
 /* ---------- time sheet logic ---------- */
-function weekReport(wk, name){
-  const days = Array.from({ length: 7 }, (_, i) => plus(wk, i)), now = new Date();
+function weekReport(wk, name){ return rangeReport(wk, plus(wk, 6), name); }
+function rangeReport(from, to, name){
+  const days = [], now = new Date(); for (let d = from; d <= to; d = plus(d, 1)) days.push(d);
   const people = name ? [name] : [...new Set((data.shifts || []).filter(s => days.includes(s.date)).map(s => s.name).concat((data.punches || []).filter(p => days.includes(p.date)).map(p => p.name)))].sort();
   const late = data.lateAfter || 5;
   return people.map(n => {
     const sh = (data.shifts || []).filter(s => live(s) && s.name === n && days.includes(s.date)), pu = (data.punches || []).filter(p => p.name === n && days.includes(p.date));
-    let sched = 0, worked = 0, lates = 0, noShow = 0, missingOut = 0; const lines = [];
+    let sched = 0, worked = 0, lates = 0, noShow = 0, missingOut = 0, running = false; const lines = [];
     sh.forEach(s => {
       sched += mins(s.end) - mins(s.start);
       const p = pu.find(x => x.shift === s.id) || pu.find(x => !x.shift && x.date === s.date);
@@ -273,11 +298,12 @@ function weekReport(wk, name){
     });
     pu.forEach(p => {
       if (p.in && p.out) worked += (new Date(p.out) - new Date(p.in)) / 6e4;
+      else if (p.in && !p.out && (now - new Date(p.in)) <= 16 * 36e5){ worked += (now - new Date(p.in)) / 6e4; running = true; }
       else if (p.in && !p.out && (now - new Date(p.in)) > 16 * 36e5) missingOut++;
       if (!lines.some(l => l.punch === p)) lines.push({ date: p.date, shift: null, punch: p, unscheduled: true });
     });
     lines.sort((a, b) => (a.date + (a.shift ? a.shift.start : hmOf(a.punch.in))).localeCompare(b.date + (b.shift ? b.shift.start : hmOf(b.punch.in))));
-    return { name: n, sched, worked, lates, noShow, missingOut, unscheduled: lines.filter(l => l.unscheduled).length, lines };
+    return { name: n, sched, worked, running, lates, noShow, missingOut, unscheduled: lines.filter(l => l.unscheduled).length, lines };
   });
 }
 
@@ -308,7 +334,9 @@ function myNextShift(){ const now = new Date(); return (data.shifts || []).find(
 function clockCard(){
   const o = data.open, next = myNextShift();
   if (o) { const s = (data.shifts || []).find(x => x.id === o.shift);
-    return `<div class="card clock on"><div class="row"><div class="txt"><b>Clocked in · ${timeOf(o.in)}</b><div class="sub">${s ? 'Shift ' + t12(s.start) + '–' + t12(s.end) : 'Not on the schedule'}${o.inPlace && o.inPlace !== 'at the shop' ? ' · ' + esc(o.inPlace) : ''}</div></div><button class="btn warn" data-clock="out">Clock out</button></div></div>`; }
+    const w = wageOf(data.me.name), h = (Date.now() - new Date(o.in)) / 36e5;
+    return `<div class="card clock on"><div class="row"><div class="txt"><b>Clocked in · ${timeOf(o.in)}</b><div class="sub">${s ? 'Shift ' + t12(s.start) + '–' + t12(s.end) : 'Not on the schedule'}${o.inPlace && o.inPlace !== 'at the shop' ? ' · ' + esc(o.inPlace) : ''}</div></div><button class="btn warn" data-clock="out">Clock out</button></div>
+      <div class="row clockrun"><div class="txt"><span class="runclock" data-clocksince="${esc(o.in)}">${elapsed(o.in)}</span><div class="sub">on the clock${w ? ` · about <span data-paysince="${esc(o.in)}" data-pw="${w}">${money(h * w, true)}</span> so far` : ''}</div></div><button class="btn sm" data-more="time">My time ›</button></div></div>`; }
   const soon = next && next.date === T();
   return `<div class="card clock"><div class="row"><div class="txt"><b>${soon ? 'Your shift today · ' + t12(next.start) + '–' + t12(next.end) : 'Not clocked in'}</b><div class="sub">${soon ? esc(next.position || '') : next ? 'Next: ' + dayName(next.date) + ' ' + t12(next.start) : 'No shifts coming up'}</div></div><button class="btn go" data-clock="in">Clock in</button></div></div>`;
 }
@@ -330,7 +358,8 @@ function laborCard(){
       <div class="lc-stat"><b>${money(F.rate, true)}</b><span class="sub">per hour now</span></div></div>
     ${F.on.map(onRow).join('') || '<div class="empty">Nobody is clocked in.</div>'}
     ${notIn.length ? `<div class="row"><div class="txt"><b>Scheduled, not clocked in</b><div class="sub">${notIn.map(s => `${esc(first(s.name))} (${t12(s.start)})`).join(', ')}</div></div><span class="pill warn">${notIn.length}</span></div>` : ''}
-    ${doneLine}</div>
+    ${doneLine}
+    ${rowBtn(`data-tsday="${T()}"`, '<div class="txt"><b>Labor by day</b><div class="sub">Yesterday, tomorrow, any week</div></div><span>›</span>')}</div>
   <p class="sub">Estimate: hours × wage${k > 1 ? ' + ' + Math.round((k - 1) * 100) + '% extra' : ''}, no overtime. Payroll decides.${miss ? ` ${M ? 'No wage set for ' + F.missing.map(first).map(esc).join(', ') + '.' : miss + (miss > 1 ? ' people have' : ' person has') + ' no wage set, so the total is low.'}` : ''}</p>`;
 }
 function tickLabor(){       // keep the running numbers moving between refreshes, without redrawing the page
@@ -341,6 +370,15 @@ function tickLabor(){       // keep the running numbers moving between refreshes
   document.querySelectorAll('[data-psince]').forEach(e => { e.textContent = money((now - new Date(e.dataset.psince)) / 36e5 * Number(e.dataset.pw), true); });
 }
 setInterval(tickLabor, 15000);
+const elapsed = iso => { const t = Math.max(0, Math.floor((Date.now() - new Date(iso)) / 1000)); return Math.floor(t / 3600) + ':' + pad(Math.floor(t / 60) % 60) + ':' + pad(t % 60); };
+setInterval(() => {      // the live clock-in timer, every second, without redrawing the page
+  document.querySelectorAll('[data-clocksince]').forEach(e => { e.textContent = elapsed(e.dataset.clocksince); });
+  document.querySelectorAll('[data-paysince]').forEach(e => { e.textContent = money((Date.now() - new Date(e.dataset.paysince)) / 36e5 * Number(e.dataset.pw), true); });
+}, 1000);
+setInterval(() => {      // time sheets: keep hours and pay moving while someone is on the clock
+  if (!data || tab !== 'more' || moreView !== 'time' || sheet || viewer || document.hidden) return;
+  if ((data.punches || []).some(p => p.in && !p.out && Date.now() - new Date(p.in) < 16 * 36e5)) render();
+}, 30000);
 
 function viewToday(){
   const d = data, today = shiftsOn(T()).filter(live), next = myNextShift();
@@ -605,31 +643,54 @@ function viewAvail(){
     ${others.length ? `<h2>The team</h2>${others.map(n => `<div class="card"><div class="sec">${esc(n)}</div>${all.filter(a => a.name === n).map(row).join('')}</div>`).join('')}` : ''}`;
 }
 
-/* ----- time sheet ----- */
+/* ----- time sheet: day, week or pay period; a person's hours and pay, or (managers) everyone's labor ----- */
 function viewTime(){
-  if (!tsWeek) tsWeek = monday(T());
-  const lo = monday(plus(T(), -21));
-  const nav = `<div class="weeknav"><button class="btn sm" data-tsweek="-7" ${tsWeek <= lo ? 'disabled' : ''}>‹</button><div><b>${tsWeek === monday(T()) ? 'This week' : 'Week of ' + shortDay(tsWeek)}</b><div class="sub">${shortDay(tsWeek)} – ${shortDay(plus(tsWeek, 6))}</div></div><button class="btn sm" data-tsweek="7" ${tsWeek >= monday(T()) ? 'disabled' : ''}>›</button></div>`;
-  const line = (l, canEdit) => { const p = l.punch, s = l.shift;
-    const flags = [l.noShow ? ['warn', 'No-show'] : null, l.lateBy > (data.lateAfter || 5) ? ['warn', 'Late ' + l.lateBy + ' min'] : null, l.unscheduled ? ['mute', 'Not scheduled'] : null,
-      p && !p.out && (Date.now() - new Date(p.in)) > 16 * 36e5 ? ['warn', 'No clock-out'] : null, p && p.inPlace && /^away/.test(p.inPlace) ? ['mute', 'Clocked in ' + p.inPlace] : null, p && p.edited ? ['mute', 'Edited by ' + first(p.edited)] : null].filter(Boolean);
-    const inner = `<div class="txt"><b>${shortDay(l.date)}</b><div class="sub">${s ? 'Scheduled ' + t12(s.start) + '–' + t12(s.end) : ''}${s && p ? ' · ' : ''}${p ? 'Worked ' + timeOf(p.in) + '–' + (p.out ? timeOf(p.out) : '…') + (p.out ? ' (' + hrs((new Date(p.out) - new Date(p.in)) / 6e4) + ')' : '') : ''}${p && p.note ? ' · ' + esc(p.note) : ''}</div>${flags.length ? `<div style="margin-top:4px">${flags.map(([c, t]) => `<span class="pill ${c}">${esc(t)}</span>`).join(' ')}</div>` : ''}</div>`;
+  if (!tsDate) tsDate = T();
+  const [from, to] = rangeOf(tsMode, tsDate), lo = plus(T(), mgr() ? -70 : -35), hi = plus(T(), mgr() ? 55 : 13), today = T();
+  const span = from === to ? '' : shortDay(from) + ' – ' + shortDay(to);
+  const title = tsMode === 'day' ? dayName(from) : tsMode === 'week' ? (from === monday(today) ? 'This week' : from === monday(plus(today, -7)) ? 'Last week' : from === monday(plus(today, 7)) ? 'Next week' : 'Week of ' + shortDay(from))
+    : (today >= from && today <= to ? 'This pay period' : to < today ? 'Past pay period' : 'Next pay period');
+  const nav = `<div class="seg">${[['day', 'Day'], ['week', 'Week'], ['period', 'Pay period']].map(([k, n]) => `<button data-tsmode="${k}" aria-pressed="${tsMode === k}">${n}</button>`).join('')}</div>
+    <div class="weeknav"><button class="btn sm" data-tsstep="-1" ${from <= lo ? 'disabled' : ''} aria-label="Earlier">‹</button><div><b>${title}</b><div class="sub">${tsMode === 'day' ? (dayName(from) === shortDay(from) ? '' : shortDay(from)) : span}${(tsMode === 'day' ? from : to) !== today && !(today >= from && today <= to) ? ` · <button class="linkbtn" data-tsjump>Back to today</button>` : ''}</div></div><button class="btn sm" data-tsstep="1" ${to >= hi ? 'disabled' : ''} aria-label="Later">›</button></div>`;
+  const line = (l, canEdit) => { const p = l.punch, s = l.shift, run = p && !p.out && (Date.now() - new Date(p.in)) <= 16 * 36e5;
+    const flags = [l.noShow ? ['warn', 'No-show'] : null, l.lateBy > (data.lateAfter || 5) ? ['warn', 'Late ' + l.lateBy + ' min'] : null, l.unscheduled ? ['mute', 'Not scheduled'] : null, run ? ['ok', 'On the clock'] : null,
+      p && !p.out && !run ? ['warn', 'No clock-out'] : null, p && p.inPlace && /^away/.test(p.inPlace) ? ['mute', 'Clocked in ' + p.inPlace] : null, p && p.edited ? ['mute', 'Edited by ' + first(p.edited)] : null].filter(Boolean);
+    const inner = `<div class="txt"><b>${shortDay(l.date)}</b><div class="sub">${s ? 'Scheduled ' + t12(s.start) + '–' + t12(s.end) : ''}${s && p ? ' · ' : ''}${p ? 'Worked ' + timeOf(p.in) + '–' + (p.out ? timeOf(p.out) : run ? 'now' : '…') + (p.out || run ? ' (' + hrs(((p.out ? new Date(p.out) : new Date()) - new Date(p.in)) / 6e4) + ')' : '') : ''}${p && p.note ? ' · ' + esc(p.note) : ''}</div>${flags.length ? `<div style="margin-top:4px">${flags.map(([c, t]) => `<span class="pill ${c}">${esc(t)}</span>`).join(' ')}</div>` : ''}</div>`;
     return canEdit ? rowBtn(`data-editpunch="${p ? esc(p.id) : ''}" data-pdate="${l.date}" data-pname="${esc(tsPerson)}" data-pstart="${s ? s.start : ''}" data-pend="${s ? s.end : ''}"`, inner + '<span class="sub">Fix</span>') : `<div class="row">${inner}</div>`; };
-  if (!mgr() || tsPerson){
-    const who = mgr() ? tsPerson : data.me.name, r = weekReport(tsWeek, who)[0] || { sched: 0, worked: 0, lines: [] };
-    const pay = mgr() && wageOf(who) ? [labor(shiftItems(weekShifts(tsWeek).filter(s => s.name === who))), labor(punchItems((data.punches || []).filter(p => p.name === who && p.date >= tsWeek && p.date <= plus(tsWeek, 6))))] : null;
+  const shiftsIn = name => (data.shifts || []).filter(s => notGone(s) && (!name || s.name === name));
+
+  if (!mgr() || tsPerson){      // one person: hours and estimated pay (what they take home before taxes, no employer extras)
+    const who = mgr() ? tsPerson : data.me.name, r = rangeReport(from, to, who)[0] || { sched: 0, worked: 0, lines: [] }, w = wageOf(who);
+    const PW = costIn(punchItems(punchesNow(who)), from, to, { noExtra: true }), PS = costIn(shiftItems(shiftsIn(who)), from, to, { noExtra: true });
+    const future = from > today, ot = PW.ot[who];
     return `${back(mgr() ? 'time' : '')}<h1>${mgr() ? esc(who) : 'My time'}</h1>${nav}
-      <div class="card"><div class="row"><div class="txt">Scheduled</div><b>${hrs(r.sched)}</b>${pay ? `<span class="money">${money(pay[0].total)}</span>` : ''}</div><div class="row"><div class="txt">Worked</div><b>${hrs(r.worked)}</b>${pay ? `<span class="money">${money(pay[1].total)}</span>` : ''}</div>
-      ${pay ? `<div class="row"><div class="txt sub">At ${money(wageOf(who), true)}/h${pay[1].ot[who] ? ' · ' + hrs(pay[1].ot[who] * 60) + ' overtime' : ''}. Estimate only – payroll decides.</div></div>` : ''}</div>
-      <div class="card">${r.lines.map(l => line(l, mgr() && l.date <= T())).join('') || '<div class="empty">Nothing this week.</div>'}</div>
-      ${mgr() ? `<button class="btn" data-editpunch="" data-pdate="${T()}" data-pname="${esc(who)}">+ Add a missed punch</button>` : '<p class="sub">Something wrong? Tell a manager – they can fix punches.</p>'}`;
+      <div class="card laborcard"><div class="row lc-top">
+        <div class="lc-stat"><b>${future ? '–' : hrs(r.worked)}</b><span class="sub">worked</span></div>
+        ${w ? `<div class="lc-stat"><b>${future ? '–' : money(PW.total, true)}</b><span class="sub">est. pay</span></div>` : ''}
+        <div class="lc-stat"><b>${hrs(r.sched)}</b><span class="sub">scheduled${w ? ' · ' + money(PS.total) : ''}</span></div></div>
+        ${r.running ? '<div class="row"><div class="txt sub">On the clock now – this keeps counting until you clock out.</div><span class="pill ok">Live</span></div>' : ''}
+        <div class="row"><div class="txt sub">${w ? `At ${money(w, true)}/h${ot ? ' · includes ' + hrs(ot * 60) + ' overtime at ' + ((data.pay || data.myPay || {}).otRate || 1.5) + '×' : ''}. Before taxes – an estimate, payroll decides.` : mgr() ? `No wage set for ${esc(first(who))} – add it in Team to see pay.` : 'Your wage isn\'t in the app yet, so pay can\'t be estimated. Ask a manager to add it.'}</div></div></div>
+      <div class="card">${r.lines.map(l => line(l, mgr() && l.date <= today)).join('') || `<div class="empty">Nothing ${tsMode === 'day' ? 'this day' : 'in this ' + (tsMode === 'week' ? 'week' : 'pay period')}.</div>`}</div>
+      ${mgr() ? `<button class="btn" data-editpunch="" data-pdate="${from <= today && to >= today ? today : from}" data-pname="${esc(who)}">+ Add a missed punch</button>` : '<p class="sub">Something wrong? Tell a manager – they can fix punches.</p>'}`;
   }
-  const rep = weekReport(tsWeek), tot = rep.reduce((a, r) => ({ s: a.s + r.sched, w: a.w + r.worked }), { s: 0, w: 0 });
-  const LS = labor(shiftItems(weekShifts(tsWeek))), LW = labor(punchItems((data.punches || []).filter(p => p.date >= tsWeek && p.date <= plus(tsWeek, 6))));
+
+  // Managers: everyone's labor for the day / week / pay period – worked so far (live today) vs. scheduled
+  const rep = rangeReport(from, to), LW = costIn(punchItems(punchesNow()), from, to), LS = costIn(shiftItems(shiftsIn()), from, to);
+  const tot = { s: LS.hours * 60, w: rep.reduce((a, r) => a + r.worked, 0) }, future = from > today, k = 1 + (Number((data.pay || {}).extra) || 0) / 100;
+  const days = []; for (let d = from; d <= to; d = plus(d, 1)) days.push(d);
+  const byDay = tsMode === 'day' ? '' : `<h2>By day</h2><div class="card">${days.map(d => { const past = d <= today, wh = (LW.hoursByDay[d] || 0) * 60, sh = (LS.hoursByDay[d] || 0) * 60;
+      return rowBtn(`data-tsday="${d}" class="${d === today ? 'mine' : ''}"`, `<div class="txt"><b>${d === today ? 'Today' : shortDay(d)}</b><div class="sub">${past ? hrs(wh) + ' worked of ' + hrs(sh) + ' scheduled' : hrs(sh) + ' scheduled'}</div></div><span class="money">${past ? money(LW.byDay[d] || 0) : '<span class="sub">' + money(LS.byDay[d] || 0) + ' sched.</span>'}</span><span>›</span>`); }).join('')}</div>`;
+  const ppl = rep.filter(r => LS.hoursByPerson[r.name] || r.worked || r.lines.length);
   return `${back()}<h1>Time sheets</h1>${nav}
-    <div class="card"><div class="row"><div class="txt">Scheduled</div><b>${hrs(tot.s)}</b><span class="money">${money(LS.total)}</span></div><div class="row"><div class="txt">Worked</div><b>${hrs(tot.w)}</b><span class="money">${money(LW.total)}</span></div></div>
-    <div class="card">${rep.map(r => rowBtn(`data-tsperson="${esc(r.name)}"`, `<div class="txt"><b>${esc(r.name)}</b><div class="sub">${hrs(r.worked)} worked of ${hrs(r.sched)} scheduled${wageOf(r.name) ? ` · ${money(LW.byPerson[r.name] || 0)} of ${money(LS.byPerson[r.name] || 0)} est.` : ' · no wage set'}</div>
-      ${r.lates || r.noShow || r.missingOut || r.unscheduled ? `<div style="margin-top:4px">${[r.lates ? ['warn', r.lates + ' late'] : null, r.noShow ? ['warn', r.noShow + ' no-show'] : null, r.missingOut ? ['warn', r.missingOut + ' no clock-out'] : null, r.unscheduled ? ['mute', r.unscheduled + ' unscheduled'] : null].filter(Boolean).map(([c, t]) => `<span class="pill ${c}">${t}</span>`).join(' ')}</div>` : ''}</div><span>›</span>`)).join('') || '<div class="empty">No shifts or punches this week.</div>'}</div>
+    <div class="card laborcard"><div class="row lc-top">
+      <div class="lc-stat"><b>${future ? '–' : hrs(tot.w)}</b><span class="sub">worked</span></div>
+      <div class="lc-stat"><b>${future ? '–' : money(LW.total)}</b><span class="sub">labor cost</span></div>
+      <div class="lc-stat"><b>${hrs(tot.s)}</b><span class="sub">scheduled · ${money(LS.total)}</span></div></div>
+      ${rep.some(r => r.running) && from <= today && to >= today ? `<div class="row"><div class="txt sub">${rep.filter(r => r.running).length} on the clock now – worked hours and cost keep counting.</div><span class="pill ok">Live</span></div>` : ''}
+      ${!future ? `<div class="row"><div class="txt sub">${to < today && LS.total ? money(Math.abs(LW.total - LS.total)) + (LW.total >= LS.total ? ' over' : ' under') + ' the schedule. ' : ''}Hours × wage${k > 1 ? ' + ' + Math.round((k - 1) * 100) + '%' : ''}, overtime included. Estimate.${LW.missing.length || LS.missing.length ? ' No wage set for ' + [...new Set(LW.missing.concat(LS.missing))].map(first).map(esc).join(', ') + '.' : ''}</div></div>` : ''}</div>
+    ${byDay}
+    <h2>People</h2><div class="card">${ppl.map(r => rowBtn(`data-tsperson="${esc(r.name)}"`, `<div class="txt"><b>${esc(r.name)}${r.running ? ' <span class="pill ok">On</span>' : ''}</b><div class="sub">${future ? hrs((LS.hoursByPerson[r.name] || 0) * 60) + ' scheduled' : hrs(r.worked) + ' worked of ' + hrs((LS.hoursByPerson[r.name] || 0) * 60) + ' scheduled'}${wageOf(r.name) ? ` · ${future ? money(LS.byPerson[r.name] || 0) + ' sched.' : money(LW.byPerson[r.name] || 0) + ' of ' + money(LS.byPerson[r.name] || 0)}${LW.ot[r.name] ? ' · ' + hrs(LW.ot[r.name] * 60) + ' OT' : ''}` : ' · no wage set'}</div>
+      ${r.lates || r.noShow || r.missingOut || r.unscheduled ? `<div style="margin-top:4px">${[r.lates ? ['warn', r.lates + ' late'] : null, r.noShow ? ['warn', r.noShow + ' no-show'] : null, r.missingOut ? ['warn', r.missingOut + ' no clock-out'] : null, r.unscheduled ? ['mute', r.unscheduled + ' unscheduled'] : null].filter(Boolean).map(([c, t]) => `<span class="pill ${c}">${t}</span>`).join(' ')}</div>` : ''}</div><span>›</span>`)).join('') || '<div class="empty">No shifts or punches.</div>'}</div>
     <p class="sub">Late means clocking in more than ${data.lateAfter || 5} minutes after the shift start. Approved time off never counts as a no-show.</p>`;
 }
 function punchSheet(){
@@ -1184,7 +1245,7 @@ function viewMoreList(){
   const pill = n => n ? `<span class="pill warn" style="margin-right:8px">${n}</span>` : '';
   return `<h1>More</h1><div class="card">
       ${item('news', 'Announcements', '', pill(unreadN))}
-      ${item('time', mgr() ? 'Time sheets' : 'My time', mgr() ? 'Hours, late arrivals, missed punches' : 'Your hours vs. the schedule')}
+      ${item('time', mgr() ? 'Time sheets' : 'My time', mgr() ? 'Labor by day, week or pay period' : 'Your hours and estimated pay')}
       ${item('requests', 'Time off & swaps', '', pill(pendN))}
       ${item('avail', 'Availability', 'When you can\'t work')}
       ${data.push && data.push.ready ? item('push', 'Notifications', pushOn_() ? 'On for this ' + deviceKind() : 'Off on this ' + deviceKind()) : ''}
@@ -1268,7 +1329,10 @@ document.addEventListener('click', async e => {
   if (d.sview){ schedView = d.sview; save('pt-sview', schedView); render(); if (schedView === 'build') scrollToday(); return; }
   if (d.mine !== undefined){ schedMine = d.mine === '1'; save('pt-mine', schedMine ? '1' : '0'); render(); return; }
   if (d.week){ week = plus(week, Number(d.week)); render(); window.scrollTo(0, 0); scrollToday(); return; }
-  if (d.tsweek){ tsWeek = plus(tsWeek, Number(d.tsweek)); render(); return; }
+  if (d.tsmode){ tsMode = d.tsmode; save('pt-tsmode', tsMode); render(); return; }
+  if (d.tsstep){ const [f, t] = rangeOf(tsMode, tsDate || T()); tsDate = tsMode === 'day' ? plus(f, Number(d.tsstep)) : Number(d.tsstep) < 0 ? (tsMode === 'period' ? plus(f, -1) : plus(f, -7)) : plus(t, 1); render(); return; }
+  if (d.tsjump !== undefined){ tsDate = T(); render(); return; }
+  if (d.tsday){ tab = 'more'; save('pt-tab', tab); moreView = 'time'; tsMode = 'day'; tsDate = d.tsday; tsPerson = ''; window.scrollTo(0, 0); render(); return; }
   if (d.tsperson){ tsPerson = d.tsperson; window.scrollTo(0, 0); render(); return; }
   if (d.signout !== undefined){ if (confirm('Sign out on this phone?')) signOut(); return; }
   if (d.showcode){ showCode[d.showcode] = !showCode[d.showcode]; render(); return; }

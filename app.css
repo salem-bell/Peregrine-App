@@ -360,3 +360,7 @@ mark{background:rgba(210,146,41,.32);color:inherit;border-radius:3px;padding:0 1
 
 /* "Active now" dot on a person's avatar */
 .av{position:relative} .av.on::after{content:'';position:absolute;right:-1px;bottom:-1px;width:30%;height:30%;min-width:9px;min-height:9px;border-radius:50%;background:#2FB344;border:2px solid var(--paper);box-sizing:border-box}
+
+/* time sheets: live clock-in timer, back-to-today link */
+.clockrun{border-top:1px solid var(--line,rgba(0,0,0,.08))} .runclock{font:400 1.9rem/1.1 var(--head);letter-spacing:.04em;font-variant-numeric:tabular-nums}
+.linkbtn{all:unset;cursor:pointer;text-decoration:underline;color:inherit}

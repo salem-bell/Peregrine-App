@@ -57,6 +57,8 @@ const SETTINGS = [
   ['Overtime after (hours a week)', '40',                        'Wage estimates pay hours past this, Monday to Sunday, at the overtime rate.'],
   ['Overtime rate',                '1.5',                       'Multiplier for overtime hours.'],
   ['Labor cost extra (%)',         '0',                         'Optional. Added on top of wages in estimates, e.g. 10 for employer payroll taxes.'],
+  ['Pay period',                   'Every 2 weeks',             'Weekly, Every 2 weeks or Twice a month (1st–15th, 16th–end). Each person sees their hours and estimated pay for the current pay period under More › My time.'],
+  ['Pay period starts on',         '',                          'For Weekly or Every 2 weeks: the first day of any one pay period, e.g. 2026-11-02. Blank = periods start on Mondays.'],
   ['Inventory sheet',              'https://docs.google.com/spreadsheets/d/1sSGRYl669jFxZ7-3dLYgNNNnR2QXvwgpBJ28o160szU/edit', 'The Peregrine Inventory & Reorder sheet. Leads and managers count it in the app (Lists › Inventory).'],
   ['Inventory tabs',               'Coffee, In-house, Costco, Paper goods, Other', 'The tabs in that sheet that hold items (same columns: Item, Category, Vendor, Unit, On hand, Par, Case size, Counted on…).'],
   ['Push service address',         '',                          'Your Cloudflare Worker address (https://peregrine-push….workers.dev). Blank = no push notifications.'],
@@ -380,7 +382,7 @@ function state_(ss, me, slim) {
   }
   // Schedule
   const days = Math.min(Math.max(Number(setting_(ss, 'Schedule days shown')) || 14, 1), 60);
-  const first = addDays_(today, -21), last = addDays_(today, isLead ? 56 : days - 1);   // the past three weeks feed the time sheets
+  const first = addDays_(today, isMgr ? -70 : -35), last = addDays_(today, isLead ? 56 : days - 1);   // past weeks feed the time sheets, labor history and pay periods
   ensureShiftIds_(ss);
   const srows = rv_(ss, 'Shifts');
   // Staff only ever see the published version. Managers and leads see the working copy, marked draft / changed / removed.
@@ -435,6 +437,10 @@ function state_(ss, me, slim) {
 
   // Team (managers)
   if (isMgr) out.users = users.map(r => ({ id: String(r[6] || ''), name: String(r[0]), role: role_(r[1]), code: String(r[2] || ''), active: truthy_(r[3]), phone: String(r[4] || ''), email: String(r[5] || ''), reminders: remindMode_(ss, r), wage: Number(r[10]) || 0, onSchedule: onSched_(r), order: Number(r[12]) || 0 }));
+  // Pay period + each person's own wage, so everyone can see their hours and estimated pay (never anyone else's wage)
+  out.period = { kind: /twice|semi/i.test(setting_(ss, 'Pay period')) ? 'semi' : /week/i.test(setting_(ss, 'Pay period')) && !/2|two|bi/i.test(setting_(ss, 'Pay period')) ? 'week' : 'biweek', start: ymd_((rv_(ss, 'Settings').find(x => String(x[0]).trim() === 'Pay period starts on') || [])[1], tz) || '' };
+  if (!/^\d{4}-\d\d-\d\d$/.test(out.period.start)) out.period.start = '';
+  { const mine = users.find(r => String(r[0]).trim() === me.name); out.myPay = { wage: mine ? Number(mine[10]) || 0 : 0, ot: Number(setting_(ss, 'Overtime after (hours a week)')) || 40, otRate: Number(setting_(ss, 'Overtime rate')) || 1.5 }; }
   if (isMgr) out.pay = { ot: Number(setting_(ss, 'Overtime after (hours a week)')) || 40, otRate: Number(setting_(ss, 'Overtime rate')) || 1.5, extra: Number(setting_(ss, 'Labor cost extra (%)')) || 0 };
   return out;
 }
