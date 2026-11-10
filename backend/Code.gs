@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '3.5';
+const VERSION = '3.6';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Off'];
 
@@ -236,6 +236,8 @@ function doPost(e) {
   try {
     if (body.fn === 'info') return json_(info_());
     if (body.fn === 'signIn') return json_(signIn_(body.name, body.code));
+    if (body.fn === 'joinInfo') return json_(joinInfo_(body.invite));
+    if (body.fn === 'join') return json_(join_(body.invite, body.phone, body.email));
     if (body.fn === 'api') return json_(api_(body.token, body.p || {}));
     if (body.fn === 'chatTicket') return json_(chatTicket_(body.token));
     if (body.fn === 'chatPush') return json_(chatPush_(body.args && body.args[0], body.args && body.args[1]));
@@ -439,7 +441,7 @@ function state_(ss, me, slim) {
   }
 
   // Team (managers)
-  if (isMgr) out.users = users.map(r => ({ id: String(r[6] || ''), name: String(r[0]), role: role_(r[1]), code: String(r[2] || ''), active: truthy_(r[3]), phone: String(r[4] || ''), email: String(r[5] || ''), reminders: remindMode_(ss, r), wage: Number(r[10]) || 0, onSchedule: onSched_(r), order: Number(r[12]) || 0 }));
+  if (isMgr) out.users = users.map(r => ({ invite: r[6] ? inviteKey_(r) : '', joined: !!String(r[4] || '').replace(/\D/g, ''), id: String(r[6] || ''), name: String(r[0]), role: role_(r[1]), code: String(r[2] || ''), active: truthy_(r[3]), phone: String(r[4] || ''), email: String(r[5] || ''), reminders: remindMode_(ss, r), wage: Number(r[10]) || 0, onSchedule: onSched_(r), order: Number(r[12]) || 0 }));
   // Pay period + each person's own wage, so everyone can see their hours and estimated pay (never anyone else's wage)
   out.period = { kind: /twice|semi/i.test(setting_(ss, 'Pay period')) ? 'semi' : /week/i.test(setting_(ss, 'Pay period')) && !/2|two|bi/i.test(setting_(ss, 'Pay period')) ? 'week' : 'biweek', start: ymd_((rv_(ss, 'Settings').find(x => String(x[0]).trim() === 'Pay period starts on') || [])[1], tz) || '' };
   if (!/^\d{4}-\d\d-\d\d$/.test(out.period.start)) out.period.start = '';
@@ -514,12 +516,14 @@ function act_(ss, me, p, touched) {
       const name = clean_(p.name, 60); if (!name) throw new Error('Add a name');
       const sh = tab('Users'), rows = vals_(sh);
       if (rows.some(r => String(r[0]).trim().toLowerCase() === name.toLowerCase())) throw new Error('Someone called ' + name + ' is already on the team – add a last name or initial');
+      // With a phone number the code is its last 4 digits. Without one, a random code nobody is told – the person sets
+      // their phone (and so their code) themselves from their invite link.
       const used = {}; rows.forEach(r => { used[String(r[2])] = 1; });
-      const code = newCode_(used);
+      const code = String(p.phone || '').trim() ? phoneCode_(p.phone) : newCode_(used);
       const row = put_(sh, [name, role_(p.role), code, true, clean_(p.phone, 40), clean_(p.email, 120), newId_(16), 1, new Date(), '', wage_(p.wage), true, rows.reduce((m, x) => Math.max(m, Number(x[12]) || 0), 0) + 1]);
       sh.getRange(row, 3).setNumberFormat('@').setValue(code);
       audit('Added ' + name + ' as ' + role_(p.role));
-      return;
+      return { id: String(sh.getRange(row, 7).getValue()) };
     }
     case 'scheduleOrder': {                           // the order people appear on the schedule (drag to arrange)
       needMgr();
@@ -1464,4 +1468,48 @@ function setupFastLoading() {
   if (!dataLive_(ss)) { ui.alert('Almost there', 'Paste the team-data Worker address into Settings › Data service address, and put the Data service secret into the Worker (DATA_SECRET_PEREGRINE). Then run this again.', ui.ButtonSet.OK); return; }
   try { const r = pushData_(true); ui.alert('Fast loading is on', 'Sent ' + r.people + ' people\'s data (' + r.kb + ' KB) in ' + (r.ms / 1000).toFixed(1) + 's. From now on the app loads from Cloudflare, and changes reach it within about a minute.', ui.ButtonSet.OK); }
   catch (e) { ui.alert('Fast loading isn\'t working yet', String(e.message || e), ui.ButtonSet.OK); }
+}
+
+/* ============================================================
+   Invite links: a manager adds someone (a name is enough) and sends them their link. The person opens it, types their
+   phone number and email, and that creates their account: their code is the last 4 digits of their phone, and they're
+   signed in. Each link works once – using it changes the person's sign-in version, which also retires the link
+   (the Team screen then shows a fresh one, which lets them set it up again if they need to).
+   ============================================================ */
+function phoneCode_(phone) {
+  const d = String(phone || '').replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
+  if (d.length < 10) throw new Error('Type the whole phone number, area code first');
+  return d.slice(-4);
+}
+function inviteKey_(r) {
+  const sig = Utilities.computeHmacSha256Signature(['invite', r[6], Number(r[7]) || 1].join('|'), PropertiesService.getScriptProperties().getProperty('SECRET') || 'x')
+    .map(b => ('0' + ((b + 256) % 256).toString(16)).slice(-2)).join('').slice(0, 24);
+  return String(r[6]) + '.' + sig;
+}
+function inviteRow_(ss, invite) {
+  const id = String(invite || '').split('.')[0], rows = vals_(ss.getSheetByName('Users')), i = rows.findIndex(r => String(r[6]) === id && id);
+  if (i < 0 || !truthy_(rows[i][3]) || inviteKey_(rows[i]) !== String(invite)) throw new Error('This invite link has already been used or replaced. Already set up? Sign in with your first name and the last 4 digits of your phone. Otherwise ask a manager for a new link.');
+  return { r: rows[i], row: i + 2 };
+}
+function joinInfo_(invite) {
+  const ss = SpreadsheetApp.getActive(), { r } = inviteRow_(ss, invite);
+  return { ok: true, name: String(r[0]).trim(), first: String(r[0]).trim().split(' ')[0], shop: setting_(ss, 'Shop name') || 'Peregrine' };
+}
+function join_(invite, phone, email) {
+  const ss = SpreadsheetApp.getActive(), cache = CacheService.getScriptCache();
+  if (Number(cache.get('join_all') || 0) >= 30) throw new Error('Too many tries. Wait an hour and try again.');
+  cache.put('join_all', String(Number(cache.get('join_all') || 0) + 1), 3600);
+  const code = phoneCode_(phone), mail = clean_(email, 120);
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(mail)) throw new Error('Type your email address');
+  const lock = LockService.getScriptLock(); lock.waitLock(15000);
+  try {
+    const { r, row } = inviteRow_(ss, invite), sh = ss.getSheetByName('Users'), ver = (Number(r[7]) || 1) + 1;
+    sh.getRange(row, 3).setNumberFormat('@').setValue(code);
+    sh.getRange(row, 5, 1, 2).setValues([[clean_(phone, 40), mail]]);
+    sh.getRange(row, 8).setValue(ver);
+    SpreadsheetApp.flush(); dirty_('Users');
+    ss.getSheetByName('Audit') && ss.getSheetByName('Audit').appendRow([new Date(), String(r[0]), 'Set up their account from an invite link']);
+    const issued = String(Date.now()), r2 = r.slice(); r2[2] = code; r2[7] = ver;
+    return { ok: true, token: 'T.' + r[6] + '.' + issued + '.' + sig_(r2, issued), name: String(r[0]), role: role_(r[1]), code };
+  } finally { lock.releaseLock(); }
 }

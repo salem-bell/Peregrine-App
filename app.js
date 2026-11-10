@@ -342,47 +342,55 @@ function rangeReport(from, to, name){
   });
 }
 
-/* ---------- invite links: a manager sends one link; it opens the app with that person's name and code filled in ----------
-   The link is the app address + #join=<name and code>. The part after # never leaves the phone (it isn't sent to any server).
-   A new code for that person makes the old link stop working. */
-const b64uEnc = t => btoa(unescape(encodeURIComponent(t))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-const b64uDec = t => decodeURIComponent(escape(atob(t.replace(/-/g, '+').replace(/_/g, '/'))));
+/* ---------- invite links: a manager adds someone and sends them their link. The person opens it, types their phone and
+   email, and that creates their account – their code is the last 4 digits of their phone, and they're signed in.
+   The link is the app address + #join=<id.signature>; it holds no code, and it works once. ---------- */
 const appHome = () => location.origin + location.pathname.replace(/index\.html$/, '');
-const inviteLink = u => appHome() + '#join=' + b64uEnc(JSON.stringify({ n: u.name, c: u.code }));
-const inviteText = u => `Hi ${first(u.name)}! Here's the Peregrine team app – schedule, time clock, messages and checklists.\n\nOpen this link on your phone: ${inviteLink(u)}\n\nThen add it to your home screen. Your sign-in: first name ${first(u.name)}, code ${u.code}.`;
-let invite = null;
-try { const m = location.hash.match(/^#join=([\w-]+)/); if (m){ const j = JSON.parse(b64uDec(m[1])); if (j && j.n && /^\d{4}$/.test(String(j.c))) invite = { n: String(j.n).slice(0, 60), c: String(j.c) }; } } catch (_) {}
-if (invite && !(isIOS() && !standalone())) history.replaceState(null, '', location.pathname + location.search);   // iPhone: kept until they add it to the home screen
+const inviteLink = u => appHome() + '#join=' + u.invite;
+const inviteText = u => `Hi ${first(u.name)}! Here's the Peregrine team app – schedule, time clock, messages and checklists.\n\nOpen this link on your phone to set up your account: ${inviteLink(u)}\n\nYou'll add your phone number and email, and your sign-in code will be the last 4 digits of your phone.`;
+let invite = null, joined = null;   // invite: { key, first, name, shop, err } while setting up; joined: { first, code } right after
+{ const m = location.hash.match(/^#join=([\w]+\.[0-9a-f]{24})$/); if (m) invite = { key: m[1] }; }
+function loadInvite(){
+  post({ fn: 'joinInfo', invite: invite.key }).then(r => { if (invite){ Object.assign(invite, { first: r.first, name: r.name, shop: r.shop }); render(); } })
+    .catch(e => { if (invite){ invite.err = String(e.message || e) === 'timeout' ? 'The server took too long – reload to try again.' : String(e.message || e); render(); } });
+}
 
 /* ---------- screens ---------- */
 function viewSignIn(){
-  if (invite) return viewWelcome();
+  if (invite && !invite.err) return viewWelcome();
   const hint = !standalone() ? (isIOS()
     ? `<div class="hint"><b>Put it on your home screen:</b> tap <b>Share</b> <span aria-hidden="true">⬆︎</span> at the bottom of Safari, then <b>Add to Home Screen</b>. Open it from there and sign in.</div>`
     : installEvt ? `<div class="hint"><b>Install the app</b> for one-tap access. <button class="btn sm go" data-install>Install</button></div>`
     : `<div class="hint"><b>Put it on your home screen:</b> in Chrome, tap <b>⋮</b> then <b>Add to Home screen</b> (or <b>Install app</b>).</div>`) : '';
   return `<div class="signin"><img class="logo" src="brand/falcon.png" alt=""><p class="big">${esc((data && data.name) || load('pt-shop') || 'Peregrine')}</p><p class="sub" style="text-align:center;margin:0 0 18px">Team sign-in</p>
-    ${hint}<div class="card"><form class="stack" data-form="signin">
+    ${invite && invite.err ? `<div class="hint">${esc(invite.err)}</div>` : ''}${hint}<div class="card"><form class="stack" data-form="signin">
       <label class="f">First name<input name="name" autocomplete="username" autocapitalize="words" spellcheck="false" maxlength="60" value="${esc(load('pt-last') || '')}"></label>
       <label class="f">4-digit code<input name="code" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="current-password" class="code" style="text-align:center"></label>
       <button class="btn go">Sign in</button></form></div>
     <p class="sub" style="text-align:center">Don't know your code? Ask a manager.</p><i class="sprig" aria-hidden="true"></i></div>`;
 }
 
-/** What someone sees when they open their invite link. */
+/** What someone sees when they open their invite link: add phone + email, and the account is made. */
 function viewWelcome(){
-  const i = invite, fn = first(i.n), shop = esc((data && data.name) || load('pt-shop') || 'Peregrine');
-  const steps = standalone() ? '' : isIOS()
-    ? `<div class="card"><div class="row" style="display:block"><b>1. Put the app on your home screen</b><div class="sub" style="margin-top:4px">Tap <b>Share</b> <span aria-hidden="true">⬆︎</span> at the bottom of Safari, then <b>Add to Home Screen</b>, then <b>Add</b>.</div></div>
-        <div class="row" style="display:block"><b>2. Open Peregrine from your home screen and sign in</b><div class="sub" style="margin-top:4px">First name <b>${esc(fn)}</b> · code <span class="code">${esc(i.c)}</span><br>Screenshot this so you have it.</div></div></div>`
-    : `<div class="card"><div class="row" style="display:block"><b>1. Sign in below</b> – your name and code are already filled in.</div>
-        <div class="row" style="display:block"><b>2. Install the app</b><div class="sub" style="margin-top:4px">${installEvt ? '<button class="btn sm go" data-install>Install</button>' : 'In Chrome, tap <b>⋮</b> then <b>Add to Home screen</b> (or <b>Install app</b>).'}</div></div></div>`;
-  return `<div class="signin"><img class="logo" src="brand/falcon.png" alt=""><p class="big">Welcome, ${esc(fn)}</p><p class="sub" style="text-align:center;margin:0 0 18px">You're on the ${shop} team</p>
-    ${steps}<div class="card"><form class="stack" data-form="signin">
-      <label class="f">First name<input name="name" autocomplete="username" autocapitalize="words" spellcheck="false" maxlength="60" value="${esc(i.n)}"></label>
-      <label class="f">4-digit code<input name="code" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="current-password" class="code" style="text-align:center" value="${esc(i.c)}"></label>
-      <button class="btn go">${isIOS() && !standalone() ? 'Sign in here in Safari instead' : 'Sign in'}</button></form></div>
-    <p class="sub" style="text-align:center">Code not working? Ask a manager for a new link.</p><i class="sprig" aria-hidden="true"></i></div>`;
+  const i = invite, shop = esc(i.shop || (data && data.name) || load('pt-shop') || 'Peregrine');
+  if (!i.first) return `<div class="signin"><img class="logo" src="brand/falcon.png" alt=""><p class="big">Welcome</p><div class="empty">Opening your invite…</div></div>`;
+  return `<div class="signin"><img class="logo" src="brand/falcon.png" alt=""><p class="big">Welcome, ${esc(i.first)}</p><p class="sub" style="text-align:center;margin:0 0 18px">Set up your ${shop} team account</p>
+    <div class="card"><form class="stack" data-form="join">
+      <label class="f">Your name<input value="${esc(i.name)}" disabled></label>
+      <label class="f">Mobile phone<input name="phone" type="tel" inputmode="tel" autocomplete="tel" maxlength="20" placeholder="(214) 555-0123" required></label>
+      <label class="f">Email<input name="email" type="email" autocomplete="email" maxlength="120" placeholder="you@example.com" required></label>
+      <p class="sub" style="margin:0">Your sign-in code will be the <b>last 4 digits of your phone number</b>. Your email is for shift reminders.</p>
+      <button class="btn go">Create my account</button></form></div>
+    <p class="sub" style="text-align:center">Wrong name? Ask a manager for a new link.</p><i class="sprig" aria-hidden="true"></i></div>`;
+}
+/** Right after setting up: how to put the app on the home screen (on iPhone the home-screen app needs signing in once more). */
+function viewJoined(){
+  const j = joined, ios = isIOS() && !standalone();
+  return `<div class="signin"><img class="logo" src="brand/falcon.png" alt=""><p class="big">You're all set, ${esc(j.first)}</p>
+    <div class="card"><div class="row" style="display:block"><b>Your sign-in</b><div class="sub" style="margin-top:4px">First name <b>${esc(j.first)}</b> · code <span class="code">${esc(j.code)}</span> (the last 4 digits of your phone)</div></div>
+      ${standalone() ? '' : ios ? `<div class="row" style="display:block"><b>Put the app on your home screen</b><div class="sub" style="margin-top:4px">Tap <b>Share</b> <span aria-hidden="true">⬆︎</span> at the bottom of Safari, then <b>Add to Home Screen</b>, then <b>Add</b>. Open Peregrine from your home screen and sign in with the name and code above.</div></div>`
+        : `<div class="row" style="display:block"><b>Install the app</b><div class="sub" style="margin-top:4px">${installEvt ? '<button class="btn sm go" data-install>Install</button>' : 'In Chrome, tap <b>⋮</b> then <b>Add to Home screen</b> (or <b>Install app</b>).'}</div></div>`}</div>
+    <button class="btn go" data-joindone style="width:100%">${ios ? 'Keep using it in Safari' : 'Open the app'}</button><i class="sprig" aria-hidden="true"></i></div>`;
 }
 
 /** Must-read announcements cover the app until each one is acknowledged. */
@@ -1278,22 +1286,25 @@ const back = to => `<button class="btn sm" data-more="${to || ''}" style="margin
 function viewTeam(){
   const us = (data.users || []).slice().sort((a, b) => (b.active - a.active) || a.name.localeCompare(b.name));
   const added = justAdded && us.find(u => u.name === justAdded), inv = added || (inviteFor && us.find(u => u.id === inviteFor));
-  const addedCard = inv ? `<div class="hint" id="invite"><b>${added ? esc(inv.name) + ' is on the team.' : 'Invite ' + esc(inv.name)}</b>
-      <div class="sub" style="margin:4px 0 8px">Send this link. It opens the app with ${esc(first(inv.name))}'s name and code (<b>${esc(inv.code)}</b>) filled in, and shows how to put it on the home screen.</div>
+  const addedCard = inv && inv.invite ? `<div class="hint" id="invite"><b>${added ? esc(inv.name) + ' is on the team.' : 'Invite ' + esc(inv.name)}</b>
+      <div class="sub" style="margin:4px 0 8px">${inv.joined && !added ? `${esc(first(inv.name))} is already set up (code: last 4 digits of their phone). This link lets them set it up again – it changes their code to match the phone they type and signs them out on other phones.`
+        : `Send this link. ${esc(first(inv.name))} opens it, adds their phone number and email, and that creates their account – their code is the last 4 digits of their phone.`}</div>
       <input class="linkbox" readonly value="${esc(inviteLink(inv))}" aria-label="Invite link" onclick="this.select()">
       <div class="btns" style="margin-top:8px">${navigator.share ? `<button class="btn sm go" data-shareinvite="${esc(inv.id)}">Share…</button>` : ''}<button class="btn sm ${navigator.share ? '' : 'go'}" data-copyinvite="${esc(inv.id)}">Copy</button>
         ${inv.phone ? `<a class="btn sm" href="sms:${esc(inv.phone.replace(/[^\d+]/g, ''))}${isIOS() ? '&' : '?'}body=${encodeURIComponent(inviteText(inv))}">Text it</a>` : ''}
         ${inv.email ? `<a class="btn sm" href="mailto:${esc(inv.email)}?subject=${encodeURIComponent('Your Peregrine team app')}&body=${encodeURIComponent(inviteText(inv))}">Email it</a>` : ''}
         <button class="btn sm" data-dismiss>Done</button></div>
-      <div class="sub" style="margin-top:6px">Giving ${esc(first(inv.name))} a new code makes this link stop working – send a new one.</div></div>` : '';
+      <div class="sub" style="margin-top:6px">Each link works once.</div></div>`
+    : inv ? `<div class="hint" id="invite"><b>${esc(inv.name)} is on the team.</b> Their invite link appears here once the server is updated (paste the new Code.gs). <button class="btn sm" data-dismiss>Done</button></div>` : '';
   const form = u => `<form class="stack" data-form="user" ${u ? `data-id="${esc(u.id)}"` : ''}>
       <label class="f">Name<input name="name" maxlength="60" value="${esc(u ? u.name : '')}" placeholder="First and last name"></label>
       <label class="f">Role<select name="role">${['Staff', 'Lead', 'Manager'].map(r => `<option ${u && u.role === r ? 'selected' : ''}>${r}</option>`).join('')}</select></label>
-      <div class="two"><label class="f">Phone<input name="phone" type="tel" maxlength="40" value="${esc(u ? u.phone : '')}"></label><label class="f">Email<input name="email" type="email" maxlength="120" value="${esc(u ? u.email : '')}"></label></div>
+      <div class="two"><label class="f">Phone${u ? '' : ' (optional)'}<input name="phone" type="tel" maxlength="40" value="${esc(u ? u.phone : '')}"></label><label class="f">Email${u ? '' : ' (optional)'}<input name="email" type="email" maxlength="120" value="${esc(u ? u.email : '')}"></label></div>
+      ${u ? '' : '<p class="sub" style="margin:0">Leave these blank and they\'ll add them from their invite link. Their code is always the last 4 digits of their phone.</p>'}
       <label class="f">Hourly wage ($) – only managers see this<input name="wage" inputmode="decimal" maxlength="8" value="${u && u.wage ? Number(u.wage).toFixed(2) : ''}" placeholder="e.g. 15.50"></label>
       <div class="btns"><button class="btn go">${u ? 'Save' : 'Add to the team'}</button>${u ? '<button type="button" class="btn" data-canceledit>Cancel</button>' : ''}</div></form>`;
   const row = u => editUser === u.id ? `<div class="row" style="display:block;padding:0">${form(u)}</div>` : `<div class="row" style="display:block;${u.active ? '' : 'opacity:.55'}">
-      <div style="display:flex;gap:8px;align-items:center"><b style="flex:1">${esc(u.name)}</b><span class="pill ${u.role === 'Manager' ? 'warn' : u.role === 'Lead' ? 'ok' : 'mute'}">${esc(u.role)}</span>${u.active ? '' : '<span class="pill mute">Off</span>'}</div>
+      <div style="display:flex;gap:8px;align-items:center"><b style="flex:1">${esc(u.name)}</b><span class="pill ${u.role === 'Manager' ? 'warn' : u.role === 'Lead' ? 'ok' : 'mute'}">${esc(u.role)}</span>${u.active ? '' : '<span class="pill mute">Off</span>'}${u.active && u.invite && !u.joined ? '<span class="pill warn">Not set up yet</span>' : ''}</div>
       <div class="sub">${u.wage ? money(u.wage, true) + '/h · ' : ''}${u.email ? (u.reminders === 'Off' ? 'Reminders off' : 'Reminders: ' + esc(u.reminders)) : 'No email – no reminders'}</div><div class="sub">${u.phone ? esc(u.phone) + ' · ' : ''}Code ${showCode[u.id] ? `<b>${esc(u.code)}</b>` : '••••'} <button class="btn sm" data-showcode="${esc(u.id)}" style="padding:4px 8px;min-height:0">${showCode[u.id] ? 'Hide' : 'Show'}</button></div>
       <div class="btns" style="margin-top:8px">${u.active ? `<button class="btn sm go" data-invite="${esc(u.id)}">Invite link</button>` : ''}<button class="btn sm" data-edit="${esc(u.id)}">Edit</button><button class="btn sm" data-newcode="${esc(u.id)}" data-name="${esc(u.name)}">New code</button>
         <button class="btn sm" data-active="${esc(u.id)}" data-to="${u.active ? 0 : 1}" data-name="${esc(u.name)}">${u.active ? 'Turn off' : 'Turn on'}</button></div></div>`;
@@ -1344,6 +1355,7 @@ function render(){
   syncBadge();
   if (rowDrag){ rowDrag.later = true; return; }       // don't redraw under a finger mid-drag
   $('#offline').hidden = !offline;
+  if (joined && TOKEN){ $('#tabs').hidden = true; $('#refresh').hidden = true; $('#overlay').innerHTML = ''; $('#main').innerHTML = viewJoined(); return; }
   if (!TOKEN || !data){ $('#tabs').hidden = true; $('#refresh').hidden = true; $('#overlay').innerHTML = ''; $('#shop').textContent = load('pt-shop') || 'Peregrine'; $('#main').innerHTML = TOKEN ? '<div class="empty">Loading…</div>' : viewSignIn(); return; }
   data.meId = data.me.id;
   const short = String(data.name || 'Peregrine').replace(/\s+(coffee|roasters?|roastery|co\.?)\b.*$/i, '') || data.name; $('#shop').textContent = short; save('pt-shop', short); $('#refresh').hidden = false;
@@ -1408,6 +1420,7 @@ document.addEventListener('click', async e => {
   if (d.showcode){ showCode[d.showcode] = !showCode[d.showcode]; render(); return; }
   if (d.edit){ editUser = d.edit; render(); return; }
   if (d.canceledit !== undefined){ editUser = null; render(); return; }
+  if (d.joindone !== undefined){ joined = null; render(); return; }
   if (d.dismiss !== undefined){ justAdded = null; inviteFor = ''; render(); return; }
   if (d.invite){ inviteFor = d.invite; justAdded = null; render(); const el = $('#invite'); if (el) el.scrollIntoView({ block: 'start' }); return; }
   if (d.shareinvite || d.copyinvite){ const u = (data.users || []).find(x => x.id === (d.shareinvite || d.copyinvite)); if (!u) return;
@@ -1529,11 +1542,21 @@ document.addEventListener('submit', async e => {
   const f = e.target.closest('form[data-form]'); if (!f) return; e.preventDefault();
   const v = n => { const el = f.elements.namedItem(n); return el ? (el.type === 'checkbox' ? (el.checked ? '1' : '0') : el.value.trim()) : ''; };
   const kind = f.dataset.form, btn = f.querySelector('button.go');
+  if (kind === 'join'){
+    if (!/\d{3}\D*\d{4}\s*$/.test(v('phone')) || v('phone').replace(/\D/g, '').length < 10){ toast('Type your whole phone number, area code first'); return; }
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v('email'))){ toast('Type your email address'); return; }
+    btn.disabled = true; btn.textContent = 'Setting up…';
+    try { const r = await post({ fn: 'join', invite: invite.key, phone: v('phone'), email: v('email') });
+      TOKEN = r.token; save('pt-token', TOKEN); save('pt-last', first(r.name)); history.replaceState(null, '', location.pathname + location.search);
+      joined = { first: first(r.name), code: r.code }; invite = null; data = null; tab = 'today'; render(); refresh(); }
+    catch (err) { btn.disabled = false; btn.textContent = 'Create my account'; toast(String(err.message || err) === 'timeout' ? 'The server took too long – try again' : String(err.message || err)); }
+    return;
+  }
   if (kind === 'signin'){
     const name = v('name'), code = v('code');
     if (!name || !/^\d{4}$/.test(code)){ toast('Type your first name and your 4-digit code'); return; }
     btn.disabled = true; btn.textContent = 'Signing in…';
-    try { const r = await post({ fn: 'signIn', name, code }); TOKEN = r.token; save('pt-token', TOKEN); save('pt-last', invite ? first(name) : name); if (invite || /^#join=/.test(location.hash)) history.replaceState(null, '', location.pathname + location.search); invite = null; data = null; tab = 'today'; render(); refresh(); }
+    try { const r = await post({ fn: 'signIn', name, code }); TOKEN = r.token; save('pt-token', TOKEN); save('pt-last', name); if (/^#join=/.test(location.hash)) history.replaceState(null, '', location.pathname + location.search); invite = null; data = null; tab = 'today'; render(); refresh(); }
     catch (err) { btn.disabled = false; btn.textContent = 'Sign in'; toast(String(err.message || err) === 'timeout' ? 'The server took too long – try again' : String(err.message || err)); }
     return;
   }
@@ -1632,6 +1655,7 @@ if (theme() !== 'auto') setTheme(theme());
 let pendingGo = new URLSearchParams(location.search).get('go') || '';
 if (pendingGo) history.replaceState(null, '', location.pathname);
 if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', e => { if (e.data && e.data.go !== undefined) goTo(e.data.go); });
-if (invite && TOKEN){ const who = invite.n; invite = null; history.replaceState(null, '', location.pathname + location.search); setTimeout(() => toast('That invite is for ' + first(who) + ' – sign out first to use it on this phone'), 600); }
+if (invite && TOKEN){ invite = null; history.replaceState(null, '', location.pathname + location.search); setTimeout(() => toast('That invite link is for someone new – sign out first to use it on this phone'), 600); }
+else if (invite) loadInvite();
 render();
 if (TOKEN) refresh();
