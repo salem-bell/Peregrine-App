@@ -92,17 +92,29 @@ function LiveChat(o){   // o: { url, space, ticket: () => Promise<{ticket, exp}>
   return { send, ask, upload, photo, stop, get up(){ return up; } };
 }
 
-async function post(body){
+/* Requests out right now. A phone that sleeps mid-request (locked screen, app switched away) can leave a fetch hanging
+   with no answer ever coming – the app then sat on "Saving…" or old data until you closed it. When the app comes back,
+   anything that has been waiting more than a few seconds is cancelled and loads are tried again straight away. */
+const INFLIGHT = new Set();
+async function post(body, o){
   if (!API) throw new Error('This app isn\'t connected to its server yet (config.js).');
-  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 45000);
+  const isRead = body.fn === 'api' && !(body.p && (body.p.action || body.p.actions));
+  const ctl = new AbortController(), rec = { ctl, at: Date.now(), read: isRead }, t = setTimeout(() => ctl.abort(), isRead ? 20000 : 45000);
+  INFLIGHT.add(rec);
   try {
     const res = await fetch(API, { method: 'POST', body: JSON.stringify(body), signal: ctl.signal, redirect: 'follow' });   // text/plain: no CORS preflight
     const out = await res.json();
     if (out && out.error) throw new Error(out.error);
     return out;
-  } catch (e) { if (e.name === 'AbortError') throw new Error('timeout'); throw e; }
-  finally { clearTimeout(t); }
+  } catch (e) {
+    const m = e.name === 'AbortError' ? 'timeout' : String(e.message || e);
+    // a load that timed out, got cut off, or was cancelled after the phone slept: one quick retry (never for saves, which might already have gone through)
+    if (isRead && !(o && o.retried) && !/^signin/.test(m) && (m === 'timeout' || /fetch|network|load/i.test(m))) return post(body, { retried: true });
+    throw new Error(m);
+  }
+  finally { clearTimeout(t); INFLIGHT.delete(rec); }
 }
+function unstick(){ const now = Date.now(); INFLIGHT.forEach(r => { if (now - r.at > (r.read ? 4000 : 15000)) r.ctl.abort(); }); }
 // Answers can arrive out of order: show only the newest, and never let a background refresh overwrite a change that is still saving.
 let seqStarted = 0, seqShown = 0, pending = 0, lastAct = 0;
 // Batched saves (server 2.6+): edits queue up while one request is out, then go together in one request.
@@ -1547,9 +1559,10 @@ document.addEventListener('drop', e => {
 });
 WIDE.addEventListener && WIDE.addEventListener('change', () => { if (data) render(); });
 const typing = () => { const a = document.activeElement; return (a && /INPUT|TEXTAREA|SELECT/.test(a.tagName)) || !!runner; };
-document.addEventListener('visibilitychange', () => { if (LIVE && chat.open && tab === 'chat' && document.hidden) LIVE.send({ t: 'close' }); if (document.hidden || !TOKEN) return; if (chat.open && tab === 'chat') openChat(chat.open); else if (!pending && !typing() && !sheet) refresh(); });
+document.addEventListener('visibilitychange', () => { if (LIVE && chat.open && tab === 'chat' && document.hidden) LIVE.send({ t: 'close' }); if (document.hidden || !TOKEN) return; unstick(); if (chat.open && tab === 'chat') openChat(chat.open); else if (!pending && !typing() && !sheet) refresh(); });
 setInterval(() => { if (!document.hidden && TOKEN && !pending && !typing() && !sheet && !viewer && !chat.open) refresh(); }, 90000);
-window.addEventListener('online', () => { if (TOKEN) refresh(); });
+window.addEventListener('online', () => { unstick(); if (TOKEN) refresh(); });
+window.addEventListener('pageshow', e => { if (e.persisted && TOKEN){ unstick(); refresh(); } });   // reopened from the phone's app switcher
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; if (!TOKEN) render(); });
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 

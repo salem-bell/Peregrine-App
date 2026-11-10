@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '3.3';
+const VERSION = '3.4';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Off'];
 
@@ -1282,11 +1282,11 @@ function vals_(sh) { if (!sh || sh.getLastRow() < 2) return []; return sh.getRan
 /** Only the last n rows (logs that grow forever: messages, checklist log). */
 function tail_(sh, n) { if (!sh || sh.getLastRow() < 2) return []; const last = sh.getLastRow(), from = Math.max(2, last - n + 1); return sh.getRange(from, 1, last - from + 1, sh.getLastColumn()).getValues(); }
 
-/* ----- speed: reads are memoized per request and cached for a minute between requests.
+/* ----- speed: reads are memoized per request and cached for 10 minutes between requests.
    Every write through the app marks its tab dirty, and onEdit does the same for edits made by hand in the sheet,
    so nothing stale is shown. ----- */
 let MEMO_ = {};
-const CACHE_TTL_ = 90;
+const CACHE_TTL_ = 600;   // 10 min. Edits through the app and by hand in the sheet clear it right away; this only bounds other kinds of edits.
 function gen_(n) { return CacheService.getScriptCache().get('G:' + n) || '0'; }
 function dirty_(names) {
   const c = CacheService.getScriptCache();
@@ -1299,12 +1299,27 @@ function rv_(ss, n, tailRows) {
   const k = n + (tailRows ? '#' + tailRows : '');
   if (MEMO_[k]) return MEMO_[k];
   const c = CacheService.getScriptCache(), key = 'V' + VERSION + ':' + k + ':' + gen_(n) + ':' + gen_('*');
-  const hit = c.get(key);
+  const hit = cacheGet_(c, key);
   if (hit) { try { return (MEMO_[k] = unpack_(JSON.parse(hit))); } catch (e) {} }
   const sh = ss.getSheetByName(n), v = tailRows ? tail_(sh, tailRows) : vals_(sh);
   MEMO_[k] = v;
-  try { const t = JSON.stringify(pack_(v)); if (t.length < 95000) c.put(key, t, CACHE_TTL_); } catch (e) {}
+  try { cachePut_(c, key, JSON.stringify(pack_(v)), CACHE_TTL_); } catch (e) {}
   return v;
+}
+/* One cache entry holds at most 100 KB, so big tabs (Shifts, Time clock, Checklist log…) are split across several entries.
+   Before this, any tab over ~95 KB was never cached and was read from the sheet on every single load – the slow part. */
+const CHUNK_ = 90000, MAX_CHUNKS_ = 20;
+function cachePut_(c, key, text, ttl) {
+  const n = Math.ceil(text.length / CHUNK_); if (!n || n > MAX_CHUNKS_) return;
+  if (n === 1) { c.put(key, text, ttl); return; }
+  const parts = {}; for (let i = 0; i < n; i++) parts[key + '|' + i] = text.slice(i * CHUNK_, (i + 1) * CHUNK_);
+  c.putAll(parts, ttl); c.put(key, '#parts:' + n, ttl);       // the head goes in last, so a half-written set is never read
+}
+function cacheGet_(c, key) {
+  const head = c.get(key); if (!head || head.indexOf('#parts:') !== 0) return head;
+  const n = Number(head.slice(7)), keys = []; for (let i = 0; i < n; i++) keys.push(key + '|' + i);
+  const got = c.getAll(keys); if (keys.some(k => typeof got[k] !== 'string')) return null;
+  return keys.map(k => got[k]).join('');
 }
 /** Simple trigger: edits made by hand in the sheet clear that tab's cache right away. */
 function onEdit(e) { try { dirty_(e.range.getSheet().getName()); } catch (err) {} }
