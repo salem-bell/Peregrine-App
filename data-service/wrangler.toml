@@ -1,0 +1,19 @@
+# Fast loads for the Peregrine Team app.
+# The Google Sheet builds each person's app data and pushes it here; the app loads it from here in a fraction of a second.
+# Saves still go straight to the Sheet. One Durable Object with SQLite storage (works on the free plan).
+name = "team-data"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+[[durable_objects.bindings]]
+name = "STORE"
+class_name = "Store"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Store"]
+
+# Secret (wrangler secret put DATA_SECRET): must match the Sheet's Settings › Data service secret.
+
+[observability]
+enabled = true

@@ -114,6 +114,26 @@ async function post(body, o){
   }
   finally { clearTimeout(t); INFLIGHT.delete(rec); }
 }
+/* Fast loading: the Sheet keeps a ready-made copy of everyone's data on Cloudflare (data.edge), refreshed within a minute
+   of any change. Loads come from there; saves always go to the Sheet. After you save something, a copy older than
+   your save is ignored, so your own change never seems to vanish. Anything odd – no copy, too old, can't reach it –
+   and the app asks the Sheet as before. */
+let EDGE = load('pt-edge') || '', lastWriteAt = Number(load('pt-lastwrite') || 0);
+function wrote(got){ const t = Date.parse(got && got.updated) || Date.now(); if (t > lastWriteAt){ lastWriteAt = t; save('pt-lastwrite', String(t)); } }
+async function edgeLoad(){
+  if (!EDGE || !TOKEN) return null;
+  const ctl = new AbortController(), rec = { ctl, at: Date.now(), read: true }, t0 = Date.now(), t = setTimeout(() => ctl.abort(), 6000);
+  INFLIGHT.add(rec);
+  try {
+    const r = await fetch(EDGE + '/state', { method: 'POST', body: JSON.stringify({ token: TOKEN }), signal: ctl.signal });
+    if (!r.ok) return null;
+    const at = Number(r.headers.get('x-pushed-at') || 0), out = await r.json();
+    if (!out || !out.ok || at < lastWriteAt) return null;
+    console.info('[Peregrine] loaded from Cloudflare in ' + (Date.now() - t0) + 'ms (data from ' + Math.round((Date.now() - at) / 1000) + 's ago)');
+    return out;
+  } catch (_) { return null; }
+  finally { clearTimeout(t); INFLIGHT.delete(rec); }
+}
 function unstick(){ const now = Date.now(); INFLIGHT.forEach(r => { if (now - r.at > (r.read ? 4000 : 15000)) r.ctl.abort(); }); }
 // Answers can arrive out of order: show only the newest, and never let a background refresh overwrite a change that is still saving.
 let seqStarted = 0, seqShown = 0, pending = 0, lastAct = 0;
@@ -144,6 +164,7 @@ async function flush(){
     if (queue.length) flush(); else { saving(); setTimeout(() => refresh(), 300); }
     return;
   }
+  wrote(got);
   const res = got.results || [];
   actions.forEach((a, i) => { if (a.cid && res[i] && res[i].id) idMap[a.cid] = res[i].id; });
   const bad = res.find(x => x && x.error); if (bad) toast(bad.error);
@@ -157,12 +178,14 @@ async function flush(){
   saving();
   if (queue.length) flush();
 }
-async function refresh(p){
+async function refresh(p, o){
   if (!TOKEN){ data = null; render(); return; }
   const isAct = !!(p && p.action), seq = ++seqStarted;
   if (isAct){ pending++; lastAct = seq; }
   let got = null, err = null;
-  try { got = await post({ fn: 'api', token: TOKEN, p: p || {} }); } catch (e) { err = e; }
+  try { got = (!isAct && !(o && o.fresh) && await edgeLoad()) || await post({ fn: 'api', token: TOKEN, p: p || {} }); } catch (e) { err = e; }
+  if (got && got.edge !== undefined && got.edge !== EDGE){ EDGE = got.edge; save('pt-edge', EDGE); }
+  if (isAct && got) wrote(got);
   if (isAct) pending--;
   if (!err && (seq < seqShown || (!isAct && pending) || (isAct && seq !== lastAct))) return got;
   seqShown = seq; busy = {};
@@ -177,7 +200,7 @@ async function refresh(p){
   data = got; offline = false; liveSync(); save('pt-cache', JSON.stringify(data)); render(); pushCheck(); if (pendingGo){ const g = pendingGo; pendingGo = ''; goTo(g); } return got;
 }
 function saving(){ const el = $('#saving'); if (el) el.hidden = !pending; }
-function signOut(msg){ stopChat(); liveEnd(); TOKEN = ''; data = null; save('pt-token', null); save('pt-cache', null); render(); if (msg) toast(msg.charAt(0).toUpperCase() + msg.slice(1)); }
+function signOut(msg){ lastWriteAt = 0; save('pt-lastwrite', null); stopChat(); liveEnd(); TOKEN = ''; data = null; save('pt-token', null); save('pt-cache', null); render(); if (msg) toast(msg.charAt(0).toUpperCase() + msg.slice(1)); }
 
 /* ---------- formatting ---------- */
 const pad = n => String(n).padStart(2, '0');
@@ -1326,7 +1349,7 @@ document.addEventListener('click', async e => {
   const b = e.target.closest('button, a[data-x]');
   if (!b){ const td = e.target.closest && e.target.closest('td[data-cell]'); if (td && lead()){ const [who, date] = td.dataset.cell.split('|'); sheet = { kind: 'shift', date, name: who, start: (data.presets[0] || {}).start, end: (data.presets[0] || {}).end }; render(); } return; }
   const d = b.dataset;
-  if (b.id === 'refresh'){ if (chat.open) { openChat(chat.open); return; } refresh().then(r => { if (r) toast('Up to date'); }); return; }
+  if (b.id === 'refresh'){ if (chat.open) { openChat(chat.open); return; } refresh(undefined, { fresh: true }).then(r => { if (r) toast('Up to date'); }); return; }   // the refresh button always asks the Sheet itself
   if (d.install !== undefined && installEvt){ installEvt.prompt(); installEvt = null; return; }
   if (d.ack){ const a = data.announcements.find(x => x.id === d.ack); if (a) a.read = true; render(); act('read', { id: d.ack }); return; }
   if (d.tab){ tab = d.tab; save('pt-tab', tab); sheet = null; viewer = null; editUser = null; tsPerson = ''; if (tab === 'more') moreView = ''; stopChat(); window.scrollTo(0, 0); /* a tab always opens on its main screen: backs out of a DM, a More page, etc. */ render(); if (tab === 'schedule') scrollToday(); return; }
