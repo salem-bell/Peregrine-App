@@ -345,10 +345,22 @@ function rangeReport(from, to, name){
   });
 }
 
+/* ---------- locations: managers switch between shops with the shop name at the top (locations.js) ---------- */
+const LOCS = window.PT_LOCATIONS || [], HOME = window.PT_HOME || 'richardson', HERE = window.PT_LOC || HOME;
+const locName = k => (LOCS.find(l => l.key === k) || {}).name || k;
+const canSwitch = () => LOCS.length > 1 && (HERE !== HOME || (data && mgr()));
+function switchTo(k){ try { k === HOME ? localStorage.removeItem('pt-loc@' + HOME) : localStorage.setItem('pt-loc@' + HOME, k); } catch (_) {} location.replace(location.pathname + location.search); }
+function locSheet(){
+  return `<div class="sheet" role="dialog"><div class="sheet-in"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="margin:0">Location</h1><button class="btn sm" data-closesheet>Close</button></div>
+    <div class="card" style="margin-top:12px">${LOCS.map(l => { let signed = false; try { signed = !!localStorage.getItem(l.ns + 'pt-token'); } catch (_) {}
+      return rowBtn(`data-loc="${esc(l.key)}"`, `<div class="txt"><b>${esc(l.name)}</b><div class="sub">${l.key === HERE ? 'You\'re here' : signed ? 'Signed in' : 'Sign in once, then switch any time'}</div></div>${l.key === HERE ? '<span class="pill ok">✓</span>' : '<span>›</span>'}`); }).join('')}</div>
+    <p class="sub">Each location is its own team, schedule and time clock. You stay signed in to each one on this ${deviceKind()}.</p></div></div>`;
+}
+
 /* ---------- invite links: a manager adds someone and sends them their link. The person opens it, types their phone and
    email, and that creates their account – their code is the last 4 digits of their phone, and they're signed in.
    The link is the app address + #join=<id.signature>; it holds no code, and it works once. ---------- */
-const appHome = () => location.origin + location.pathname.replace(/index\.html$/, '');
+const appHome = () => window.PT_APPURL || location.origin + location.pathname.replace(/index\.html$/, '');
 const inviteLink = u => appHome() + '#join=' + u.invite;
 const inviteText = u => `Hi ${first(u.name)}! Here's the Peregrine team app – schedule, time clock, messages and checklists.\n\nOpen this link on your phone to set up your account: ${inviteLink(u)}\n\nYou'll add your phone number and email, and your sign-in code will be the last 4 digits of your phone.`;
 let invite = null, joined = null;   // invite: { key, first, name, shop, err } while setting up; joined: { first, code } right after
@@ -366,7 +378,7 @@ function viewSignIn(){
     : installEvt ? `<div class="hint"><b>Install the app</b> for one-tap access. <button class="btn sm go" data-install>Install</button></div>`
     : `<div class="hint"><b>Put it on your home screen:</b> in Chrome, tap <b>⋮</b> then <b>Add to Home screen</b> (or <b>Install app</b>).</div>`) : '';
   return `<div class="signin"><img class="logo" src="brand/falcon.png" alt=""><p class="big">${esc((data && data.name) || load('pt-shop') || window.PT_NAME || 'Peregrine')}</p><p class="sub" style="text-align:center;margin:0 0 18px">Team sign-in</p>
-    ${invite && invite.err ? `<div class="hint">${esc(invite.err)}</div>` : ''}${hint}<div class="card"><form class="stack" data-form="signin">
+    ${HERE !== HOME ? `<div class="hint">Signing in to <b>${esc(locName(HERE))}</b>. Your ${esc(locName(HOME))} sign-in stays as it is. <button class="btn sm" data-loc="${esc(HOME)}" style="margin-top:8px">‹ Back to ${esc(locName(HOME))}</button></div>` : ''}${invite && invite.err ? `<div class="hint">${esc(invite.err)}</div>` : ''}${HERE !== HOME ? '' : hint}<div class="card"><form class="stack" data-form="signin">
       <label class="f">First name<input name="name" autocomplete="username" autocapitalize="words" spellcheck="false" maxlength="60" value="${esc(load('pt-last') || '')}"></label>
       <label class="f">4-digit code<input name="code" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="current-password" class="code" style="text-align:center"></label>
       <button class="btn go">Sign in</button></form></div>
@@ -1357,14 +1369,15 @@ function syncBadge(){
   try { if ('setAppBadge' in navigator) (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {}); } catch (_) {}
   try { caches.open(NS + 'chat-pass').then(c => c.put('/badge', new Response(String(n)))).catch(() => {}); } catch (_) {}   // the notification handler counts up from here
 }
+function setShop(t){ const el = $('#shop'); if (canSwitch()) el.innerHTML = `<button class="locbtn" data-locs aria-label="Switch location">${esc(locName(HERE))} <span aria-hidden="true">▾</span></button>`; else el.textContent = t; }   // with the switcher, the bar names the location
 function render(){
   syncBadge();
   if (rowDrag){ rowDrag.later = true; return; }       // don't redraw under a finger mid-drag
   $('#offline').hidden = !offline;
   if (joined && TOKEN){ $('#tabs').hidden = true; $('#refresh').hidden = true; $('#overlay').innerHTML = ''; $('#main').innerHTML = viewJoined(); return; }
-  if (!TOKEN || !data){ $('#tabs').hidden = true; $('#refresh').hidden = true; $('#overlay').innerHTML = ''; $('#shop').textContent = load('pt-shop') || window.PT_NAME || 'Peregrine'; $('#main').innerHTML = TOKEN ? '<div class="empty">Loading…</div>' : viewSignIn(); return; }
+  if (!TOKEN || !data){ $('#tabs').hidden = true; $('#refresh').hidden = true; $('#overlay').innerHTML = ''; setShop(load('pt-shop') || window.PT_NAME || 'Peregrine'); $('#main').innerHTML = TOKEN ? '<div class="empty">Loading…</div>' : viewSignIn(); return; }
   data.meId = data.me.id;
-  const short = String(data.name || 'Peregrine').replace(/\s+(coffee|roasters?|roastery|co\.?)\b.*$/i, '') || data.name; $('#shop').textContent = short; save('pt-shop', short); $('#refresh').hidden = false;
+  const short = String(data.name || 'Peregrine').replace(/\s+(coffee|roasters?|roastery|co\.?)\b.*$/i, '') || data.name; setShop(short); save('pt-shop', short); $('#refresh').hidden = false;
   const gate = mustRead();
   if (gate.length){ $('#tabs').hidden = true; $('#overlay').innerHTML = ''; $('#main').innerHTML = viewMustRead(gate[0], gate.length); return; }
   const chatN = (data.channels || []).reduce((n, c) => n + c.unread, 0);
@@ -1382,7 +1395,7 @@ function render(){
   if (keepMs && chat.open === keepMs[0]){ const ms = $('#msgs'); if (ms) ms.scrollTop = keepMs[2] < 80 ? ms.scrollHeight : keepMs[1]; }
   if (same && tab !== 'chat'){ const g2 = $('.gridwrap'); if (keep && g2){ g2.scrollTop = keep[0]; g2.scrollLeft = keep[1]; } if (window.scrollY !== wy) window.scrollTo(0, wy); }   // a save or refresh redraws the page; stay where you were
   if (draft !== null){ const t = $('.composer textarea'); if (t){ t.value = draft; t.focus(); } }
-  $('#overlay').innerHTML = runner ? viewRunner() : viewer ? viewViewer() : sheet ? (sheet.kind === 'shift' ? shiftSheet() : sheet.kind === 'publish' ? publishSheet() : sheet.kind === 'punch' ? punchSheet() : sheet.kind === 'editchat' ? editChatSheet() : pickSheet(sheet.kind)) : '';
+  $('#overlay').innerHTML = runner ? viewRunner() : viewer ? viewViewer() : sheet ? (sheet.kind === 'shift' ? shiftSheet() : sheet.kind === 'publish' ? publishSheet() : sheet.kind === 'punch' ? punchSheet() : sheet.kind === 'editchat' ? editChatSheet() : sheet.kind === 'loc' ? locSheet() : pickSheet(sheet.kind)) : '';
   document.body.classList.toggle('noscroll', !!(viewer || sheet || runner));
   if (keepWage){ const el = document.querySelector(keepWage[0]); if (el){ el.value = keepWage[1]; el.focus(); try { el.setSelectionRange(keepWage[2], keepWage[2]); } catch (_) {} } }
   const sf = document.querySelector('form[data-form=shift]'), est = $('#est'); if (sf && est) est.innerHTML = shiftEstimate(sf);
@@ -1427,6 +1440,8 @@ document.addEventListener('click', async e => {
   if (d.edit){ editUser = d.edit; render(); return; }
   if (d.canceledit !== undefined){ editUser = null; render(); return; }
   if (d.readall !== undefined){ (data.channels || []).forEach(c => { if (c.unread){ c.unread = 0; try { LIVE && LIVE.send({ t: 'read', ch: c.id }); } catch (_) {} } }); lastBadge = -1; render(); toast('All caught up'); return; }
+  if (d.locs !== undefined){ sheet = { kind: 'loc' }; render(); return; }
+  if (d.loc){ if (d.loc === HERE){ sheet = null; render(); return; } switchTo(d.loc); return; }
   if (d.joindone !== undefined){ joined = null; render(); return; }
   if (d.dismiss !== undefined){ justAdded = null; inviteFor = ''; render(); return; }
   if (d.invite){ inviteFor = d.invite; justAdded = null; render(); const el = $('#invite'); if (el) el.scrollIntoView({ block: 'start' }); return; }

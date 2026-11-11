@@ -5,3 +5,4 @@ window.PT_NAME = 'Peregrine Westcliffe';   // shown before the first load
 window.PT_NS = 'wc-';                      // everything this phone keeps for Westcliffe is named wc-…, apart from Richardson's
 window.PT_SW = 'westcliffe/sw.js';         // its own service worker, so its installed app opens Westcliffe
 window.PT_SPACE = 'westcliffe';            // its space on the Cloudflare chat and fast-loading services
+window.PT_HOME = 'westcliffe';

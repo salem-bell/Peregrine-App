@@ -365,3 +365,4 @@ mark{background:rgba(210,146,41,.32);color:inherit;border-radius:3px;padding:0 1
 .clockrun{border-top:1px solid var(--line,rgba(0,0,0,.08))} .runclock{font:400 1.9rem/1.1 var(--head);letter-spacing:.04em;font-variant-numeric:tabular-nums}
 .linkbtn{all:unset;cursor:pointer;text-decoration:underline;color:inherit}
 .linkbox{width:100%;box-sizing:border-box;font-size:.8rem;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink)}
+.locbtn{all:unset;cursor:pointer;font:inherit;letter-spacing:inherit;text-transform:inherit;color:inherit} .locbtn span{font-size:.7em;opacity:.8}

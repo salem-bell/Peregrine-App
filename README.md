@@ -9,6 +9,7 @@ A phone app for the Peregrine Coffee Roasters team: checklists, schedule, announ
 ## Locations
 - **Richardson** – https://salem-bell.github.io/Peregrine-App/ (sheet "Peregrine Team").
 - **Westcliffe** – https://salem-bell.github.io/Peregrine-App/westcliffe/ (sheet "Peregrine Westcliffe Team"). Same app files; `westcliffe/` holds only its own config.js (its sheet's web app address), manifest and service worker. Phones keep each location's sign-in and data apart (names start with `wc-`), so someone can be on both. Settings › *Location key* (`peregrine` / `westcliffe`) keeps them apart on the Cloudflare chat and fast-loading services.
+- Managers can switch locations inside one app: tap the location name at the top (`locations.js` lists them). Each location keeps its own sign-in on the phone.
 - Every app update reaches both. A new Code.gs goes into **both** sheets.
 
 ## Roles
