@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '3.8';
+const VERSION = '3.9';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Off'];
 
@@ -599,16 +599,12 @@ function act_(ss, me, p, touched) {
       const item = clean_(p.item, 120); if (!item) throw new Error('What needs prepping?');
       const tgt = prepTarget_(ss, p.when, tz), sh = tab('Prep'), id = nextId_(sh, 'x');
       sh.appendRow([id, item, clean_(p.details, 300), tgt.date, tgt.label, tgt.names.join(', '), me.name, new Date(), '', '']);
-      let emailed = 0;
+      // The people on that shift get a pop-up in the app on the day (and a notification if they have them on) – no email.
       if (p.notify !== '0') {
         const users = vals_(tab('Users')).filter(r => truthy_(r[3]));
         try { push_(ss, tgt.names.filter(n => n !== me.name).map(n => { const u = users.find(r => String(r[0]).trim() === n); return u && u[6] ? { uid: String(u[6]), kind: 'prep', title: '🧾 Prep for your shift', body: item + (tgt.label ? ' · ' + tgt.label : ''), url: '?go=lists:prep', tag: 'prep' } : null; }).filter(Boolean)); } catch (e) {}
-        tgt.names.filter(n => n !== me.name).forEach(n => {
-          const u = users.find(r => String(r[0]).trim() === n); if (!u || !/@/.test(String(u[5])) || remindMode_(ss, u) === 'Off') return;
-          if (mail_(ss, String(u[5]).trim(), 'Prep for your shift: ' + item, 'Hi ' + n.split(' ')[0] + ',', me.name + ' asked your shift (' + tgt.label + ') to prep:', [item + (p.details ? ' – ' + clean_(p.details, 300) : '')])) emailed++;
-        });
       }
-      return { id, label: tgt.label, names: tgt.names, emailed };
+      return { id, label: tgt.label, names: tgt.names };
     }
     case 'donePrep': {
       const sh = tab('Prep'), row = findRow_(sh, p.id); if (!row) throw new Error('That prep item was removed');

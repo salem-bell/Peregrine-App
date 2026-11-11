@@ -550,6 +550,18 @@ function viewInventory(cl){
 }
 const prepOpen = () => (data.prep || []).filter(x => !x.doneAt);
 const prepMine = () => prepOpen().filter(x => x.mine);
+/* Prep pop-up: on the day of their shift, the people it was sent to see it pop up when they open the app – once per item. */
+const prepSeen = () => { try { return JSON.parse(load('pt-prepseen') || '[]'); } catch (_) { return []; } };
+const prepPopItems = () => prepMine().filter(x => x.date && x.date <= T() && prepSeen().indexOf(x.id) < 0 && !/^tmp/.test(x.id));
+function prepSeenAll(){ const ids = prepSeen().concat(prepMine().map(x => x.id)); save('pt-prepseen', JSON.stringify([...new Set(ids)].slice(-200))); }
+function prepPopSheet(){
+  const items = prepMine().filter(x => x.date && x.date <= T());
+  return `<div class="sheet" role="dialog" aria-label="Prep for your shift"><div class="sheet-in"><h1 style="margin:0 0 4px">🧾 Prep for your shift</h1>
+    <p class="sub" style="margin:0 0 10px">${items.length ? 'Asked for your shift today:' : 'All done – thank you!'}</p>
+    ${items.length ? `<div class="card">${items.map(x => `<div class="row"><button class="chk" data-prepdone="${esc(x.id)}" data-on="0" aria-label="Done: ${esc(x.item)}"></button>
+      <div class="txt"><b>${esc(x.item)}</b>${x.details ? `<div class="sub">${esc(x.details)}</div>` : ''}<div class="sub">From ${esc(first(x.by))} · ${esc(x.label || 'your shift')}</div></div></div>`).join('')}</div>` : ''}
+    <div class="btns" style="margin-top:12px"><button class="btn go" data-prepok>Got it</button><button class="btn" data-prepok data-golist="${PREP}">Open the prep list</button></div></div></div>`;
+}
 function listSeg(cl){
   const n = prepOpen().length;
   return `<div class="seg">${cl.map(x => `<button data-list="${esc(x.list)}" aria-pressed="${x.list === listTab}">${esc(x.list)} ${x.done}/${x.total}</button>`).join('')}<button data-list="${PREP}" aria-pressed="${listTab === PREP}">Prep${n ? ' ' + n : ''}</button>${lead() ? `<button data-list="${INV}" aria-pressed="${listTab === INV}">Inventory</button>` : ''}</div>`;
@@ -571,11 +583,11 @@ function viewPrep(cl){
       <label class="f">What needs prepping<input name="item" maxlength="120" placeholder="e.g. Batch cold brew" autocomplete="off"></label>
       <label class="f">Details (optional)<input name="details" maxlength="300" placeholder="e.g. 2 gallons, we're out of concentrate"></label>
       <label class="f">For<select name="when">${opts.join('')}</select></label>
-      <label class="opt"><input type="checkbox" name="notify" checked> Email the people on that shift</label>
+      <label class="opt"><input type="checkbox" name="notify" checked> Also send them a notification</label>
       <button class="btn go">Send to the shift</button></form></div>
     <h2>To prep</h2><div class="card">${open.map(prepRow).join('') || '<div class="empty">Nothing to prep.</div>'}</div>
     ${done.length ? `<h2>Done recently</h2><div class="card">${done.map(prepRow).join('')}</div>` : ''}
-    <p class="sub">The people on that shift see it on their Today screen, and in their night-before reminder email.</p>`;
+    <p class="sub">The people on that shift get a pop-up when they open the app on that day, and see it on their Today screen until it's done. No email is sent.</p>`;
 }
 function viewLists(){
   const cl = data.checklists || [];
@@ -1395,7 +1407,8 @@ function render(){
   if (keepMs && chat.open === keepMs[0]){ const ms = $('#msgs'); if (ms) ms.scrollTop = keepMs[2] < 80 ? ms.scrollHeight : keepMs[1]; }
   if (same && tab !== 'chat'){ const g2 = $('.gridwrap'); if (keep && g2){ g2.scrollTop = keep[0]; g2.scrollLeft = keep[1]; } if (window.scrollY !== wy) window.scrollTo(0, wy); }   // a save or refresh redraws the page; stay where you were
   if (draft !== null){ const t = $('.composer textarea'); if (t){ t.value = draft; t.focus(); } }
-  $('#overlay').innerHTML = runner ? viewRunner() : viewer ? viewViewer() : sheet ? (sheet.kind === 'shift' ? shiftSheet() : sheet.kind === 'publish' ? publishSheet() : sheet.kind === 'punch' ? punchSheet() : sheet.kind === 'editchat' ? editChatSheet() : sheet.kind === 'loc' ? locSheet() : pickSheet(sheet.kind)) : '';
+  if (!sheet && !viewer && !runner && !joined && prepPopItems().length) sheet = { kind: 'preppop' };
+  $('#overlay').innerHTML = runner ? viewRunner() : viewer ? viewViewer() : sheet ? (sheet.kind === 'shift' ? shiftSheet() : sheet.kind === 'publish' ? publishSheet() : sheet.kind === 'punch' ? punchSheet() : sheet.kind === 'editchat' ? editChatSheet() : sheet.kind === 'loc' ? locSheet() : sheet.kind === 'preppop' ? prepPopSheet() : pickSheet(sheet.kind)) : '';
   document.body.classList.toggle('noscroll', !!(viewer || sheet || runner));
   if (keepWage){ const el = document.querySelector(keepWage[0]); if (el){ el.value = keepWage[1]; el.focus(); try { el.setSelectionRange(keepWage[2], keepWage[2]); } catch (_) {} } }
   const sf = document.querySelector('form[data-form=shift]'), est = $('#est'); if (sf && est) est.innerHTML = shiftEstimate(sf);
@@ -1415,6 +1428,7 @@ document.addEventListener('click', async e => {
   const b = e.target.closest('button, a[data-x]');
   if (!b){ const td = e.target.closest && e.target.closest('td[data-cell]'); if (td && lead()){ const [who, date] = td.dataset.cell.split('|'); sheet = { kind: 'shift', date, name: who, start: (data.presets[0] || {}).start, end: (data.presets[0] || {}).end }; render(); } return; }
   const d = b.dataset;
+  if (d.prepok !== undefined){ prepSeenAll(); sheet = null; if (d.golist === undefined){ render(); return; } }   // prep pop-up: Got it / Open the prep list
   if (b.id === 'refresh'){ if (chat.open) { openChat(chat.open); return; } refresh(undefined, { fresh: true }).then(r => { if (r) toast('Up to date'); }); return; }   // the refresh button always asks the Sheet itself
   if (d.install !== undefined && installEvt){ installEvt.prompt(); installEvt = null; return; }
   if (d.ack){ const a = data.announcements.find(x => x.id === d.ack); if (a) a.read = true; render(); act('read', { id: d.ack }); return; }
@@ -1597,7 +1611,7 @@ document.addEventListener('submit', async e => {
   if (kind === 'prep'){ if (!v('item')){ toast('What needs prepping?'); return; } const notify = f.elements.namedItem('notify').checked ? '1' : '0';
     (data.prep = data.prep || []).unshift({ id: 'tmp' + Date.now(), item: v('item'), details: v('details'), label: 'Sending…', for: [], by: data.me.name, at: new Date().toISOString(), doneAt: '', mine: false }); render();
     act('addPrep', { item: v('item'), details: v('details'), when: v('when'), notify }).then(r => { if (r && r.result){ const x = r.result;
-      toast(x.names.length ? 'Sent to ' + x.label + ' · ' + x.names.map(first).join(', ') + (x.emailed ? ' (emailed ' + x.emailed + ')' : '') : 'Added – nobody is scheduled for that shift yet'); } }); f.reset(); return; }
+      toast(x.names.length ? 'Sent to ' + x.label + ' · ' + x.names.map(first).join(', ') + '' : 'Added – nobody is scheduled for that shift yet'); } }); f.reset(); return; }
   if (kind === 'punch'){ const p = { id: sheet && sheet.id || '', name: v('name'), date: v('date'), in: v('in'), out: v('out'), note: v('note') }; sheet = null; act('savePunch', p).then(r => { if (r) toast('Saved'); }); return; }
   if (kind === 'reminders'){ const mode = (f.querySelector('input[name=mode]:checked') || {}).value || '';
     const em = f.elements.namedItem('email') ? v('email') : (data.me.email || ''), push = data.reminders && data.reminders.by === 'push';
