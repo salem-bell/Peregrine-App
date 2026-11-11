@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '4.0';
+const VERSION = '4.1';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Off'];
 
@@ -81,6 +81,7 @@ const SETTINGS = [
    Menu + setup
    ============================================================ */
 function onOpen() {
+  try { moveSecrets_(SpreadsheetApp.getActive()); } catch (e) {}
   SpreadsheetApp.getUi().createMenu('Team')
     .addItem('1. Set up', 'setup')
     .addItem('2. Show sign-in codes', 'showCodes')
@@ -1344,7 +1345,8 @@ function cacheGet_(c, key) {
 }
 /** Simple trigger: edits made by hand in the sheet clear that tab's cache right away. */
 function onEdit(e) { try { dirty_(e.range.getSheet().getName()); } catch (err) {} }
-function setting_(ss, label) { const r = rv_(ss, 'Settings').find(x => String(x[0]).trim() === label); return r ? String(r[1]).trim() : ''; }
+function setting_(ss, label) { const r = rv_(ss, 'Settings').find(x => String(x[0]).trim() === label), v = r ? String(r[1]).trim() : ''; return SECRET_SETTINGS_.indexOf(label) >= 0 ? secret_(ss, label, v) : v; }
+function hideSecretCell_(ss, label) { const sh = ss.getSheetByName('Settings'), a = sh.getRange(1, 1, sh.getLastRow(), 1).getValues(), i = a.findIndex(r => String(r[0]).trim() === label); if (i >= 0) { sh.getRange(i + 1, 2).setValue(SECRET_NOTE_); dirty_('Settings'); } }
 function head_(sh, n) { sh.getRange(1, 1, 1, n).setFontWeight('bold').setBackground('#eeeeee'); sh.setFrozenRows(1); }
 function move_(ss, name, pos) { const s = ss.getSheetByName(name); if (s) { ss.setActiveSheet(s); ss.moveActiveSheet(Math.min(pos, ss.getSheets().length)); } }
 function splitList_(s) { return String(s || '').split(',').map(x => x.trim()).filter(Boolean); }
@@ -1477,10 +1479,10 @@ function setupFastLoading() {
   buildSettings_(ss);
   const sh = ss.getSheetByName('Settings'), rows = sh.getRange(1, 1, sh.getLastRow(), 2).getValues();
   const row = l => rows.findIndex(r => String(r[0]).trim() === l) + 1;
-  if (!String(rows[row('Data service secret') - 1][1]).trim()) { sh.getRange(row('Data service secret'), 2).setValue(newId_(40)); dirty_('Settings'); }
+  if (!setting_(ss, 'Data service secret')) { PropertiesService.getScriptProperties().setProperty('Data service secret', newId_(40)); hideSecretCell_(ss, 'Data service secret'); }
   if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'pushDataTick')) ScriptApp.newTrigger('pushDataTick').timeBased().everyMinutes(1).create();
   MEMO_ = {};
-  if (!dataLive_(ss)) { ui.alert('Almost there', 'Paste the team-data Worker address into Settings › Data service address, and put the Data service secret into the Worker (DATA_SECRET_PEREGRINE). Then run this again.', ui.ButtonSet.OK); return; }
+  if (!dataLive_(ss)) { ui.alert('Almost there', 'Paste the team-data Worker address into Settings › Data service address. Then copy the Data service secret from Apps Script › Project Settings › Script properties into the Worker (DATA_SECRET_' + space_(ss).toUpperCase() + '). Then run this again.', ui.ButtonSet.OK); return; }
   try { const r = pushData_(true); ui.alert('Fast loading is on', 'Sent ' + r.people + ' people\'s data (' + r.kb + ' KB) in ' + (r.ms / 1000).toFixed(1) + 's. From now on the app loads from Cloudflare, and changes reach it within about a minute.', ui.ButtonSet.OK); }
   catch (e) { ui.alert('Fast loading isn\'t working yet', String(e.message || e), ui.ButtonSet.OK); }
 }
@@ -1639,3 +1641,23 @@ function payrollMakeUi_(which) {
   try { const r = payrollMake_(ss, from, to, true); ui.alert('Payroll workbook ready', longDay_(from) + ' – ' + longDay_(to) + ': ' + r.rows + ' punches.' + (r.warn.length ? '\n\n' + r.warn.join('\n') : '') + '\n\n' + r.url, ui.ButtonSet.OK); }
   catch (e) { ui.alert('Couldn\'t make the payroll workbook', String(e.message || e), ui.ButtonSet.OK); }
 }
+
+/* ============================================================
+   Secrets stay out of the sheet. The service secrets (push, chat, fast loading) live in this script's
+   Script Properties (Apps Script › Project Settings › Script properties), where only the script's owner can see them.
+   Anything typed into one of those Settings cells is moved there the next time the script runs (opening the sheet is
+   enough), and the cell then just says where it went. To change a secret, type the new one into its Settings cell.
+   ============================================================ */
+const SECRET_SETTINGS_ = ['Push service secret', 'Chat service secret', 'Data service secret'];
+const SECRET_NOTE_ = 'Hidden – in Apps Script › Project Settings › Script properties';
+function secret_(ss, label, cell) {
+  const props = PropertiesService.getScriptProperties();
+  if (cell && cell.indexOf('Hidden') !== 0) {                     // a new value typed into the sheet: move it
+    props.setProperty(label, cell);
+    try { hideSecretCell_(ss, label); } catch (e) {}
+    return cell;
+  }
+  return props.getProperty(label) || '';
+}
+/** Opening the sheet (or any run) tidies every secret out of the Settings tab. */
+function moveSecrets_(ss) { SECRET_SETTINGS_.forEach(l => { try { setting_(ss, l); } catch (e) {} }); }
