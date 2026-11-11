@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '3.9';
+const VERSION = '4.0';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Off'];
 
@@ -23,7 +23,7 @@ const TABS = {
   'Reads':         ['Announcement ID', 'Name', 'Read at'],
   'Shifts':        ['Date', 'Start', 'End', 'Name', 'Position', 'Notes', 'ID (do not edit)', 'Published as (do not edit)', 'Remove when published'],
   'Availability':  ['ID', 'Name', 'Day or date', 'From', 'To', 'Note', 'Updated'],
-  'Time clock':    ['ID', 'Name', 'Date', 'In', 'Out', 'Shift ID', 'Clock-in place', 'Clock-out place', 'Note', 'Edited by'],
+  'Time clock':    ['ID', 'Name', 'Date', 'In', 'Out', 'Shift ID', 'Clock-in place', 'Clock-out place', 'Note', 'Edited by', 'Shift type (blank = Regular Shift)'],
   'Channels':      ['ID', 'Name', 'Kind', 'Members (user IDs; blank = everyone)', 'Who sees it', 'Created by', 'Created'],
   'Messages':      ['ID', 'Channel ID', 'From ID', 'From', 'Sent', 'Text', 'Photo (Drive file)', 'Reply to (message ID)', 'Read marks (user IDs)'],
   'Chat reads':    ['User ID', 'Channel ID', 'Read at'],
@@ -59,6 +59,9 @@ const SETTINGS = [
   ['Overtime rate',                '1.5',                       'Multiplier for overtime hours.'],
   ['Labor cost extra (%)',         '0',                         'Optional. Added on top of wages in estimates, e.g. 10 for employer payroll taxes.'],
   ['Pay period',                   'Every 2 weeks',             'Weekly, Every 2 weeks or Twice a month (1st–15th, 16th–end). Each person sees their hours and estimated pay for the current pay period under More › My time.'],
+  ['Shift types',                  'Regular Shift, Training, Meeting, Admin', 'Kinds of shift for payroll, separated by commas – the first is the usual one. They must match the Shift Type list in the payroll template (Setup tab). Managers set a punch\'s type when fixing it in the app.'],
+  ['Payroll template',             '',                          'Optional. Link to the payroll workbook to copy for each pay period (its Timesheet and Daily Tip Pool are emptied in each copy). Blank = no payroll workbooks.'],
+  ['Payroll folder',               '',                          'The Drive folder each pay period\'s payroll workbook goes into (paste the folder\'s link).'],
   ['Pay period starts on',         '',                          'For Weekly or Every 2 weeks: the first day of any one pay period, e.g. 2026-11-02. Blank = periods start on Mondays.'],
   ['Inventory sheet',              'https://docs.google.com/spreadsheets/d/1sSGRYl669jFxZ7-3dLYgNNNnR2QXvwgpBJ28o160szU/edit', 'The Peregrine Inventory & Reorder sheet. Leads and managers count it in the app (Lists › Inventory).'],
   ['Inventory tabs',               'Coffee, In-house, Costco, Paper goods, Other', 'The tabs in that sheet that hold items (same columns: Item, Category, Vendor, Unit, On hand, Par, Case size, Counted on…).'],
@@ -84,6 +87,10 @@ function onOpen() {
     .addSeparator()
     .addItem('Sign the selected person out everywhere', 'signOutSelected')
     .addItem('Fast loading: turn on / check', 'setupFastLoading')
+    .addSeparator()
+    .addItem('Payroll: update this pay period\'s timesheet', 'payrollUpdateNow')
+    .addItem('Payroll: make the last pay period\'s workbook now', 'payrollMakeLast')
+    .addItem('Payroll: make this pay period\'s workbook now (so far)', 'payrollMakeCurrent')
     .addToUi();
 }
 
@@ -410,9 +417,10 @@ function state_(ss, me, slim) {
   if (!slim) {
   // Time clock
   out.lateAfter = Number(setting_(ss, 'Late after (minutes)')) || 5;
+  out.shiftTypes = shiftTypes_(ss);
   out.geo = /\d/.test(setting_(ss, 'Shop location (lat, lng)'));
   out.punches = rv_(ss, 'Time clock').filter(r => r[0] && r[1] && (isMgr || String(r[1]).trim() === me.name))
-    .map(r => ({ id: String(r[0]), name: String(r[1]).trim(), date: ymd_(r[2], tz), in: toIso_(r[3]), out: toIso_(r[4]), shift: String(r[5] || ''), inPlace: String(r[6] || ''), outPlace: String(r[7] || ''), note: String(r[8] || ''), edited: String(r[9] || '') }))
+    .map(r => ({ id: String(r[0]), name: String(r[1]).trim(), date: ymd_(r[2], tz), in: toIso_(r[3]), out: toIso_(r[4]), shift: String(r[5] || ''), inPlace: String(r[6] || ''), outPlace: String(r[7] || ''), note: String(r[8] || ''), edited: String(r[9] || ''), type: String(r[10] || '') }))
     .filter(x => x.date >= first).sort((a, b) => String(a.in).localeCompare(String(b.in)));
   out.open = out.punches.find(x => x.name === me.name && x.in && !x.out && Date.now() - new Date(x.in) < 16 * 36e5) || null;   // older ones are missed clock-outs for a manager to fix
 
@@ -750,9 +758,11 @@ function act_(ss, me, p, touched) {
       if (p.id) {
         const r = findRow_(sh, p.id); if (!r) throw new Error('That punch was removed');
         sh.getRange(r, 2, 1, 4).setValues([[name, date, tIn, tOut]]); sh.getRange(r, 9, 1, 2).setValues([[clean_(p.note, 200), me.name]]);
+        if (p.type !== undefined) { if (sh.getLastColumn() < 11) buildTab_(ss, 'Time clock'); sh.getRange(r, 11).setValue(punchType_(ss, p.type)); }
         audit('Edited ' + name + '\'s punch on ' + date + ' (' + p.in + '–' + (p.out || '…') + ')'); return;
       }
-      put_(sh, [nextId_(sh, 'p'), name, date, tIn, tOut, matchShift_(ss, name, tIn, tz), 'added by manager', tOut ? 'added by manager' : '', clean_(p.note, 200), me.name]);
+      if (sh.getLastColumn() < 11) buildTab_(ss, 'Time clock');
+      put_(sh, [nextId_(sh, 'p'), name, date, tIn, tOut, matchShift_(ss, name, tIn, tz), 'added by manager', tOut ? 'added by manager' : '', clean_(p.note, 200), me.name, punchType_(ss, p.type)]);
       audit('Added a punch for ' + name + ' on ' + date); return;
     }
     case 'deletePunch': { needMgr(); const sh = tab('Time clock'), r = findRow_(sh, p.id); if (r) { audit('Deleted punch ' + p.id + ' for ' + sh.getRange(r, 2).getValue()); sh.deleteRow(r); } return; }
@@ -1126,6 +1136,7 @@ function mail_(ss, to, subject, hello, intro, lines) {
 function sendShiftReminders() {
   const ss = SpreadsheetApp.getActive();
   try { cleanPhotos_(ss); } catch (e) {}
+  try { payrollTick_(ss, false); } catch (e) { console.warn('payroll: ' + e); }
   if (/^off$/i.test(setting_(ss, 'Shift reminder emails'))) return;
   const tz = ss.getSpreadsheetTimeZone(), now = new Date(), today = Utilities.formatDate(now, tz, 'yyyy-MM-dd'), hm = Utilities.formatDate(now, tz, 'HH:mm');
   const night = /^\d{1,2}:\d{2}$/.test(setting_(ss, 'Night-before reminder at')) ? hhmm_(setting_(ss, 'Night-before reminder at'), tz) : '19:00';
@@ -1516,4 +1527,115 @@ function join_(invite, phone, email) {
     const issued = String(Date.now()), r2 = r.slice(); r2[2] = code; r2[7] = ver;
     return { ok: true, token: 'T.' + r[6] + '.' + issued + '.' + sig_(r2, issued), name: String(r[0]), role: role_(r[1]), code };
   } finally { lock.releaseLock(); }
+}
+
+/* ============================================================
+   Payroll
+   - The "Payroll timesheet" tab in this sheet always shows the current pay period's punches, one row per punch:
+     date, employee (as the payroll workbook spells them), shift type and time worked – refreshed every 30 minutes.
+   - When a pay period ends, a copy of the payroll template (Settings › Payroll template) is made in the Payroll folder,
+     with Setup's start date set, the Timesheet filled from the punches and the Daily Tip Pool left blank for tips.
+   Uses the pay period settings (Pay period, Pay period starts on).
+   ============================================================ */
+function shiftTypes_(ss) { const t = splitList_(setting_(ss, 'Shift types')); return t.length ? t : ['Regular Shift', 'Training', 'Meeting', 'Admin']; }
+function punchType_(ss, v) { const t = shiftTypes_(ss), k = String(v || '').trim(); return !k || k === t[0] ? '' : t.find(x => x.toLowerCase() === k.toLowerCase()) || ''; }
+function payPeriod_(ss, ymd) {
+  const kind = /twice|semi/i.test(setting_(ss, 'Pay period')) ? 'semi' : /week/i.test(setting_(ss, 'Pay period')) && !/2|two|bi/i.test(setting_(ss, 'Pay period')) ? 'week' : 'biweek';
+  if (kind === 'semi') { const [y, m, d] = ymd.split('-').map(Number), last = new Date(y, m, 0).getDate(), ym = ymd.slice(0, 8); return d <= 15 ? [ym + '01', ym + '15'] : [ym + '16', ym + pad_(last)]; }
+  const tz = ss.getSpreadsheetTimeZone(), anchor = ymd_((rv_(ss, 'Settings').find(x => String(x[0]).trim() === 'Pay period starts on') || [])[1], tz) || '2026-01-05';
+  const len = kind === 'week' ? 7 : 14, off = ((daysBetween_(anchor, ymd) % len) + len) % len, from = addDays_(ymd, -off);
+  return [from, addDays_(from, len - 1)];
+}
+function daysBetween_(a, b) { const p = s => { const [y, m, d] = s.split('-').map(Number); return Date.UTC(y, m - 1, d); }; return Math.round((p(b) - p(a)) / 864e5); }
+function driveId_2(v) { const m = String(v || '').match(/[-\w]{25,}/); return m ? m[0] : ''; }
+/** Payroll names (Setup › Employee Name in the template), cached for 6 hours. */
+function payrollNames_(ss) {
+  const id = driveId_2(setting_(ss, 'Payroll template')); if (!id) return [];
+  const c = CacheService.getScriptCache(), k = 'PAYNAMES:' + id, hit = c.get(k); if (hit) return JSON.parse(hit);
+  const names = SpreadsheetApp.openById(id).getSheetByName('Setup').getRange('B9:B29').getValues().map(r => String(r[0]).trim()).filter(Boolean);
+  c.put(k, JSON.stringify(names), 21600); return names;
+}
+/** App name → payroll name: same name (any case), else the only payroll name with the same last name. */
+function payName_(name, names) {
+  const n = String(name).trim(), lc = n.toLowerCase(), last = lc.split(/\s+/).pop();
+  const exact = names.find(x => x.toLowerCase() === lc); if (exact) return exact;
+  const sameLast = names.filter(x => x.toLowerCase().split(/\s+/).pop() === last); if (sameLast.length === 1) return sameLast[0];
+  return n;
+}
+function payrollRows_(ss, from, to) {
+  const tz = ss.getSpreadsheetTimeZone(), names = (() => { try { return payrollNames_(ss); } catch (e) { return []; } })(), types = shiftTypes_(ss);
+  const shifts = {}; vals_(ss.getSheetByName('Shifts')).forEach(r => { const o = pubObj_(r, tz); if (o && o.id) shifts[o.id] = o; });
+  const rows = [], open = [], unknown = {};
+  vals_(ss.getSheetByName('Time clock')).forEach(r => {
+    if (!r[0] || !r[1]) return;
+    const date = ymd_(r[2], tz); if (!date || date < from || date > to) return;
+    const tIn = r[3] instanceof Date ? r[3] : (r[3] ? new Date(r[3]) : null), tOut = r[4] instanceof Date ? r[4] : (r[4] ? new Date(r[4]) : null);
+    if (!tIn || !tOut || isNaN(tIn) || isNaN(tOut)) { open.push(String(r[1]).trim() + ' ' + date); return; }
+    const mins = Math.max(0, Math.round((tOut - tIn) / 6e4)), sh = shifts[String(r[5] || '')];
+    const type = String(r[10] || '').trim() || (sh && types.find(t => t.toLowerCase() === String(sh.position || '').toLowerCase())) || types[0];
+    const pname = payName_(String(r[1]).trim(), names); if (names.length && names.indexOf(pname) < 0) unknown[pname] = 1;
+    rows.push({ date, name: pname, type, hm: Math.floor(mins / 60) + ':' + pad_(mins % 60), hours: Math.round(mins / 6) / 10, tIn, tOut, note: String(r[8] || '') });
+  });
+  rows.sort((a, b) => (a.date + a.name + a.tIn.getTime()).localeCompare(b.date + b.name + b.tIn.getTime()));
+  return { rows, open, unknown: Object.keys(unknown) };
+}
+/** The "Payroll timesheet" tab: this pay period, rebuilt from the Time clock. */
+function payrollTab_(ss) {
+  const tz = ss.getSpreadsheetTimeZone(), today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd'), [from, to] = payPeriod_(ss, today), P = payrollRows_(ss, from, to);
+  let sh = ss.getSheetByName('Payroll timesheet'); if (!sh) { sh = ss.insertSheet('Payroll timesheet'); sh.setTabColor('#1E5662'); }
+  sh.clearContents();
+  const notes = [].concat(P.open.length ? ['Not counted yet (no clock-out): ' + P.open.join(', ')] : []).concat(P.unknown.length ? ['Not in the payroll template\'s Setup list: ' + P.unknown.join(', ')] : []);
+  sh.getRange(1, 1, 2, 1).setValues([['Payroll timesheet · pay period ' + longDay_(from) + ' – ' + longDay_(to)], ['Filled in from the app\'s time clock · updated ' + Utilities.formatDate(new Date(), tz, 'EEE M/d h:mm a') + (notes.length ? ' · ' + notes.join(' · ') : '')]]);
+  sh.getRange(1, 1).setFontWeight('bold').setFontSize(13);
+  sh.getRange(3, 1, 1, 8).setValues([['Date', 'Employee', 'Shift Type', 'Time Worked (H:MM)', 'Hours', 'In', 'Out', 'Note']]); head_(sh, 8); sh.setFrozenRows(3);
+  if (P.rows.length) {
+    const d = s => Utilities.parseDate(s, tz, 'yyyy-MM-dd');
+    sh.getRange(4, 4, P.rows.length, 1).setNumberFormat('@');
+    sh.getRange(4, 1, P.rows.length, 8).setValues(P.rows.map(x => [d(x.date), x.name, x.type, x.hm, x.hours, x.tIn, x.tOut, x.note]));
+    sh.getRange(4, 1, P.rows.length, 1).setNumberFormat('ddd mm/dd/yyyy'); sh.getRange(4, 6, P.rows.length, 2).setNumberFormat('h:mm am/pm'); sh.getRange(4, 5, P.rows.length, 1).setNumberFormat('0.00');
+    sh.getRange(4 + P.rows.length + 1, 4, 1, 2).setValues([['Total', P.rows.reduce((a, x) => a + x.hours, 0)]]);
+  }
+  return { from, to, rows: P.rows.length };
+}
+/** A copy of the payroll template for from..to, filled in. Remembers the file so it is made only once per pay period. */
+function payrollMake_(ss, from, to, again) {
+  const props = PropertiesService.getScriptProperties(), key = 'PAYROLL_' + from, had = props.getProperty(key);
+  const tplId = driveId_2(setting_(ss, 'Payroll template')), folderId = driveId_2(setting_(ss, 'Payroll folder'));
+  if (!tplId || !folderId) throw new Error('Fill in Settings › Payroll template and Payroll folder first.');
+  const tz = ss.getSpreadsheetTimeZone(), P = payrollRows_(ss, from, to), md = s => s.slice(5, 7) + '/' + s.slice(8, 10);
+  let file;
+  if (had && again) { try { file = DriveApp.getFileById(had); if (file.isTrashed()) file = null; } catch (e) { file = null; } }
+  if (!file) file = DriveApp.getFileById(tplId).makeCopy('Team_Timesheet_Tip Outs_' + md(from) + '-' + md(to) + '/' + to.slice(2, 4) + (setting_(ss, 'Location key') && setting_(ss, 'Location key') !== 'peregrine' ? ' (' + setting_(ss, 'Location key') + ')' : ''), DriveApp.getFolderById(folderId));
+  const x = SpreadsheetApp.openById(file.getId()), ts = x.getSheetByName('Timesheet'), setup = x.getSheetByName('Setup'), last = 312;
+  setup.getRange('C4').setValue(Utilities.parseDate(from, tz, 'yyyy-MM-dd'));
+  ts.getRange(4, 1, last - 3, 4).clearContent();
+  if (!(had && again)) x.getSheetByName('Daily Tip Pool').getRange('C6:C19').clearContent();          // a new workbook starts with no tips; a rebuild keeps what was typed
+  const rows = P.rows.slice(0, last - 3);
+  if (rows.length) { ts.getRange(4, 4, rows.length, 1).setNumberFormat('@'); ts.getRange(4, 1, rows.length, 4).setValues(rows.map(r => [Utilities.parseDate(r.date, tz, 'yyyy-MM-dd'), r.name, r.type, r.hm])); }
+  // every row computes its hours and pay per hour (blank rows stay blank), and every Summary row adds up tips the same way
+  ts.getRange(4, 5, last - 3, 1).setFormulaR1C1('=IFERROR(IF(RC[-1]="","",VALUE(LEFT(RC[-1],FIND(":",RC[-1])-1))+VALUE(MID(RC[-1],FIND(":",RC[-1])+1,LEN(RC[-1])))/60),"")');
+  ts.getRange(4, 13, last - 3, 1).setFormulaR1C1('=IFERROR(IF(RC5="","",RC12/RC5),"")');
+  const sm = x.getSheetByName('Summary'); sm.getRange('F5:F18').setFormulaR1C1(sm.getRange('F5').getFormulaR1C1());
+  const warn = [].concat(P.open.length ? ['No clock-out (not counted): ' + P.open.join(', ')] : []).concat(P.unknown.length ? ['Add to the employee list above (with their rate): ' + P.unknown.join(', ')] : []).concat(P.rows.length > rows.length ? ['More punches than Timesheet rows – ' + (P.rows.length - rows.length) + ' left out'] : []);
+  ts.getRange('A2').setValue(warn.length ? '⚠ ' + warn.join(' · ') : '');
+  props.setProperty(key, file.getId());
+  return { url: x.getUrl(), rows: rows.length, warn };
+}
+/** Every 15 minutes (from the reminders trigger): refresh the tab at most every 30 minutes, and make the workbook for a pay period that just ended. */
+function payrollTick_(ss, force) {
+  const props = PropertiesService.getScriptProperties(), now = Date.now();
+  if (force || now - Number(props.getProperty('PAYROLL_TAB_AT') || 0) > 30 * 60000) { payrollTab_(ss); props.setProperty('PAYROLL_TAB_AT', String(now)); }
+  if (!driveId_2(setting_(ss, 'Payroll template')) || !driveId_2(setting_(ss, 'Payroll folder'))) return;
+  const tz = ss.getSpreadsheetTimeZone(), today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd'), cur = payPeriod_(ss, today), prev = payPeriod_(ss, addDays_(cur[0], -1));
+  const since = props.getProperty('PAYROLL_SINCE') || (props.setProperty('PAYROLL_SINCE', cur[0]), cur[0]);   // never back-fill periods from before this was turned on
+  if (prev[0] >= since && !props.getProperty('PAYROLL_' + prev[0]) && Utilities.formatDate(new Date(), tz, 'HH') >= '06') payrollMake_(ss, prev[0], prev[1], false);
+}
+function payrollUpdateNow() { const ss = SpreadsheetApp.getActive(), r = payrollTab_(ss); SpreadsheetApp.getUi().alert('Payroll timesheet updated', r.rows + ' punches for ' + longDay_(r.from) + ' – ' + longDay_(r.to) + '.', SpreadsheetApp.getUi().ButtonSet.OK); }
+function payrollMakeLast() { payrollMakeUi_(-1); }
+function payrollMakeCurrent() { payrollMakeUi_(0); }
+function payrollMakeUi_(which) {
+  const ss = SpreadsheetApp.getActive(), ui = SpreadsheetApp.getUi(), tz = ss.getSpreadsheetTimeZone(), today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+  let [from, to] = payPeriod_(ss, today); if (which < 0) [from, to] = payPeriod_(ss, addDays_(from, -1));
+  try { const r = payrollMake_(ss, from, to, true); ui.alert('Payroll workbook ready', longDay_(from) + ' – ' + longDay_(to) + ': ' + r.rows + ' punches.' + (r.warn.length ? '\n\n' + r.warn.join('\n') : '') + '\n\n' + r.url, ui.ButtonSet.OK); }
+  catch (e) { ui.alert('Couldn\'t make the payroll workbook', String(e.message || e), ui.ButtonSet.OK); }
 }

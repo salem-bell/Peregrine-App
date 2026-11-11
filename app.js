@@ -753,7 +753,7 @@ function viewTime(){
     <div class="weeknav"><button class="btn sm" data-tsstep="-1" ${from <= lo ? 'disabled' : ''} aria-label="Earlier">‹</button><div><b>${title}</b><div class="sub">${tsMode === 'day' ? (dayName(from) === shortDay(from) ? '' : shortDay(from)) : span}${(tsMode === 'day' ? from : to) !== today && !(today >= from && today <= to) ? ` · <button class="linkbtn" data-tsjump>Back to today</button>` : ''}</div></div><button class="btn sm" data-tsstep="1" ${to >= hi ? 'disabled' : ''} aria-label="Later">›</button></div>`;
   const line = (l, canEdit) => { const p = l.punch, s = l.shift, run = p && !p.out && (Date.now() - new Date(p.in)) <= 16 * 36e5;
     const flags = [l.noShow ? ['warn', 'No-show'] : null, l.lateBy > (data.lateAfter || 5) ? ['warn', 'Late ' + l.lateBy + ' min'] : null, l.unscheduled ? ['mute', 'Not scheduled'] : null, run ? ['ok', 'On the clock'] : null,
-      p && !p.out && !run ? ['warn', 'No clock-out'] : null, p && p.inPlace && /^away/.test(p.inPlace) ? ['mute', 'Clocked in ' + p.inPlace] : null, p && p.edited ? ['mute', 'Edited by ' + first(p.edited)] : null].filter(Boolean);
+      p && !p.out && !run ? ['warn', 'No clock-out'] : null, p && p.inPlace && /^away/.test(p.inPlace) ? ['mute', 'Clocked in ' + p.inPlace] : null, p && p.edited ? ['mute', 'Edited by ' + first(p.edited)] : null, p && p.type ? ['mute', p.type] : null].filter(Boolean);
     const inner = `<div class="txt"><b>${shortDay(l.date)}</b><div class="sub">${s ? 'Scheduled ' + t12(s.start) + '–' + t12(s.end) : ''}${s && p ? ' · ' : ''}${p ? 'Worked ' + timeOf(p.in) + '–' + (p.out ? timeOf(p.out) : run ? 'now' : '…') + (p.out || run ? ' (' + hrs(((p.out ? new Date(p.out) : new Date()) - new Date(p.in)) / 6e4) + ')' : '') : ''}${p && p.note ? ' · ' + esc(p.note) : ''}</div>${flags.length ? `<div style="margin-top:4px">${flags.map(([c, t]) => `<span class="pill ${c}">${esc(t)}</span>`).join(' ')}</div>` : ''}</div>`;
     return canEdit ? rowBtn(`data-editpunch="${p ? esc(p.id) : ''}" data-pdate="${l.date}" data-pname="${esc(tsPerson)}" data-pstart="${s ? s.start : ''}" data-pend="${s ? s.end : ''}"`, inner + '<span class="sub">Fix</span>') : `<div class="row">${inner}</div>`; };
   const shiftsIn = name => (data.shifts || []).filter(s => notGone(s) && (!name || s.name === name));
@@ -799,6 +799,7 @@ function punchSheet(){
       <label class="f">Who<select name="name">${(data.users || []).map(u => `<option ${u.name === s.name ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select></label>
       <label class="f">Date<input name="date" type="date" value="${esc(p ? p.date : s.date)}"></label>
       <div class="two"><label class="f">In<input name="in" type="time" value="${esc(p && p.in ? hmOf(p.in) : s.start || '')}"></label><label class="f">Out<input name="out" type="time" value="${esc(p && p.out ? hmOf(p.out) : s.end || '')}"></label></div>
+      ${(data.shiftTypes || []).length ? `<label class="f">Shift type (for payroll)<select name="type">${data.shiftTypes.map((t, i) => `<option value="${esc(t)}" ${(p && p.type ? p.type === t : i === 0) ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></label>` : ''}
       <label class="f">Note<input name="note" maxlength="200" value="${esc(p ? p.note : '')}" placeholder="e.g. Forgot to clock out"></label>
       <div class="btns"><button class="btn go">Save</button>${p ? `<button type="button" class="btn" data-delpunch="${esc(p.id)}">Delete</button>` : ''}</div></form></div></div>`;
 }
@@ -1630,7 +1631,7 @@ document.addEventListener('submit', async e => {
     (data.prep = data.prep || []).unshift({ id: 'tmp' + Date.now(), item: v('item'), details: v('details'), label: 'Sending…', for: [], by: data.me.name, at: new Date().toISOString(), doneAt: '', mine: false }); render();
     act('addPrep', { item: v('item'), details: v('details'), when: v('when'), notify }).then(r => { if (r && r.result){ const x = r.result;
       toast(x.names.length ? 'Sent to ' + x.label + ' · ' + x.names.map(first).join(', ') + '' : 'Added – nobody is scheduled for that shift yet'); } }); f.reset(); return; }
-  if (kind === 'punch'){ const p = { id: sheet && sheet.id || '', name: v('name'), date: v('date'), in: v('in'), out: v('out'), note: v('note') }; sheet = null; act('savePunch', p).then(r => { if (r) toast('Saved'); }); return; }
+  if (kind === 'punch'){ const p = { id: sheet && sheet.id || '', name: v('name'), date: v('date'), in: v('in'), out: v('out'), note: v('note') }; if (f.elements.namedItem('type')) p.type = v('type'); sheet = null; act('savePunch', p).then(r => { if (r) toast('Saved'); }); return; }
   if (kind === 'reminders'){ const mode = (f.querySelector('input[name=mode]:checked') || {}).value || '';
     const em = f.elements.namedItem('email') ? v('email') : (data.me.email || ''), push = data.reminders && data.reminders.by === 'push';
     act('myReminders', { email: em, mode }).then(r => { if (r) toast(mode === 'Off' ? 'Reminders off' : push ? (pushOn_() ? 'Saved' : 'Saved – turn on notifications to get them') : em ? 'Saved' : 'Saved – add an email to get them'); }); return; }
