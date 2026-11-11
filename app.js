@@ -463,7 +463,7 @@ function viewToday(){
   const chatN = (d.channels || []).reduce((n, c) => n + c.unread, 0);
   const hour = new Date().getHours(), hi = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
   const att = mgr() ? weekReport(monday(T())).reduce((a, r) => ({ late: a.late + r.lates, no: a.no + r.noShow, miss: a.miss + r.missingOut }), { late: 0, no: 0, miss: 0 }) : null;
-  const remindHint = d.reminders && d.reminders.on && !d.me.email && d.me.reminders !== 'Off' && load('pt-nohint') !== '1'
+  const remindHint = d.reminders && d.reminders.on && d.reminders.by && d.reminders.by !== 'push' && !d.me.email && d.me.reminders !== 'Off' && load('pt-nohint') !== '1'
     ? `<div class="hint"><b>Get a reminder before your shifts.</b> Add your email and pick when. <div class="btns" style="margin-top:8px"><button class="btn sm go" data-more="reminders">Set up reminders</button><button class="btn sm" data-nohint>Not now</button></div></div>` : '';
   const pubHint = lead() && d.unpublished ? `<div class="hint"><b>${d.unpublished} schedule change${d.unpublished > 1 ? 's' : ''} not published yet.</b> The team can't see ${d.unpublished > 1 ? 'them' : 'it'} until you publish. <div class="btns" style="margin-top:8px"><button class="btn sm go" data-tab="schedule">Review & publish</button></div></div>` : '';
   const pm = prepMine();
@@ -847,7 +847,8 @@ function viewChat(){
   const res = r => `<button class="crow" data-openfind="${esc(r.channel)}|${esc(r.id)}">${avatar({ id: r.channel, name: r.name, kind: r.kind })}<span class="cbody"><span class="ctop"><b>${esc(r.kind === 'dm' ? r.name : r.name)}</b><span class="cwhen">${shortWhen(r.at)}</span></span><span class="cpre wrap"><span class="sub">${esc(first(r.from))}:</span> ${hl(r.text)}</span></span></button>`;
   const body = searching ? (chat.results ? chat.results.map(res).join('') || '<div class="empty">No messages match.</div>' : '<div class="empty">Searching…</div>')
     : ch.map(row).join('') || '<div class="empty">No conversations yet. Tap the pencil to start one.</div>';
-  return `<div class="chathead"><h1>Messages</h1><button class="iconbtn" data-newdm aria-label="New message">${SVG_EDIT}</button></div>
+  const unreadN = ch.reduce((n, c) => n + (Number(c.unread) || 0), 0);
+  return `<div class="chathead"><h1>Messages</h1>${unreadN && LIVE ? '<button class="btn sm" data-readall style="margin-left:auto;margin-right:8px">Mark all read</button>' : ''}<button class="iconbtn" data-newdm aria-label="New message">${SVG_EDIT}</button></div>
     ${v3() ? `<div class="csearch"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><input type="search" data-csearch placeholder="Search messages" value="${esc(q)}" aria-label="Search messages" autocomplete="off">${q ? '<button class="cx" data-clearsearch aria-label="Clear search">×</button>' : ''}</div>` : ''}
     <div class="clist">${body}</div>`;
 }
@@ -1133,13 +1134,14 @@ function viewReminders(){
   const webcal = cal.replace(/^https?:/, 'webcal:');
   const modes = [['Night before', 'Night before at ' + t12(R.night || '19:00')], ['Before shift', R.hours + ' hours before'], ['Both', 'Both'], ['Off', 'Off']];
   return `${back()}<h1>Shift reminders</h1>
-    ${R.on ? '' : '<div class="hint">Reminder emails are turned off for the shop right now. A manager can turn them on in the sheet\'s Settings.</div>'}
+    ${R.on ? '' : '<div class="hint">Shift reminders are turned off for the shop right now. A manager can turn them on in the sheet\'s Settings.</div>'}
+    ${R.on && R.by !== 'email' ? (pushOn_() ? '<div class="hint">Reminders come as a notification on this ' + deviceKind() + '.</div>'
+      : `<div class="hint"><b>Turn on notifications to get your reminders</b>${R.by === 'push' ? ' – they don\'t go by email.' : '.'} <div class="btns" style="margin-top:8px"><button class="btn sm go" data-more="push">Turn on notifications</button></div></div>`) : ''}
     <div class="card"><form class="stack" data-form="reminders">
-      <label class="f">Email for reminders<input name="email" type="email" autocomplete="email" maxlength="120" value="${esc(me.email || '')}" placeholder="you@example.com"></label>
+      ${R.by && R.by !== 'push' ? `<label class="f">Email for reminders<input name="email" type="email" autocomplete="email" maxlength="120" value="${esc(me.email || '')}" placeholder="you@example.com"></label>` : ''}
       <div class="f" style="display:grid;gap:6px;font-size:.8rem;color:var(--muted)">When to remind me
         ${modes.map(([k, n]) => `<label class="opt"><input type="radio" name="mode" value="${k}" ${me.reminders === k ? 'checked' : ''}> ${esc(n)}</label>`).join('')}</div>
-      <div class="btns"><button class="btn go">Save</button>${me.email ? '<button type="button" class="btn" data-testmail>Send me a test</button>' : ''}</div>
-      <p class="sub" style="margin:0">You'll also get an email if a manager adds, moves or removes one of your shifts in the next 7 days (unless reminders are Off).</p></form></div>
+      <div class="btns"><button class="btn go">Save</button>${me.email && R.by && R.by !== 'push' ? '<button type="button" class="btn" data-testmail>Send me a test</button>' : ''}</div></form></div>
     ${cal ? `<h2>Put your shifts in your calendar</h2><div class="card"><div class="row" style="display:block">
       <p style="margin:0 0 10px">Your shifts show up in your phone's calendar and update by themselves, with an alert 1 hour before each one.</p>
       <div class="btns"><a class="btn go" href="${esc(webcal)}">iPhone / Mac calendar</a><button class="btn" data-copycal="${esc(cal)}">Copy link for Google Calendar</button></div>
@@ -1348,6 +1350,7 @@ const TABS = [['schedule', 'Schedule', '▦'], ['chat', 'Chat', '✉︎'], ['tod
 let lastView = '';
 /* ----- icon badge: unread messages as a number on the app icon (installed apps; iPhone needs notifications on) ----- */
 let lastBadge = -1;
+document.addEventListener('visibilitychange', () => { if (!document.hidden){ lastBadge = -1; syncBadge(); } });
 function syncBadge(){
   const n = data && data.channels ? data.channels.reduce((a, c) => a + (Number(c.unread) || 0), 0) : 0;
   if (n === lastBadge) return; lastBadge = n;
@@ -1423,6 +1426,7 @@ document.addEventListener('click', async e => {
   if (d.showcode){ showCode[d.showcode] = !showCode[d.showcode]; render(); return; }
   if (d.edit){ editUser = d.edit; render(); return; }
   if (d.canceledit !== undefined){ editUser = null; render(); return; }
+  if (d.readall !== undefined){ (data.channels || []).forEach(c => { if (c.unread){ c.unread = 0; try { LIVE && LIVE.send({ t: 'read', ch: c.id }); } catch (_) {} } }); lastBadge = -1; render(); toast('All caught up'); return; }
   if (d.joindone !== undefined){ joined = null; render(); return; }
   if (d.dismiss !== undefined){ justAdded = null; inviteFor = ''; render(); return; }
   if (d.invite){ inviteFor = d.invite; justAdded = null; render(); const el = $('#invite'); if (el) el.scrollIntoView({ block: 'start' }); return; }
@@ -1581,7 +1585,8 @@ document.addEventListener('submit', async e => {
       toast(x.names.length ? 'Sent to ' + x.label + ' · ' + x.names.map(first).join(', ') + (x.emailed ? ' (emailed ' + x.emailed + ')' : '') : 'Added – nobody is scheduled for that shift yet'); } }); f.reset(); return; }
   if (kind === 'punch'){ const p = { id: sheet && sheet.id || '', name: v('name'), date: v('date'), in: v('in'), out: v('out'), note: v('note') }; sheet = null; act('savePunch', p).then(r => { if (r) toast('Saved'); }); return; }
   if (kind === 'reminders'){ const mode = (f.querySelector('input[name=mode]:checked') || {}).value || '';
-    act('myReminders', { email: v('email'), mode }).then(r => { if (r) toast(mode === 'Off' ? 'Reminders off' : v('email') ? 'Saved' : 'Saved – add an email to get them'); }); return; }
+    const em = f.elements.namedItem('email') ? v('email') : (data.me.email || ''), push = data.reminders && data.reminders.by === 'push';
+    act('myReminders', { email: em, mode }).then(r => { if (r) toast(mode === 'Off' ? 'Reminders off' : push ? (pushOn_() ? 'Saved' : 'Saved – turn on notifications to get them') : em ? 'Saved' : 'Saved – add an email to get them'); }); return; }
   if (kind === 'avail'){ const day = v('day') === 'date' ? v('date') : v('day'); if (!day){ toast('Pick a date'); return; }
     (data.availability = data.availability || []).push({ id: 'tmp' + Date.now(), name: data.me.name, day, from: v('from'), to: v('to'), note: v('note') }); render(); act('addAvail', { day, from: v('from'), to: v('to'), note: v('note') }).then(r => { if (r) toast('Added'); }); f.reset(); return; }
   if (kind === 'editchat'){ const c = curChat(); if (!c) { sheet = null; render(); return; } if (!v('name')){ toast('Give it a name'); return; }

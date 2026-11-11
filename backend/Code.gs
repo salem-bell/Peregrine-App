@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '3.7';
+const VERSION = '3.8';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Off'];
 
@@ -50,6 +50,7 @@ const SETTINGS = [
   ['Clock-in distance (meters)',   '200',                       'How close to the shop counts as "at the shop".'],
   ['Test portal',                  '',                          'The certification test web app address (ends in /exec). Test links that start with ? are added to it.'],
   ['Shift reminder emails',        'On',                        'On or Off. Emails each person before their shifts (they pick when in the app, under More › Reminders). Needs an email on the Users tab.'],
+  ['Shift reminders by',           'Push',                      'Push (phone notifications only), Push or email (email only for people who haven\'t turned notifications on), or Push and email.'],
   ['Night-before reminder at',     '19:00',                     'When the night-before email goes out (24-hour time).'],
   ['Hours-before reminder',        '2',                         'How many hours before a shift the second reminder goes out.'],
   ['Default reminders',            'Night before',              'For people who haven\'t chosen: Night before, Before shift, Both or Off.'],
@@ -353,7 +354,7 @@ function state_(ss, me, slim) {
   const users = rv_(ss, 'Users').filter(r => String(r[0]).trim());
   const active = users.filter(r => truthy_(r[3])).map(r => String(r[0]));
   const out = { ok: true, version: VERSION, today, space: space_(ss), updated: new Date().toISOString(), edge: dataLive_(ss) ? setting_(ss, 'Data service address').replace(/\/+$/, '') : '', name: setting_(ss, 'Shop name') || 'Team', me: { name: me.name, role: me.role, id: me.id, email: String(users.find(r => String(r[6]) === me.id)[5] || ''), reminders: remindMode_(ss, users.find(r => String(r[6]) === me.id)), cal: calKey_(users.find(r => String(r[6]) === me.id)) },
-    reminders: { on: !/^off$/i.test(setting_(ss, 'Shift reminder emails')), night: setting_(ss, 'Night-before reminder at') || '19:00', hours: Number(setting_(ss, 'Hours-before reminder')) || 2 }, team: active,
+    reminders: { on: !/^off$/i.test(setting_(ss, 'Shift reminder emails')), by: remindBy_(ss), night: setting_(ss, 'Night-before reminder at') || '19:00', hours: Number(setting_(ss, 'Hours-before reminder')) || 2 }, team: active,
     people: users.filter(r => truthy_(r[3]) && r[6]).map(r => ({ id: String(r[6]), name: String(r[0]), role: role_(r[1]), onSchedule: onSched_(r), order: Number(r[12]) || 0 })) };
   out.active = activeMap_(ss, users, me);
   out.push = { key: setting_(ss, 'Push public key'), ready: !!(setting_(ss, 'Push service address') && setting_(ss, 'Push public key')),
@@ -1132,7 +1133,7 @@ function sendShiftReminders() {
   if (/^off$/i.test(setting_(ss, 'Shift reminder emails'))) return;
   const tz = ss.getSpreadsheetTimeZone(), now = new Date(), today = Utilities.formatDate(now, tz, 'yyyy-MM-dd'), hm = Utilities.formatDate(now, tz, 'HH:mm');
   const night = /^\d{1,2}:\d{2}$/.test(setting_(ss, 'Night-before reminder at')) ? hhmm_(setting_(ss, 'Night-before reminder at'), tz) : '19:00';
-  const hours = Number(setting_(ss, 'Hours-before reminder')) || 2;
+  const hours = Number(setting_(ss, 'Hours-before reminder')) || 2, by = remindBy_(ss);
   const users = vals_(ss.getSheetByName('Users')).filter(r => String(r[0]).trim() && truthy_(r[3]));
   const log = ss.getSheetByName('Reminder log') || (buildTab_(ss, 'Reminder log'), ss.getSheetByName('Reminder log'));
   const sent = {}; vals_(log).forEach(r => { sent[String(r[0])] = 1; });
@@ -1140,7 +1141,9 @@ function sendShiftReminders() {
   const rows = [], pushes = [], pushers = {}; try { vals_(ss.getSheetByName('Push')).forEach(r => { pushers[String(r[0])] = 1; }); } catch (e) {}
   shifts.forEach(x => {
     const u = users.find(r => String(r[0]).trim() === x.name); if (!u) return;
-    const hasMail = /@/.test(String(u[5])), hasPush = !!(pushers[String(u[6])] && pushPrefs_(u).remind); if (!hasMail && !hasPush) return;
+    const hasMail = /@/.test(String(u[5])), hasPush = !!(pushers[String(u[6])] && pushPrefs_(u).remind);
+    const viaPush = hasPush && by !== 'email', viaMail = hasMail && (by === 'email' || by === 'both' || (by === 'pushmail' && !hasPush));
+    if (!viaPush && !viaMail) return;
     const mode = remindMode_(ss, u); if (mode === 'Off') return;
     const startAt = atLocal_(x.date, x.start, tz).getTime(), left = (startAt - now.getTime()) / 36e5;
     const want = [];
@@ -1152,9 +1155,9 @@ function sendShiftReminders() {
       const when = kind === 'night' ? 'tomorrow' : 'today';
       const prep = vals_(ss.getSheetByName('Prep')).filter(r => r[1] && !r[9] && ymd_(r[3], tz) === x.date && String(r[5] || '').split(',').map(n => n.trim()).indexOf(x.name) >= 0).map(r => '• ' + r[1] + (r[2] ? ' – ' + r[2] : ''));
       const lines = [longDay_(x.date) + ':  ' + t12_(x.start) + '–' + t12_(x.end) + (x.position ? '  (' + x.position + ')' : '')].concat(x.notes ? ['Note: ' + x.notes] : []).concat(crew.length ? ['Working with: ' + crew.join(', ')] : []).concat(prep.length ? ['', 'Prep asked for your shift:'].concat(prep) : []);
-      if (hasPush) pushes.push({ uid: String(u[6]), kind: 'remind', title: '☕ You work ' + when + ' at ' + t12_(x.start), body: t12_(x.start) + '–' + t12_(x.end) + (x.position ? ' · ' + x.position : '') + (crew.length ? ' · with ' + crew.join(', ') : '') + (prep.length ? ' · ' + prep.length + ' prep item' + (prep.length === 1 ? '' : 's') : ''), url: '?go=today', tag: 'remind' });
-      if (hasPush && !hasMail) { rows.push([key, x.name, kind, new Date()]); sent[key] = 1; return; }
-      if (mail_(ss, String(u[5]).trim(), 'Reminder: you work ' + when + ' at ' + t12_(x.start), 'Hi ' + x.name.split(' ')[0] + ',', 'A reminder that you work ' + when + '.', lines) || hasPush) { rows.push([key, x.name, kind, new Date()]); sent[key] = 1; }
+      if (viaPush) pushes.push({ uid: String(u[6]), kind: 'remind', title: '☕ You work ' + when + ' at ' + t12_(x.start), body: t12_(x.start) + '–' + t12_(x.end) + (x.position ? ' · ' + x.position : '') + (crew.length ? ' · with ' + crew.join(', ') : '') + (prep.length ? ' · ' + prep.length + ' prep item' + (prep.length === 1 ? '' : 's') : ''), url: '?go=today', tag: 'remind' });
+      if (!viaMail) { rows.push([key, x.name, kind, new Date()]); sent[key] = 1; return; }
+      if (mail_(ss, String(u[5]).trim(), 'Reminder: you work ' + when + ' at ' + t12_(x.start), 'Hi ' + x.name.split(' ')[0] + ',', 'A reminder that you work ' + when + '.', lines) || viaPush) { rows.push([key, x.name, kind, new Date()]); sent[key] = 1; }
     });
   });
   if (rows.length) log.getRange(log.getLastRow() + 1, 1, rows.length, 4).setValues(rows);
@@ -1162,6 +1165,8 @@ function sendShiftReminders() {
   const v = vals_(log); if (v.length > 2000) log.deleteRows(2, v.length - 1500);   // keep the log small
 }
 
+/** How shift reminders go out (Settings › Shift reminders by): push (default), pushmail (email only without notifications), both, or email. */
+function remindBy_(ss) { const v = setting_(ss, 'Shift reminders by'); return /^e?mail/i.test(v) ? 'email' : /push/i.test(v) && /mail/i.test(v) ? (/\bor\b|if/i.test(v) ? 'pushmail' : 'both') : 'push'; }
 /* ----- push notifications: the Sheet decides who gets what; the Cloudflare Worker does the sending ----- */
 function pushPrefs_(r) {
   const P = { msg: 'all', schedule: true, prep: true, remind: true, news: true, active: true };
