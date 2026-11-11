@@ -210,6 +210,7 @@ table.grid{border-collapse:separate;border-spacing:0;width:100%;min-width:980px;
   .tabs .n{position:static;margin-left:auto}
   .tabs button.home{order:-1;flex:none;color:var(--muted)} .tabs button.home .ic{width:auto;height:auto;margin:0;display:inline;font-size:1.25rem;line-height:1.1;background:none;color:inherit;box-shadow:none}
   .tabs button.home[aria-current=page] .ic{background:none;color:inherit}
+  .tabs{overflow-y:auto} .tabs button[data-more]{letter-spacing:.04em;gap:10px;padding-right:8px} .tabs button .n{flex:none} .tabs .tabsep{flex:none;height:1px;background:var(--line);margin:8px 6px} .tabs .tabspacer{flex:1 1 auto}
   .tabs .deskonly{display:flex!important} .tabs button.cur-m{color:var(--muted)} .mobonly{display:none!important}
   main{margin-left:220px;max-width:none;padding:22px 28px 40px} main > *{max-width:760px;margin-left:auto;margin-right:auto}
   body.wide main > *{max-width:none}

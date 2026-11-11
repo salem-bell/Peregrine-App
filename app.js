@@ -1118,7 +1118,7 @@ async function pushTurnOff(){
   toast('Notifications off on this ' + deviceKind());
 }
 function viewPush(){
-  const P = data.push || {}, pr = P.prefs || {}, on = pushOn_(), back = '<button class="btn sm" data-more="">‹ More</button>';
+  const P = data.push || {}, pr = P.prefs || {}, on = pushOn_(), back = '<button class="btn sm" data-more="settings">‹ Settings</button>';
   let top;
   if (!P.ready) top = `<div class="empty">Push notifications aren't set up for the shop yet.${mgr() ? ' Fill in the Push settings in the sheet.' : ' Ask a manager.'}</div>`;
   else if (pushNeedsHome()) top = `<div class="row"><div class="txt"><b>First, add the app to your Home Screen</b><div class="sub">iPhones only send notifications to apps on the Home Screen.<br>1. Tap the Share button <b>⎋</b> at the bottom of Safari.<br>2. Tap <b>Add to Home Screen</b>, then <b>Add</b>.<br>3. Open Peregrine from your Home Screen and come back here.</div></div></div>`;
@@ -1157,7 +1157,7 @@ function viewReminders(){
   const me = data.me, R = data.reminders || {}, cal = API && me.cal ? API + '?cal=' + encodeURIComponent(me.cal) : '';
   const webcal = cal.replace(/^https?:/, 'webcal:');
   const modes = [['Night before', 'Night before at ' + t12(R.night || '19:00')], ['Before shift', R.hours + ' hours before'], ['Both', 'Both'], ['Off', 'Off']];
-  return `${back()}<h1>Shift reminders</h1>
+  return `${back('settings')}<h1>Shift reminders</h1>
     ${R.on ? '' : '<div class="hint">Shift reminders are turned off for the shop right now. A manager can turn them on in the sheet\'s Settings.</div>'}
     ${R.on && R.by !== 'email' ? (pushOn_() ? '<div class="hint">Reminders come as a notification on this ' + deviceKind() + '.</div>'
       : `<div class="hint"><b>Turn on notifications to get your reminders</b>${R.by === 'push' ? ' – they don\'t go by email.' : '.'} <div class="btns" style="margin-top:8px"><button class="btn sm go" data-more="push">Turn on notifications</button></div></div>`) : ''}
@@ -1311,7 +1311,7 @@ async function submitTest(){
   runner.sending = false; render();
 }
 /* ----- team ----- */
-const back = to => `<button class="btn sm" data-more="${to || ''}" style="margin-bottom:6px">‹ ${to ? 'Back' : 'More'}</button>`;
+const back = to => !to && wide() ? '' : `<button class="btn sm" data-more="${to || ''}" style="margin-bottom:6px">‹ ${to ? (to === 'settings' ? 'Settings' : 'Back') : 'More'}</button>`;   // desktop: the sidebar is the menu
 function viewTeam(){
   const us = (data.users || []).slice().sort((a, b) => (b.active - a.active) || a.name.localeCompare(b.name));
   const added = justAdded && us.find(u => u.name === justAdded), inv = added || (inviteFor && us.find(u => u.id === inviteFor));
@@ -1345,7 +1345,8 @@ function viewTeam(){
 }
 
 function viewMore(){
-  const views = { push: viewPush, reminders: viewReminders, requests: viewRequests, avail: viewAvail, time: viewTime, news: viewNews, resources: viewResources, team: () => mgr() ? viewTeam() : viewMoreList() };
+  const views = { settings: viewSettings, push: viewPush, reminders: viewReminders, requests: viewRequests, avail: viewAvail, time: viewTime, news: viewNews, resources: viewResources, team: () => mgr() ? viewTeam() : viewMoreList() };
+  if (!views[moreView] && wide()) moreView = 'settings';   // desktop has no More list – the sidebar lists everything
   return views[moreView] ? views[moreView]() : viewMoreList();
 }
 function viewMoreList(){
@@ -1358,13 +1359,22 @@ function viewMoreList(){
       ${item('time', mgr() ? 'Time sheets' : 'My time', mgr() ? 'Labor by day, week or pay period' : 'Your hours and estimated pay')}
       ${item('requests', 'Time off & swaps', '', pill(pendN))}
       ${item('avail', 'Availability', 'When you can\'t work')}
-      ${data.push && data.push.ready ? item('push', 'Notifications', pushOn_() ? 'On for this ' + deviceKind() : 'Off on this ' + deviceKind()) : ''}
-      ${item('reminders', 'Shift reminders', data.me.reminders === 'Off' || !data.me.email ? 'Off' : data.me.reminders + ' · ' + esc(data.me.email))}
       ${rowBtn('data-tab="tests" class="mobonly"', '<div class="txt"><b>Tests</b><div class="sub">Training & certification</div></div><span>›</span>')}
       ${item('resources', 'Resources', 'Recipes, guides, handbooks')}
       ${mgr() ? item('team', 'Team & sign-in codes') : ''}</div>
+    <div class="card">${item('settings', 'Settings', 'Notifications, reminders, look, sign out')}</div>
+    <p class="sub" style="text-align:center">Peregrine Team · server ${esc(data.version || '')}</p>`;
+}
+/** Settings: everything about this person and this phone, in one place (phone: from More; desktop: in the sidebar). */
+function viewSettings(){
+  const item = (k, label, sub) => rowBtn(`data-more="${k}"`, `<div class="txt"><b>${label}</b>${sub ? `<div class="sub">${sub}</div>` : ''}</div><span>›</span>`), R = data.reminders || {};
+  const remindSub = data.me.reminders === 'Off' ? 'Off' : R.by === 'push' ? data.me.reminders + ' · by notification' : data.me.email ? data.me.reminders + ' · ' + esc(data.me.email) : 'Off – no email';
+  return `${back()}<h1>Settings</h1><div class="card">
+      ${data.push && data.push.ready ? item('push', 'Notifications', pushOn_() ? 'On for this ' + deviceKind() : 'Off on this ' + deviceKind()) : ''}
+      ${item('reminders', 'Shift reminders', remindSub)}
+      ${canSwitch() ? rowBtn('data-locs', `<div class="txt"><b>Location</b><div class="sub">${esc(locName(HERE))}</div></div><span>›</span>`) : ''}</div>
     <h2>Look</h2><div class="seg">${[['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']].map(([k, n]) => `<button data-theme="${k}" aria-pressed="${theme() === k}">${n}</button>`).join('')}</div>
-    <h2>${esc(data.me.name)} · ${esc(data.me.role)}</h2><div class="card"><div class="row"><div class="txt sub">Signed in on this phone.${!standalone() ? ' Tip: add this app to your home screen.' : ''}</div><button class="btn sm" data-signout>Sign out</button></div></div>
+    <h2>${esc(data.me.name)} · ${esc(data.me.role)}</h2><div class="card"><div class="row"><div class="txt sub">Signed in on this ${deviceKind()}.${!standalone() && !wide() ? ' Tip: add this app to your home screen.' : ''}</div><button class="btn sm" data-signout>Sign out</button></div></div>
     <p class="sub" style="text-align:center">Peregrine Team · server ${esc(data.version || '')}</p>`;
 }
 
@@ -1381,6 +1391,14 @@ function syncBadge(){
   try { if ('setAppBadge' in navigator) (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {}); } catch (_) {}
   try { caches.open(NS + 'chat-pass').then(c => c.put('/badge', new Response(String(n)))).catch(() => {}); } catch (_) {}   // the notification handler counts up from here
 }
+/** Desktop sidebar: the More pages listed out, with Settings at the bottom (the phone keeps them under More). */
+function deskMore(){
+  if (!wide() || !data) return '';
+  const pendN = mgr() ? (data.requests || []).filter(q => q.status === 'Pending' && q.from !== data.me.name).length : 0, unreadN = (data.announcements || []).filter(a => !a.read).length;
+  const it = (k, n, ic, badge) => `<button data-more="${k}" class="deskonly" ${tab === 'more' && (moreView === k || (k === 'settings' && /^(push|reminders)$/.test(moreView))) ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}${badge ? `<span class="n">${badge}</span>` : ''}</button>`;
+  return `<div class="tabsep deskonly" aria-hidden="true"></div>${it('news', 'Announcements', '⚑', unreadN)}${it('time', mgr() ? 'Time sheets' : 'My time', '⏱')}${it('requests', 'Time off & swaps', '⇄', pendN)}${it('avail', 'Availability', '◷')}${it('resources', 'Resources', '❏')}${mgr() ? it('team', 'Team', '☺') : ''}
+    <div class="tabspacer deskonly" aria-hidden="true"></div>${it('settings', 'Settings', '⚙︎')}`;
+}
 function setShop(t){ const el = $('#shop'); if (canSwitch()) el.innerHTML = `<button class="locbtn" data-locs aria-label="Switch location">${esc(locName(HERE))} <span aria-hidden="true">▾</span></button>`; else el.textContent = t; }   // with the switcher, the bar names the location
 function render(){
   syncBadge();
@@ -1395,7 +1413,7 @@ function render(){
   const chatN = (data.channels || []).reduce((n, c) => n + c.unread, 0);
   const badge = { lists: prepMine().length, chat: chatN, more: (mgr() ? (data.requests || []).filter(q => q.status === 'Pending' && q.from !== data.me.name).length : 0) + (data.announcements || []).filter(a => !a.read).length };
   $('#tabs').hidden = false;
-  $('#tabs').innerHTML = TABS.map(([k, n, ic, cls]) => `<button data-tab="${k}" class="${cls || ''}${k === 'more' && tab === 'tests' ? ' cur-m' : ''}" ${tab === k ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}${badge[k] ? `<span class="n">${badge[k]}</span>` : ''}</button>`).join('');
+  $('#tabs').innerHTML = TABS.map(([k, n, ic, cls]) => `<button data-tab="${k}" class="${cls || ''}${k === 'more' ? ' mobonly' : ''}${k === 'more' && tab === 'tests' ? ' cur-m' : ''}" ${tab === k && !(k === 'more' && wide()) ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}${badge[k] ? `<span class="n">${badge[k]}</span>` : ''}</button>`).join('') + deskMore();
   const ae = document.activeElement, keepWage = ae && ae.dataset && (ae.dataset.wage || ae.dataset.invf) ? [ae.dataset.wage ? `[data-wage="${ae.dataset.wage}"]` : `[data-invf="${ae.dataset.invf}"][data-invk="${ae.dataset.invk}"]`, ae.value, ae.selectionStart] : null;
   const typingIn = document.activeElement && document.activeElement.closest && document.activeElement.closest('.composer');
   const draft = typingIn ? document.activeElement.value : null;
