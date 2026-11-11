@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '4.2';
+const VERSION = '4.3';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Off'];
 
@@ -41,6 +41,7 @@ const SETTINGS = [
   ['Checklist lists',              'Opening, Mid, Closing, Side work', 'Names of the shift checklists, in order, separated by commas. Tasks go on the Checklists tab.'],
   ['Positions',                    'Bar, Register, Lead',       'Positions for the schedule, separated by commas.'],
   ['Ask for the code again every', '60',                        'Days before a phone asks for the name and code again (0 = never).'],
+  ['Managers sign in again every', '7',                         'Days before a manager\'s phone asks for the name and code again (shorter, because a manager\'s sign-in sees everything). 0 = same as everyone.'],
   ['Schedule days shown',          '14',                        'How many days ahead the schedule shows.'],
   ['Server address',               '',                          'Paste the Web app URL from Deploy › Manage deployments (ends in /exec). The menu uses it.'],
   ['App address',                  'https://salem-bell.github.io/Peregrine-App/', 'Where staff open the app and add it to their home screen.'],
@@ -297,13 +298,19 @@ function sig_(r, issued) {
 function role_(v) { return ROLES.indexOf(String(v)) >= 0 ? String(v) : 'Staff'; }
 
 /** Token → the signed-in person, or an error the app turns into the sign-in screen. */
+/** How long a sign-in lasts: Settings › Ask for the code again every, or the shorter manager limit (default 7 days) for managers. */
+function signInDays_(ss, role) {
+  const all = Number(setting_(ss, 'Ask for the code again every') || 60), raw = setting_(ss, 'Managers sign in again every'), mgr = raw === '' ? 7 : Number(raw) || 0;
+  if (role !== 'Manager' || !mgr) return all;
+  return all > 0 ? Math.min(all, mgr) : mgr;
+}
 function who_(ss, token) {
   const [t, id, issued, sig] = String(token || '').split('.');
   if (t !== 'T' || !id || PropertiesService.getScriptProperties().getProperty('SHEET_ID') !== ss.getId()) throw new Error('signin: please sign in');
   const rows = rv_(ss, 'Users'), i = rows.findIndex(r => String(r[6]) === id), r = rows[i];
   if (!r || !truthy_(r[3]) || sig_(r, issued) !== sig) throw new Error('signin: please sign in');
-  const days = Number(setting_(ss, 'Ask for the code again every') || 60);
-  if (days > 0 && Date.now() - Number(issued) > days * 864e5) throw new Error('signin: it has been ' + days + ' days – please sign in again');
+  const days = signInDays_(ss, role_(r[1]));
+  if (days > 0 && Date.now() - Number(issued) > days * 864e5) throw new Error('signin: it has been ' + days + (days === 1 ? ' day' : ' days') + ' – please sign in again');
   touch_(ss, id, i + 2);
   return { name: String(r[0]), role: role_(r[1]), id, row: i + 2 };
 }
@@ -1503,10 +1510,9 @@ function pushData_(force) {
         hashes[me.id] = h; if (old[me.id] !== h) states[me.id] = txt;
       } catch (e) { console.warn('fast loading: couldn\'t build data for ' + me.name + ': ' + e); }
     });
-    const days = Number(setting_(ss, 'Ask for the code again every') || 60);
     // what sig_() signs before the issue time, so the Worker can check sign-ins the same way who_() does
     const body = JSON.stringify({ at: started, tz, today, tokenKey: props.getProperty('SECRET') || 'x',
-      roster: users.map(r => ({ id: String(r[6]), match: 'T.' + r[6], pre: [r[6], String(r[2]).trim(), Number(r[7]) || 1, ''].join('|'), days })), states });
+      roster: users.map(r => ({ id: String(r[6]), match: 'T.' + r[6], pre: [r[6], String(r[2]).trim(), Number(r[7]) || 1, ''].join('|'), days: signInDays_(ss, role_(r[1])) })), states });
     const res = UrlFetchApp.fetch(setting_(ss, 'Data service address').replace(/\/+$/, '') + '/s/' + space_(ss) + '/push', { method: 'post', contentType: 'application/json; charset=utf-8',
       payload: Utilities.newBlob(body).getBytes(), headers: { 'x-sig': chatSign_(setting_(ss, 'Data service secret'), body) }, muteHttpExceptions: true });
     if (res.getResponseCode() !== 200) throw new Error('The data service answered ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 200) + ' – check Settings › Data service address and secret');
