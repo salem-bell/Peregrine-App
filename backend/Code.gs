@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '4.1';
+const VERSION = '4.2';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Off'];
 
@@ -344,20 +344,37 @@ function api_(token, p) {
       });
       SpreadsheetApp.flush();
     } finally { dirty_(touched); lock.releaseLock(); }
-    const out = state_(ss, who_(ss, token), batch && p.slim);
+    const out = state_(ss, who_(ss, token), batch && p.slim, p.have);
     if (batch) out.results = results; else if (results[0] !== null) out.result = results[0];
     out.ms = Date.now() - t0; return out;
   } else { const lock = LockService.getScriptLock(); if (lock.tryLock(1500)) lock.releaseLock(); }   // don't make readers wait long for someone else's save
-  const out = state_(ss, who_(ss, token)); out.ms = Date.now() - t0; return out;
+  if (p.hist) { const out = hist_(ss, me, p.hist); out.ms = Date.now() - t0; return out; }     // older weeks, fetched only when someone pages back
+  const out = state_(ss, me, false, p.have); out.ms = Date.now() - t0; return out;
 }
 
 /* ============================================================
    Reading
    ============================================================ */
 /** slim = schedule edits: skip checklists, announcements, time clock, prep, chat and links (the app keeps what it had). */
-function state_(ss, me, slim) {
+/* The app's data comes in sections. Each section's version is made from the tabs it reads (their change counters),
+   the date, the person and a 15-minute clock – so when the phone already holds a section's current version
+   (it sends them as "have"), that section is neither built nor sent: the reply lists it under "same".
+   A schedule edit (slim) skips the sections it can't have changed. */
+const SECTIONS_ = {
+  lists: ['Checklists', 'Checklist log', 'Settings'], news: ['Announcements', 'Reads', 'Users'], sched: ['Shifts', 'Availability', 'Settings', 'Users'],
+  clock: ['Time clock', 'Users', 'Shifts', 'Settings'], prep: ['Prep', 'Shifts', 'Users'], chat: ['Channels', 'Messages', 'Chat reads', 'Users', 'Settings'],
+  reqs: ['Requests'], links: ['Links'], team: ['Users', 'Settings']
+};
+const SLIM_SKIP_ = ['lists', 'news', 'clock', 'prep', 'chat', 'links'];
+function secVersion_(name, me, today) { return [VERSION, name, me.id, me.role, today, Math.floor(Date.now() / 9e5), gen_('*')].concat(SECTIONS_[name].map(gen_)).join('|'); }
+/** The days a normal load covers: this pay period and the whole of last week (overtime needs the full week). Older days load on demand. */
+function window_(ss, today) { const mon = addDays_(today, -((['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(weekday_(today)) + 7) % 7)), lastWeek = addDays_(mon, -7), pp = payPeriod_(ss, today)[0]; return pp < lastWeek ? pp : lastWeek; }
+function state_(ss, me, slim, have) {
   const tz = ss.getSpreadsheetTimeZone(), today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
   const isMgr = me.role === 'Manager', isLead = me.role === 'Lead' || isMgr;
+  have = have && typeof have === 'object' ? have : {};
+  const same = [], vers = {};
+  const want = name => { if (slim && SLIM_SKIP_.indexOf(name) >= 0) { same.push(name); return false; } const v = secVersion_(name, me, today); vers[name] = v; if (have[name] === v) { same.push(name); return false; } return true; };
   if (isMgr && rv_(ss, 'Users').some(r => String(r[0]).trim() && (!r[6] || !/^\d{4}$/.test(String(r[2]))))) { fixUsers_(ss, false); dirty_('Users'); }
   const users = rv_(ss, 'Users').filter(r => String(r[0]).trim());
   const active = users.filter(r => truthy_(r[3])).map(r => String(r[0]));
@@ -368,9 +385,10 @@ function state_(ss, me, slim) {
   out.push = { key: setting_(ss, 'Push public key'), ready: !!(setting_(ss, 'Push service address') && setting_(ss, 'Push public key')),
     prefs: pushPrefs_(users.find(r => String(r[6]) === me.id)), devices: rv_(ss, 'Push').filter(r => String(r[0]) === me.id).map(r => String(r[2])) };
 
-  if (slim) out.partial = true;
+  out.v = vers; out.same = same;
+  out.from = window_(ss, today);       // the oldest day this load covers (the app asks for anything older)
   // Checklists (today, plus the last 7 days for leads and managers)
-  if (!slim) {
+  if (want('lists')) {
   const lists = splitList_(setting_(ss, 'Checklist lists'));
   const tasks = rv_(ss, 'Checklists').filter(r => r[0] && r[1] && truthy_(r[3])).map(r => ({ list: String(r[0]).trim(), task: String(r[1]).trim(), order: Number(r[2]) || 0, notes: String(r[4] || ''), days: dayset_(r[5]), section: String(r[6] || '').trim() }));
   const log = rv_(ss, 'Checklist log', 2500).map(r => ({ date: ymd_(r[0], tz), list: String(r[1]), task: String(r[2]), by: String(r[3] || ''), at: toIso_(r[4]) }));
@@ -385,7 +403,9 @@ function state_(ss, me, slim) {
   const firstLog = log.reduce((m, x) => x.date && (!m || x.date < m) ? x.date : m, '');   // don't count days before anyone used the app
   if (isLead) out.history = [1, 2, 3, 4, 5, 6, 7].map(n => addDays_(today, -n)).filter(d => firstLog && d >= firstLog).map(d => { return { date: d, lists: dayLists(d).map(x => ({ list: x.list, done: x.done, total: x.total, missed: x.items.filter(i => !i.by).map(i => i.task) })) }; });
 
+  }
   // Announcements
+  if (want('news')) {
   const reads = rv_(ss, 'Reads');
   out.announcements = rv_(ss, 'Announcements').filter(r => r[0] && r[3] && truthy_(r[6])).map(r => {
     const id = String(r[0]), readers = reads.filter(x => String(x[0]) === id).map(x => String(x[1]));
@@ -393,72 +413,100 @@ function state_(ss, me, slim) {
     if (isLead) { a.readers = readers.filter(n => active.indexOf(n) >= 0); a.notRead = active.filter(n => readers.indexOf(n) < 0 && n !== a.from); }
     return a;
   }).sort((a, b) => (b.pinned - a.pinned) || String(b.posted).localeCompare(String(a.posted))).slice(0, 40);
-
   }
+
   // Schedule
   const days = Math.min(Math.max(Number(setting_(ss, 'Schedule days shown')) || 14, 1), 60);
-  const first = addDays_(today, isMgr ? -70 : -35), last = addDays_(today, isLead ? 56 : days - 1);   // past weeks feed the time sheets, labor history and pay periods
-  ensureShiftIds_(ss);
-  const srows = rv_(ss, 'Shifts');
-  // Staff only ever see the published version. Managers and leads see the working copy, marked draft / changed / removed.
-  out.shifts = (isLead ? srows.map(r => { const c = shiftObj_(r, tz), pb = pubObj_(r, tz); c.status = truthy_(r[8]) && pb ? 'removed' : !pb ? 'draft' : samePub_(c, pb) ? 'published' : 'changed'; if (c.status === 'changed') c.was = pb; return c; })
-    : srows.map(r => pubObj_(r, tz)).filter(Boolean))
-    .filter(s => s.date && s.name && s.date >= first && s.date <= last).sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
-  if (!isLead) {   // baristas see their own shifts and the people working with them – not the whole schedule
-    const mine = out.shifts.filter(s => s.name === me.name);
-    out.shifts = out.shifts.filter(s => s.name === me.name || mine.some(m => m.date === s.date && s.start < m.end && s.end > m.start));
-  }
+  const first = out.from, last = addDays_(today, isLead ? 56 : days - 1);
+  if (want('sched')) {
+  out.shifts = shiftsFor_(ss, me, first, last, tz);
   if (isLead) out.unpublished = out.shifts.filter(s => s.status !== 'published' && s.date >= today).length;
   out.positions = splitList_(setting_(ss, 'Positions'));
   out.presets = presets_(ss, tz);
   out.availability = rv_(ss, 'Availability').filter(r => r[0] && r[1] && (isLead || String(r[1]).trim() === me.name))
     .map(r => ({ id: String(r[0]), name: String(r[1]).trim(), day: /^\d{4}-/.test(ymd_(r[2], tz)) ? ymd_(r[2], tz) : String(r[2] || '').trim().slice(0, 3), from: hhmm_(r[3], tz), to: hhmm_(r[4], tz), note: String(r[5] || '') }))
     .filter(a => !/^\d{4}-/.test(a.day) || a.day >= addDays_(today, -1));
+  }
 
-  if (!slim) {
   // Time clock
+  if (want('clock')) {
   out.lateAfter = Number(setting_(ss, 'Late after (minutes)')) || 5;
   out.shiftTypes = shiftTypes_(ss);
   out.geo = /\d/.test(setting_(ss, 'Shop location (lat, lng)'));
-  out.punches = rv_(ss, 'Time clock').filter(r => r[0] && r[1] && (isMgr || String(r[1]).trim() === me.name))
-    .map(r => ({ id: String(r[0]), name: String(r[1]).trim(), date: ymd_(r[2], tz), in: toIso_(r[3]), out: toIso_(r[4]), shift: String(r[5] || ''), inPlace: String(r[6] || ''), outPlace: String(r[7] || ''), note: String(r[8] || ''), edited: String(r[9] || ''), type: String(r[10] || '') }))
-    .filter(x => x.date >= first).sort((a, b) => String(a.in).localeCompare(String(b.in)));
+  out.punches = punchesFor_(rv_(ss, 'Time clock', 2500), me, first, '9999', tz);   // only the newest rows of the Time clock are read
   out.open = out.punches.find(x => x.name === me.name && x.in && !x.out && Date.now() - new Date(x.in) < 16 * 36e5) || null;   // older ones are missed clock-outs for a manager to fix
 
   // Labor now (leads + managers): who is on the clock and what today's labor has cost so far.
   // Managers get each person's cost; leads get names, times and the running total only (no one's wage).
   if (isLead) out.floor = floor_(ss, users, today, tz, isMgr);
+  }
 
   // Prep requests for upcoming shifts
-  out.prep = prepList_(ss, me, tz);
+  if (want('prep')) out.prep = prepList_(ss, me, tz);
 
   // Chat: live service (the app connects to it itself) or, without one, the channel list from this sheet
+  if (want('chat')) {
   if (chatLive_(ss)) { out.chat = { url: setting_(ss, 'Chat service address').replace(/\/+$/, '') }; out.channels = []; }
   else out.channels = channels_(ss, me, users);
-
-
   }
+
   // Requests
+  if (want('reqs')) {
   const reqs = rv_(ss, 'Requests').filter(r => r[0]).map(r => ({ id: String(r[0]), created: toIso_(r[1]), from: String(r[2] || ''), type: String(r[3] || ''), date: ymd_(r[4], tz) || String(r[4] || ''),
     details: String(r[5] || ''), status: String(r[6] || 'Pending'), by: String(r[7] || ''), at: toIso_(r[8]), note: String(r[9] || '') }));
   out.requests = reqs.filter(q => isMgr || q.from === me.name || (isLead && q.type === 'Time off' && (q.status === 'Approved' || q.status === 'Pending'))).filter(q => q.status === 'Pending' || !q.date || q.date >= addDays_(today, -14)).sort((a, b) => String(b.created).localeCompare(String(a.created)));
 
+  }
+
   // Links
-  if (!slim) {
+  if (want('links')) {
   const can = w => /^manager/i.test(w) ? isMgr : /lead/i.test(w) ? isLead : true;
   out.links = rv_(ss, 'Links').map((r, i) => ({ r, i })).filter(({ r }) => r[0] && /^https?:\/\//.test(String(r[1])) && can(String(r[2] || 'Everyone')))
     .map(({ r, i }) => ({ id: 'L' + (i + 2), name: String(r[0]), url: String(r[1]), tier: /^manager/i.test(String(r[2])) ? 'Managers' : /lead/i.test(String(r[2])) ? 'Leads and managers' : 'Everyone',
       file: !!driveId_(r[1]), order: Number(r[3]) || 0 })).sort((a, b) => a.order - b.order);
   }
 
-  // Team (managers)
+  // Team (managers), pay settings
+  if (want('team')) {
   if (isMgr) out.users = users.map(r => ({ invite: r[6] ? inviteKey_(r) : '', joined: !!String(r[4] || '').replace(/\D/g, ''), id: String(r[6] || ''), name: String(r[0]), role: role_(r[1]), code: String(r[2] || ''), active: truthy_(r[3]), phone: String(r[4] || ''), email: String(r[5] || ''), reminders: remindMode_(ss, r), wage: Number(r[10]) || 0, onSchedule: onSched_(r), order: Number(r[12]) || 0 }));
   // Pay period + each person's own wage, so everyone can see their hours and estimated pay (never anyone else's wage)
   out.period = { kind: /twice|semi/i.test(setting_(ss, 'Pay period')) ? 'semi' : /week/i.test(setting_(ss, 'Pay period')) && !/2|two|bi/i.test(setting_(ss, 'Pay period')) ? 'week' : 'biweek', start: ymd_((rv_(ss, 'Settings').find(x => String(x[0]).trim() === 'Pay period starts on') || [])[1], tz) || '' };
   if (!/^\d{4}-\d\d-\d\d$/.test(out.period.start)) out.period.start = '';
   { const mine = users.find(r => String(r[0]).trim() === me.name); out.myPay = { wage: mine ? Number(mine[10]) || 0 : 0, ot: Number(setting_(ss, 'Overtime after (hours a week)')) || 40, otRate: Number(setting_(ss, 'Overtime rate')) || 1.5 }; }
   if (isMgr) out.pay = { ot: Number(setting_(ss, 'Overtime after (hours a week)')) || 40, otRate: Number(setting_(ss, 'Overtime rate')) || 1.5, extra: Number(setting_(ss, 'Labor cost extra (%)')) || 0 };
+  }
   return out;
+}
+/** Shifts between two days, as this person may see them. */
+function shiftsFor_(ss, me, first, last, tz) {
+  const isLead = me.role === 'Lead' || me.role === 'Manager';
+  ensureShiftIds_(ss);
+  const srows = rv_(ss, 'Shifts');
+  // Staff only ever see the published version. Managers and leads see the working copy, marked draft / changed / removed.
+  let list = (isLead ? srows.map(r => { const c = shiftObj_(r, tz), pb = pubObj_(r, tz); c.status = truthy_(r[8]) && pb ? 'removed' : !pb ? 'draft' : samePub_(c, pb) ? 'published' : 'changed'; if (c.status === 'changed') c.was = pb; return c; })
+    : srows.map(r => pubObj_(r, tz)).filter(Boolean))
+    .filter(s => s.date && s.name && s.date >= first && s.date <= last).sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
+  if (!isLead) {   // baristas see their own shifts and the people working with them – not the whole schedule
+    const mine = list.filter(s => s.name === me.name);
+    list = list.filter(s => s.name === me.name || mine.some(m => m.date === s.date && s.start < m.end && s.end > m.start));
+  }
+  return list;
+}
+/** Punches between two days: everyone's for managers, only their own for anyone else. */
+function punchesFor_(rows, me, first, last, tz) {
+  const isMgr = me.role === 'Manager';
+  return rows.filter(r => r[0] && r[1] && (isMgr || String(r[1]).trim() === me.name))
+    .map(r => ({ id: String(r[0]), name: String(r[1]).trim(), date: ymd_(r[2], tz), in: toIso_(r[3]), out: toIso_(r[4]), shift: String(r[5] || ''), inPlace: String(r[6] || ''), outPlace: String(r[7] || ''), note: String(r[8] || ''), edited: String(r[9] || ''), type: String(r[10] || '') }))
+    .filter(x => x.date >= first && x.date <= last).sort((a, b) => String(a.in).localeCompare(String(b.in)));
+}
+/** Older weeks on demand (time sheets and the schedule paging back): shifts and punches for from..to only. */
+function hist_(ss, me, h) {
+  const tz = ss.getSpreadsheetTimeZone(), from = String(h && h.from || ''), to = String(h && h.to || '');
+  if (!/^\d{4}-\d\d-\d\d$/.test(from) || !/^\d{4}-\d\d-\d\d$/.test(to) || to < from || daysBetween_(from, to) > 120) throw new Error('Pick a shorter stretch of dates');
+  const isLead = me.role === 'Lead' || me.role === 'Manager';
+  const oldest = addDays_(Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd'), me.role === 'Manager' ? -400 : -120);   // how far back each role may look
+  const f = from < oldest ? oldest : from;
+  return { ok: true, hist: { from: f, to, shifts: shiftsFor_(ss, me, f, to, tz), punches: punchesFor_(rv_(ss, 'Time clock'), me, f, to, tz) }, staffSched: !isLead };
 }
 
 /* ============================================================
@@ -494,7 +542,7 @@ function act_(ss, me, p, touched) {
       const title = clean_(p.title, 150); if (!title) throw new Error('Add a title');
       const sh = tab('Announcements'); put_(sh, [nextId_(sh, 'a'), new Date(), me.name, title, clean_(p.message, 3000), p.pinned === '1', true, p.mustAck === '1']);
       SpreadsheetApp.flush();
-      try { push_(ss, vals_(tab('Users')).filter(r => truthy_(r[3]) && r[6] && String(r[6]) !== me.id).map(r => ({ uid: String(r[6]), kind: 'news', title: '📣 ' + title, body: clean_(p.message, 160) || 'New announcement from ' + me.name.split(' ')[0], url: '?go=more:news', tag: 'news' }))); } catch (e) {}
+      try { push_(ss, vals_(ss.getSheetByName('Users')).filter(r => truthy_(r[3]) && r[6] && String(r[6]) !== me.id).map(r => ({ uid: String(r[6]), kind: 'news', title: '📣 ' + title, body: clean_(p.message, 160) || 'New announcement from ' + me.name.split(' ')[0], url: '?go=more:news', tag: 'news' }))); } catch (e) {}
       return;
     }
     case 'unannounce': {
@@ -586,7 +634,7 @@ function act_(ss, me, p, touched) {
       needLead();
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(p.date || '')) || !/^\d{2}:\d{2}$/.test(String(p.start || '')) || !/^\d{2}:\d{2}$/.test(String(p.end || ''))) throw new Error('A shift needs a date, a start and an end');
       const name = String(p.name || '');
-      if (!vals_(tab('Users')).some(r => String(r[0]) === name && truthy_(r[3]))) throw new Error('Pick someone on the team');
+      if (!vals_(ss.getSheetByName('Users')).some(r => String(r[0]) === name && truthy_(r[3]))) throw new Error('Pick someone on the team');
       const sh = tab('Shifts'), row = [p.date, p.start, p.end, name, clean_(p.position, 40), clean_(p.notes, 200)];
       const after = { date: p.date, start: p.start, end: p.end, name, position: row[4], notes: row[5] };
       if (p.id && !/^tmp/.test(String(p.id))) {
@@ -610,7 +658,7 @@ function act_(ss, me, p, touched) {
       sh.appendRow([id, item, clean_(p.details, 300), tgt.date, tgt.label, tgt.names.join(', '), me.name, new Date(), '', '']);
       // The people on that shift get a pop-up in the app on the day (and a notification if they have them on) – no email.
       if (p.notify !== '0') {
-        const users = vals_(tab('Users')).filter(r => truthy_(r[3]));
+        const users = vals_(ss.getSheetByName('Users')).filter(r => truthy_(r[3]));
         try { push_(ss, tgt.names.filter(n => n !== me.name).map(n => { const u = users.find(r => String(r[0]).trim() === n); return u && u[6] ? { uid: String(u[6]), kind: 'prep', title: '🧾 Prep for your shift', body: item + (tgt.label ? ' · ' + tgt.label : ''), url: '?go=lists:prep', tag: 'prep' } : null; }).filter(Boolean)); } catch (e) {}
       }
       return { id, label: tgt.label, names: tgt.names };
@@ -653,7 +701,7 @@ function act_(ss, me, p, touched) {
         // Email: each affected person gets their whole (published) week, with what changed.
         if (!/^off$/i.test(setting_(ss, 'Email schedule changes'))) {
           const now = vals_(sh).map(r => pubObj_(r, tz)).filter(x => x && inR(x.date));
-          const users = vals_(tab('Users')).filter(r => truthy_(r[3]));
+          const users = vals_(ss.getSheetByName('Users')).filter(r => truthy_(r[3]));
           Object.keys(affected).forEach(n => {
             const u = users.find(r => String(r[0]).trim() === n); if (!u) return;
             if (!/@/.test(String(u[5]))) { noEmail.push(n); return; }
@@ -667,7 +715,7 @@ function act_(ss, me, p, touched) {
         }
         // Push: everyone affected
         try {
-          const us = vals_(tab('Users'));
+          const us = vals_(ss.getSheetByName('Users'));
           push_(ss, Object.keys(affected).map(n => { const u = us.find(r => String(r[0]).trim() === n && truthy_(r[3])); return u && u[6] ? { uid: String(u[6]), kind: 'schedule', title: hadBefore ? '📅 Schedule updated' : '📅 Schedule posted', body: range + (hadBefore ? ' – your shifts changed. Tap to see them.' : ' – tap to see your shifts.'), url: '?go=schedule', tag: 'schedule' } : null; }).filter(Boolean));
         } catch (e) {}
         // In the app: a note in the schedule channel, so everyone gets an unread badge.
@@ -683,7 +731,7 @@ function act_(ss, me, p, touched) {
       needMgr();
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(p.from || ''))) throw new Error('Pick a week');
       const to = addDays_(p.from, 6), shifts = vals_(tab('Shifts')).map(r => pubObj_(r, tz)).filter(x => x && x.name && x.date >= p.from && x.date <= to);
-      const people = vals_(tab('Users')).filter(r => truthy_(r[3]));
+      const people = vals_(ss.getSheetByName('Users')).filter(r => truthy_(r[3]));
       let sent = 0, noEmail = [];
       people.forEach(u => {
         const mine = shifts.filter(x => x.name === String(u[0])).sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start)); if (!mine.length) return;
@@ -701,7 +749,7 @@ function act_(ss, me, p, touched) {
       return;
     }
     case 'testReminder': {
-      const u = vals_(tab('Users'))[me.row - 2], email = String(u[5] || '').trim();
+      const u = vals_(ss.getSheetByName('Users'))[me.row - 2], email = String(u[5] || '').trim();
       if (!/@/.test(email)) throw new Error('Add your email first');
       if (!mail_(ss, email, 'Test from the ' + (setting_(ss, 'Shop name') || 'team') + ' app', 'Hi ' + me.name.split(' ')[0] + ',', 'Shift reminders will come to this address.', [])) throw new Error('The daily email limit is used up – try tomorrow');
       return { sent: 1 };
@@ -713,7 +761,7 @@ function act_(ss, me, p, touched) {
       const shift = (d, n) => addDays_(d, n), off = Math.round((Date.parse(p.to) - Date.parse(p.from)) / 864e5);
       const src = v.filter(x => x.date >= p.from && x.date <= shift(p.from, 6));
       const have = {}; v.forEach(x => { have[x.date + '|' + x.start + '|' + x.name] = 1; });
-      const active = vals_(tab('Users')).filter(r => truthy_(r[3])).map(r => String(r[0]));
+      const active = vals_(ss.getSheetByName('Users')).filter(r => truthy_(r[3])).map(r => String(r[0]));
       const rows = src.filter(x => active.indexOf(x.name) >= 0).map(x => [shift(x.date, off), x.start, x.end, x.name, x.pos, x.notes, newId_(10), '', false]).filter(r => !have[r[0] + '|' + r[1] + '|' + r[3]]);
       if (rows.length) sh.getRange(sh.getLastRow() + 1, 1, rows.length, 9).setValues(rows);   // copies start as drafts
       audit('Copied ' + rows.length + ' shifts from the week of ' + p.from + ' to ' + p.to); return;
@@ -753,7 +801,7 @@ function act_(ss, me, p, touched) {
       needMgr();
       const name = String(p.name || ''), date = String(p.date || '');
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(p.in || '')) throw new Error('A punch needs a date and a clock-in time');
-      if (!vals_(tab('Users')).some(r => String(r[0]) === name)) throw new Error('Pick someone on the team');
+      if (!vals_(ss.getSheetByName('Users')).some(r => String(r[0]) === name)) throw new Error('Pick someone on the team');
       const tIn = atLocal_(date, p.in, tz), tOut = /^\d{2}:\d{2}$/.test(p.out || '') ? atLocal_(p.out < p.in ? addDays_(date, 1) : date, p.out, tz) : '';
       const sh = tab('Time clock');
       if (p.id) {
@@ -772,7 +820,7 @@ function act_(ss, me, p, touched) {
       const kind = p.kind === 'group' ? 'group' : 'channel';
       if (kind === 'channel' && !isLead) throw new Error('Only leads and managers can make channels – start a group instead');
       const name = clean_(p.name, 40); if (!name) throw new Error('Give it a name');
-      const ids = vals_(tab('Users')).filter(r => truthy_(r[3])).map(r => String(r[6]));
+      const ids = vals_(ss.getSheetByName('Users')).filter(r => truthy_(r[3])).map(r => String(r[6]));
       let members = String(p.members || '').split(',').filter(x => ids.indexOf(x) >= 0);
       if (kind === 'group') { if (members.indexOf(me.id) < 0) members.push(me.id); if (members.length < 2) throw new Error('Pick at least one other person'); } else members = [];
       tab('Channels').appendRow(['c' + newId_(8), name, kind, members.join(','), kind === 'channel' && /lead|manager/i.test(p.who || '') ? String(p.who) : 'Everyone', me.name, new Date()]); return;
@@ -785,7 +833,7 @@ function act_(ss, me, p, touched) {
       const name = clean_(p.name, 40); if (!name) throw new Error('Give it a name');
       let members = null;                             // check everything before writing anything
       if (kind === 'group' && p.members !== undefined) {
-        const ids = vals_(tab('Users')).filter(x => truthy_(x[3])).map(x => String(x[6]));
+        const ids = vals_(ss.getSheetByName('Users')).filter(x => truthy_(x[3])).map(x => String(x[6]));
         members = String(p.members || '').split(',').filter((x, i, a) => ids.indexOf(x) >= 0 && a.indexOf(x) === i);
         if (members.length < 2) throw new Error('A group needs at least two people');
       }

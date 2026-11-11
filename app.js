@@ -152,12 +152,57 @@ function act(action, params){
     if (!flying){ clearTimeout(flushT); flushT = setTimeout(flush, 120); }
   });
 }
+/* ---------- only what changed, and older weeks on demand ----------
+   The server splits its reply into sections and versions each one. The app sends the versions it already holds ("have");
+   sections that haven't changed come back listed under "same" and are kept from the copy on this phone.
+   A normal load covers this pay period and last week (data.from onward); older weeks are fetched when someone pages back. */
+const SECTION_FIELDS = { lists: ['checklists', 'history'], news: ['announcements'], sched: ['shifts', 'unpublished', 'positions', 'presets', 'availability'],
+  clock: ['lateAfter', 'shiftTypes', 'geo', 'punches', 'open', 'floor'], prep: ['prep'], chat: ['chat', 'channels'], reqs: ['requests'], links: ['links'], team: ['users', 'pay', 'period', 'myPay'] };
+const haveNow = () => data && data.v && data.me ? data.v : undefined;
+let HIST = { key: '', from: '', shifts: [], punches: [] }, histBusy = '';
+function mergeGot(keep, got){
+  if (got.partial && keep){ const o = Object.assign({}, keep, got); delete o.results; delete o.partial; return o; }   // an older server's "slim" reply
+  delete got.results; delete got.partial;
+  const sameUser = keep && keep.me && got.me && keep.me.id === got.me.id && keep.me.role === got.me.role;
+  let out = got;
+  if (sameUser && got.same && got.same.length){
+    out = Object.assign({}, got);
+    got.same.forEach(n => (SECTION_FIELDS[n] || []).forEach(f => { if (f in keep) out[f] = keep[f]; }));
+    out.v = Object.assign({}, keep.v || {}, got.v || {});
+  }
+  if (!sameUser) HIST = { key: '', from: '', shifts: [], punches: [] };
+  return withHist(out);
+}
+/** Older weeks fetched earlier are added back in front of each fresh load. */
+function withHist(d){
+  if (!d || !HIST.from || HIST.key !== (d.me && d.me.id + d.me.role)) return d;
+  const cut = d.from || T(), add = (cur, old) => { const ids = {}; (cur || []).forEach(x => { ids[x.id] = 1; }); return old.filter(x => x.date < cut && !ids[x.id]).concat(cur || []); };
+  return Object.assign(d, { shifts: add(d.shifts, HIST.shifts), punches: add(d.punches, HIST.punches) });
+}
+const loadedFrom = () => HIST.from && HIST.key === (data.me.id + data.me.role) && HIST.from < (data.from || T()) ? HIST.from : (data.from || plus(T(), -70));
+/** Make sure the days from `day` on are loaded (a week extra, so overtime adds up). Returns true when they already are. */
+function needFrom(day){
+  if (!data || !data.from || day >= loadedFrom()) return true;
+  const want = plus(monday(day), -7), to = plus(loadedFrom(), -1), from = want < plus(to, -119) ? plus(to, -119) : want, k = from + to;
+  if (histBusy === k) return false;
+  histBusy = k;
+  post({ fn: 'api', token: TOKEN, p: { hist: { from, to } } }).then(r => {
+    const h = r && r.hist; histBusy = ''; if (!h || !data) return;
+    const key = data.me.id + data.me.role, same = HIST.key === key;
+    const ids = a => new Set(a.map(x => x.id));
+    HIST = { key, from: h.from, shifts: h.shifts.concat(same ? HIST.shifts.filter(x => !ids(h.shifts).has(x.id)) : []), punches: h.punches.concat(same ? HIST.punches.filter(x => !ids(h.punches).has(x.id)) : []) };
+    if (h.from > want) HIST.limit = h.from;          // as far back as this role may look
+    data = withHist(data); render();
+  }).catch(e => { histBusy = ''; toast(String(e.message || e) === 'timeout' ? 'Earlier weeks took too long – try again' : String(e.message || e)); });
+  return false;
+}
+
 async function flush(){
   if (flying || !queue.length || !TOKEN) return;
   const batch = queue.splice(0), actions = batch.map(b => { const a = Object.assign({}, b.p); if (a.id && idMap[a.id]) a.id = idMap[a.id]; return a; });
   flying = true;
   let got = null, err = null;
-  try { got = await post({ fn: 'api', token: TOKEN, p: { actions, slim: actions.every(a => SLIM.test(a.action)) } }); } catch (e) { err = e; }
+  try { got = await post({ fn: 'api', token: TOKEN, p: { actions, slim: actions.every(a => SLIM.test(a.action)), have: haveNow() } }); } catch (e) { err = e; }
   flying = false; pending -= batch.length;
   if (err){
     const m = String(err.message || err);
@@ -174,7 +219,7 @@ async function flush(){
   if (typeof got.ms === 'number') console.info('[Peregrine] saved ' + batch.length + ' change' + (batch.length === 1 ? '' : 's') + ' – server ' + (got.ms / 1000).toFixed(1) + 's');
   if (!queue.length){   // nothing newer waiting: show the server's copy (a newer edit would otherwise be wiped from the screen)
     seqShown = ++seqStarted; busy = {}; offline = false;
-    const keep = data; data = got.partial ? Object.assign({}, keep, got) : got; delete data.results; delete data.partial; liveSync();
+    const keep = data; data = mergeGot(keep, Object.assign({}, got)); liveSync();
     save('pt-cache', JSON.stringify(data)); render();
   }
   batch.forEach((b, i) => b.res(res[i] && res[i].error ? null : Object.assign({}, data, { result: res[i] })));
@@ -186,7 +231,7 @@ async function refresh(p, o){
   const isAct = !!(p && p.action), seq = ++seqStarted;
   if (isAct){ pending++; lastAct = seq; }
   let got = null, err = null;
-  try { got = (!isAct && !(o && o.fresh) && await edgeLoad()) || await post({ fn: 'api', token: TOKEN, p: p || {} }); } catch (e) { err = e; }
+  try { got = (!isAct && !(o && o.fresh) && await edgeLoad()) || await post({ fn: 'api', token: TOKEN, p: Object.assign({ have: haveNow() }, p || {}) }); } catch (e) { err = e; }
   if (got && got.edge !== undefined && got.edge !== EDGE){ EDGE = got.edge; save('pt-edge', EDGE); }
   if (isAct && got) wrote(got);
   if (isAct) pending--;
@@ -200,7 +245,7 @@ async function refresh(p, o){
     if (isAct && !pending) setTimeout(() => refresh(), 300);
     render(); return null;
   }
-  data = got; offline = false; liveSync(); save('pt-cache', JSON.stringify(data)); render(); pushCheck(); if (pendingGo){ const g = pendingGo; pendingGo = ''; goTo(g); } return got;
+  data = mergeGot(data, got); offline = false; liveSync(); save('pt-cache', JSON.stringify(data)); render(); pushCheck(); if (pendingGo){ const g = pendingGo; pendingGo = ''; goTo(g); } return got;
 }
 function saving(){ const el = $('#saving'); if (el) el.hidden = !pending; }
 function signOut(msg){ lastWriteAt = 0; save('pt-lastwrite', null); stopChat(); liveEnd(); TOKEN = ''; data = null; save('pt-token', null); save('pt-cache', null); render(); if (msg) toast(msg.charAt(0).toUpperCase() + msg.slice(1)); }
@@ -634,6 +679,7 @@ function viewSchedule(){
 function viewScheduleBuild(seg){
   const [lo, hi] = weekBounds();
   if (!week || week < lo || week > hi) week = monday(T());
+  needFrom(week);                                   // paging back past what's loaded fetches that week (shifts appear when it arrives)
   if (wide()) return viewScheduleGrid(seg);
   const days = Array.from({ length: 7 }, (_, i) => plus(week, i));
   const label = week === monday(T()) ? 'This week' : week === plus(monday(T()), 7) ? 'Next week' : week === plus(monday(T()), -7) ? 'Last week' : 'Week of ' + shortDay(week);
@@ -745,7 +791,8 @@ function viewAvail(){
 /* ----- time sheet: day, week or pay period; a person's hours and pay, or (managers) everyone's labor ----- */
 function viewTime(){
   if (!tsDate) tsDate = T();
-  const [from, to] = rangeOf(tsMode, tsDate), lo = plus(T(), mgr() ? -70 : -35), hi = plus(T(), mgr() ? 55 : 13), today = T();
+  const [from, to] = rangeOf(tsMode, tsDate), lo = HIST.limit || plus(T(), mgr() ? -399 : -119), hi = plus(T(), mgr() ? 55 : 13), today = T();
+  const ready = needFrom(from), wait = ready ? '' : '<div class="hint">Loading earlier weeks…</div>';
   const span = from === to ? '' : shortDay(from) + ' – ' + shortDay(to);
   const title = tsMode === 'day' ? dayName(from) : tsMode === 'week' ? (from === monday(today) ? 'This week' : from === monday(plus(today, -7)) ? 'Last week' : from === monday(plus(today, 7)) ? 'Next week' : 'Week of ' + shortDay(from))
     : (today >= from && today <= to ? 'This pay period' : to < today ? 'Past pay period' : 'Next pay period');
@@ -762,7 +809,7 @@ function viewTime(){
     const who = mgr() ? tsPerson : data.me.name, r = rangeReport(from, to, who)[0] || { sched: 0, worked: 0, lines: [] }, w = wageOf(who);
     const PW = costIn(punchItems(punchesNow(who)), from, to, { noExtra: true }), PS = costIn(shiftItems(shiftsIn(who)), from, to, { noExtra: true });
     const future = from > today, ot = PW.ot[who];
-    return `${back(mgr() ? 'time' : '')}<h1>${mgr() ? esc(who) : 'My time'}</h1>${nav}
+    return `${back(mgr() ? 'time' : '')}<h1>${mgr() ? esc(who) : 'My time'}</h1>${nav}${wait}
       <div class="card laborcard"><div class="row lc-top">
         <div class="lc-stat"><b>${future ? '–' : hrs(r.worked)}</b><span class="sub">worked</span></div>
         ${w ? `<div class="lc-stat"><b>${future ? '–' : money(PW.total, true)}</b><span class="sub">est. pay</span></div>` : ''}
@@ -780,7 +827,7 @@ function viewTime(){
   const byDay = tsMode === 'day' ? '' : `<h2>By day</h2><div class="card">${days.map(d => { const past = d <= today, wh = (LW.hoursByDay[d] || 0) * 60, sh = (LS.hoursByDay[d] || 0) * 60;
       return rowBtn(`data-tsday="${d}" class="${d === today ? 'mine' : ''}"`, `<div class="txt"><b>${d === today ? 'Today' : shortDay(d)}</b><div class="sub">${past ? hrs(wh) + ' worked of ' + hrs(sh) + ' scheduled' : hrs(sh) + ' scheduled'}</div></div><span class="money">${past ? money(LW.byDay[d] || 0) : '<span class="sub">' + money(LS.byDay[d] || 0) + ' sched.</span>'}</span><span>›</span>`); }).join('')}</div>`;
   const ppl = rep.filter(r => LS.hoursByPerson[r.name] || r.worked || r.lines.length);
-  return `${back()}<h1>Time sheets</h1>${nav}
+  return `${back()}<h1>Time sheets</h1>${nav}${wait}
     <div class="card laborcard"><div class="row lc-top">
       <div class="lc-stat"><b>${future ? '–' : hrs(tot.w)}</b><span class="sub">worked</span></div>
       <div class="lc-stat"><b>${future ? '–' : money(LW.total)}</b><span class="sub">labor cost</span></div>
