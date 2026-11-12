@@ -157,7 +157,7 @@ function act(action, params){
    sections that haven't changed come back listed under "same" and are kept from the copy on this phone.
    A normal load covers this pay period and last week (data.from onward); older weeks are fetched when someone pages back. */
 const SECTION_FIELDS = { lists: ['checklists', 'history'], news: ['announcements'], sched: ['shifts', 'unpublished', 'positions', 'presets', 'availability'],
-  clock: ['lateAfter', 'shiftTypes', 'geo', 'punches', 'open', 'floor'], prep: ['prep'], chat: ['chat', 'channels'], reqs: ['requests'], links: ['links'], team: ['users', 'pay', 'period', 'myPay'] };
+  clock: ['lateAfter', 'overAfter', 'shiftTypes', 'geo', 'punches', 'open', 'floor'], prep: ['prep'], chat: ['chat', 'channels'], reqs: ['requests'], links: ['links'], team: ['users', 'pay', 'period', 'myPay'] };
 const haveNow = () => data && data.v && data.me ? data.v : undefined;
 let HIST = { key: '', from: '', shifts: [], punches: [] }, histBusy = '';
 function mergeGot(keep, got){
@@ -369,7 +369,7 @@ function rangeReport(from, to, name){
   const late = data.lateAfter || 5;
   return people.map(n => {
     const sh = (data.shifts || []).filter(s => live(s) && s.name === n && days.includes(s.date)), pu = (data.punches || []).filter(p => p.name === n && days.includes(p.date));
-    let sched = 0, worked = 0, lates = 0, noShow = 0, missingOut = 0, running = false; const lines = [];
+    let sched = 0, worked = 0, lates = 0, noShow = 0, missingOut = 0, overs = 0, autos = 0, running = false; const lines = [];
     sh.forEach(s => {
       sched += mins(s.end) - mins(s.start);
       const p = pu.find(x => x.shift === s.id) || pu.find(x => !x.shift && x.date === s.date);
@@ -377,18 +377,30 @@ function rangeReport(from, to, name){
       const lateBy = p && p.in ? Math.round((new Date(p.in) - new Date(pd(s.date).getTime() + mins(s.start) * 6e4)) / 6e4) : 0;
       if (p && lateBy > late) lates++;
       if (!p && started && !approvedOff(n, s.date)) noShow++;
-      lines.push({ date: s.date, shift: s, punch: p, lateBy, noShow: !p && started && !approvedOff(n, s.date) });
+      const overBy = overOf(s, p, now); if (OVER() && overBy > OVER()) overs++;
+      lines.push({ date: s.date, shift: s, punch: p, lateBy, overBy, noShow: !p && started && !approvedOff(n, s.date) });
     });
     pu.forEach(p => {
       if (p.in && p.out) worked += (new Date(p.out) - new Date(p.in)) / 6e4;
       else if (p.in && !p.out && (now - new Date(p.in)) <= 16 * 36e5){ worked += (now - new Date(p.in)) / 6e4; running = true; }
       else if (p.in && !p.out && (now - new Date(p.in)) > 16 * 36e5) missingOut++;
+      if (autoOut(p)) autos++;
       if (!lines.some(l => l.punch === p)) lines.push({ date: p.date, shift: null, punch: p, unscheduled: true });
     });
     lines.sort((a, b) => (a.date + (a.shift ? a.shift.start : hmOf(a.punch.in))).localeCompare(b.date + (b.shift ? b.shift.start : hmOf(b.punch.in))));
-    return { name: n, sched, worked, running, lates, noShow, missingOut, unscheduled: lines.filter(l => l.unscheduled).length, lines };
+    return { name: n, sched, worked, running, lates, noShow, missingOut, overs, autos, unscheduled: lines.filter(l => l.unscheduled).length, lines };
   });
 }
+/** Minutes a punch ran past its scheduled shift: the later of "stayed past the end" and "worked longer than scheduled". Live while still clocked in. */
+const OVER = () => data && data.overAfter !== undefined ? Number(data.overAfter) || 0 : 30;
+const autoOut = p => !!(p && p.outPlace === 'auto clock-out');
+function overOf(s, p, now){
+  if (!s || !p || !p.in) return 0;
+  const inT = new Date(p.in).getTime(), outT = p.out ? new Date(p.out).getTime() : (now - inT <= 16 * 36e5 ? now.getTime() : 0); if (!outT) return 0;
+  const st = pd(s.date).getTime() + mins(s.start) * 6e4, en = pd(s.date).getTime() + mins(s.end) * 6e4;
+  return Math.max(0, Math.round(Math.max(outT - en, (outT - inT) - (en - st)) / 6e4));
+}
+const overTxt = m => m < 60 ? m + ' min' : hrs(m);
 
 /* ---------- locations: managers switch between shops with the shop name at the top (locations.js) ---------- */
 const LOCS = window.PT_LOCATIONS || [], HOME = window.PT_HOME || 'richardson', HERE = window.PT_LOC || HOME;
@@ -519,7 +531,7 @@ function viewToday(){
   const mine = (d.requests || []).filter(q => q.from === d.me.name && q.status !== 'Cancelled').slice(0, 3);
   const chatN = (d.channels || []).reduce((n, c) => n + c.unread, 0);
   const hour = new Date().getHours(), hi = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
-  const att = mgr() ? weekReport(monday(T())).reduce((a, r) => ({ late: a.late + r.lates, no: a.no + r.noShow, miss: a.miss + r.missingOut }), { late: 0, no: 0, miss: 0 }) : null;
+  const att = mgr() ? weekReport(monday(T())).reduce((a, r) => ({ late: a.late + r.lates, no: a.no + r.noShow, miss: a.miss + r.missingOut, over: a.over + r.overs, auto: a.auto + r.autos }), { late: 0, no: 0, miss: 0, over: 0, auto: 0 }) : null;
   const remindHint = d.reminders && d.reminders.on && d.reminders.by && d.reminders.by !== 'push' && !d.me.email && d.me.reminders !== 'Off' && load('pt-nohint') !== '1'
     ? `<div class="hint"><b>Get a reminder before your shifts.</b> Add your email and pick when. <div class="btns" style="margin-top:8px"><button class="btn sm go" data-more="reminders">Set up reminders</button><button class="btn sm" data-nohint>Not now</button></div></div>` : '';
   const pubHint = lead() && d.unpublished ? `<div class="hint"><b>${d.unpublished} schedule change${d.unpublished > 1 ? 's' : ''} not published yet.</b> The team can't see ${d.unpublished > 1 ? 'them' : 'it'} until you publish. <div class="btns" style="margin-top:8px"><button class="btn sm go" data-tab="schedule">Review & publish</button></div></div>` : '';
@@ -533,16 +545,18 @@ function viewToday(){
     ${chatN ? `<div class="card">${rowBtn('data-tab="chat"', `<div class="txt"><b>${chatN} unread message${chatN > 1 ? 's' : ''}</b></div><span>›</span>`)}</div>` : ''}
     <h2>Working today</h2><div class="card">${today.length ? today.map(s => `<div class="row ${s.name === d.me.name ? 'mine' : ''}"><div class="txt"><b>${esc(s.name)}</b><div class="sub">${t12(s.start)}–${t12(s.end)}${s.position ? ' · ' + esc(s.position) : ''}</div></div>${mgr() ? clockState(s) : ''}</div>`).join('') : '<div class="empty">Nobody scheduled today.</div>'}</div>
     <h2>Checklists</h2><div class="card">${(d.checklists || []).map(c => rowBtn(`data-golist="${esc(c.list)}"`, `<div class="txt"><b>${esc(c.list)}</b><div class="progress"><i style="width:${c.total ? Math.round(c.done / c.total * 100) : 0}%"></i></div></div><span class="pill ${c.done === c.total && c.total ? 'ok' : 'mute'}">${c.done}/${c.total}</span>`)).join('') || '<div class="empty">No checklists today.</div>'}</div>
-    ${pendingReq.length || (att && (att.late || att.no || att.miss)) ? `<h2>Waiting on you</h2><div class="card">
+    ${pendingReq.length || (att && (att.late || att.no || att.miss || att.over || att.auto)) ? `<h2>Waiting on you</h2><div class="card">
       ${pendingReq.length ? rowBtn('data-more="requests"', `<div class="txt"><b>${pendingReq.length} request${pendingReq.length > 1 ? 's' : ''}</b> to approve</div><span>›</span>`) : ''}
-      ${att && (att.late || att.no || att.miss) ? rowBtn('data-more="time"', `<div class="txt"><b>This week's time sheet</b><div class="sub">${[att.late ? att.late + ' late' : '', att.no ? att.no + ' no-show' : '', att.miss ? att.miss + ' missing clock-out' : ''].filter(Boolean).join(' · ')}</div></div><span>›</span>`) : ''}</div>` : ''}
+      ${att && (att.late || att.no || att.miss || att.over || att.auto) ? rowBtn('data-more="time"', `<div class="txt"><b>This week's time sheet</b><div class="sub">${[att.late ? att.late + ' late' : '', att.no ? att.no + ' no-show' : '', att.over ? att.over + ' over shift' : '', att.auto ? att.auto + ' auto clock-out' : '', att.miss ? att.miss + ' missing clock-out' : ''].filter(Boolean).join(' · ')}</div></div><span>›</span>`) : ''}</div>` : ''}
     ${mine.length ? `<h2>Your requests</h2><div class="card">${mine.map(reqRow).join('')}</div>` : ''}`;
 }
 function clockState(s){       // managers: is this person clocked in for today's shift?
   const p = (data.punches || []).find(x => x.shift === s.id) || (data.punches || []).find(x => x.name === s.name && x.date === s.date && !x.shift);
   const now = new Date(), start = mins(s.start), cur = now.getHours() * 60 + now.getMinutes();
-  if (p && p.out) return `<span class="pill ok">Done ${timeOf(p.out)}</span>`;
-  if (p) { const lateBy = Math.round((new Date(p.in) - new Date(pd(s.date).getTime() + start * 6e4)) / 6e4); return `<span class="pill ${lateBy > (data.lateAfter || 5) ? 'warn' : 'ok'}">In ${timeOf(p.in)}</span>`; }
+  if (p && p.out) { const ob = overOf(s, p, now); return autoOut(p) ? '<span class="pill warn">Auto clocked out</span>' : `<span class="pill ${OVER() && ob > OVER() ? 'warn' : 'ok'}">Done ${timeOf(p.out)}${OVER() && ob > OVER() ? ' · over ' + overTxt(ob) : ''}</span>`; }
+  if (p) { const lateBy = Math.round((new Date(p.in) - new Date(pd(s.date).getTime() + start * 6e4)) / 6e4), ob = overOf(s, p, now);
+    if (OVER() && ob > OVER()) return `<span class="pill warn">Over ${overTxt(ob)}</span>`;
+    return `<span class="pill ${lateBy > (data.lateAfter || 5) ? 'warn' : 'ok'}">In ${timeOf(p.in)}</span>`; }
   return cur > start + (data.lateAfter || 5) ? '<span class="pill warn">Not in</span>' : '';
 }
 
@@ -799,7 +813,7 @@ function viewTime(){
   const nav = `<div class="seg">${[['day', 'Day'], ['week', 'Week'], ['period', 'Pay period']].map(([k, n]) => `<button data-tsmode="${k}" aria-pressed="${tsMode === k}">${n}</button>`).join('')}</div>
     <div class="weeknav"><button class="btn sm" data-tsstep="-1" ${from <= lo ? 'disabled' : ''} aria-label="Earlier">‹</button><div><b>${title}</b><div class="sub">${tsMode === 'day' ? (dayName(from) === shortDay(from) ? '' : shortDay(from)) : span}${(tsMode === 'day' ? from : to) !== today && !(today >= from && today <= to) ? ` · <button class="linkbtn" data-tsjump>Back to today</button>` : ''}</div></div><button class="btn sm" data-tsstep="1" ${to >= hi ? 'disabled' : ''} aria-label="Later">›</button></div>`;
   const line = (l, canEdit) => { const p = l.punch, s = l.shift, run = p && !p.out && (Date.now() - new Date(p.in)) <= 16 * 36e5;
-    const flags = [l.noShow ? ['warn', 'No-show'] : null, l.lateBy > (data.lateAfter || 5) ? ['warn', 'Late ' + l.lateBy + ' min'] : null, l.unscheduled ? ['mute', 'Not scheduled'] : null, run ? ['ok', 'On the clock'] : null,
+    const flags = [l.noShow ? ['warn', 'No-show'] : null, l.lateBy > (data.lateAfter || 5) ? ['warn', 'Late ' + l.lateBy + ' min'] : null, OVER() && l.overBy > OVER() ? ['warn', 'Over by ' + overTxt(l.overBy)] : null, autoOut(p) ? ['warn', 'Auto clocked out'] : null, l.unscheduled ? ['mute', 'Not scheduled'] : null, run ? ['ok', 'On the clock'] : null,
       p && !p.out && !run ? ['warn', 'No clock-out'] : null, p && p.inPlace && /^away/.test(p.inPlace) ? ['mute', 'Clocked in ' + p.inPlace] : null, p && p.edited ? ['mute', 'Edited by ' + first(p.edited)] : null, p && p.type ? ['mute', p.type] : null].filter(Boolean);
     const inner = `<div class="txt"><b>${shortDay(l.date)}</b><div class="sub">${s ? 'Scheduled ' + t12(s.start) + '–' + t12(s.end) : ''}${s && p ? ' · ' : ''}${p ? 'Worked ' + timeOf(p.in) + '–' + (p.out ? timeOf(p.out) : run ? 'now' : '…') + (p.out || run ? ' (' + hrs(((p.out ? new Date(p.out) : new Date()) - new Date(p.in)) / 6e4) + ')' : '') : ''}${p && p.note ? ' · ' + esc(p.note) : ''}</div>${flags.length ? `<div style="margin-top:4px">${flags.map(([c, t]) => `<span class="pill ${c}">${esc(t)}</span>`).join(' ')}</div>` : ''}</div>`;
     return canEdit ? rowBtn(`data-editpunch="${p ? esc(p.id) : ''}" data-pdate="${l.date}" data-pname="${esc(tsPerson)}" data-pstart="${s ? s.start : ''}" data-pend="${s ? s.end : ''}"`, inner + '<span class="sub">Fix</span>') : `<div class="row">${inner}</div>`; };
@@ -836,8 +850,8 @@ function viewTime(){
       ${!future ? `<div class="row"><div class="txt sub">${to < today && LS.total ? money(Math.abs(LW.total - LS.total)) + (LW.total >= LS.total ? ' over' : ' under') + ' the schedule. ' : ''}Hours × wage${k > 1 ? ' + ' + Math.round((k - 1) * 100) + '%' : ''}, overtime included. Estimate.${LW.missing.length || LS.missing.length ? ' No wage set for ' + [...new Set(LW.missing.concat(LS.missing))].map(first).map(esc).join(', ') + '.' : ''}</div></div>` : ''}</div>
     ${byDay}
     <h2>People</h2><div class="card">${ppl.map(r => rowBtn(`data-tsperson="${esc(r.name)}"`, `<div class="txt"><b>${esc(r.name)}${r.running ? ' <span class="pill ok">On</span>' : ''}</b><div class="sub">${future ? hrs((LS.hoursByPerson[r.name] || 0) * 60) + ' scheduled' : hrs(r.worked) + ' worked of ' + hrs((LS.hoursByPerson[r.name] || 0) * 60) + ' scheduled'}${wageOf(r.name) ? ` · ${future ? money(LS.byPerson[r.name] || 0) + ' sched.' : money(LW.byPerson[r.name] || 0) + ' of ' + money(LS.byPerson[r.name] || 0)}${LW.ot[r.name] ? ' · ' + hrs(LW.ot[r.name] * 60) + ' OT' : ''}` : ' · no wage set'}</div>
-      ${r.lates || r.noShow || r.missingOut || r.unscheduled ? `<div style="margin-top:4px">${[r.lates ? ['warn', r.lates + ' late'] : null, r.noShow ? ['warn', r.noShow + ' no-show'] : null, r.missingOut ? ['warn', r.missingOut + ' no clock-out'] : null, r.unscheduled ? ['mute', r.unscheduled + ' unscheduled'] : null].filter(Boolean).map(([c, t]) => `<span class="pill ${c}">${t}</span>`).join(' ')}</div>` : ''}</div><span>›</span>`)).join('') || '<div class="empty">No shifts or punches.</div>'}</div>
-    <p class="sub">Late means clocking in more than ${data.lateAfter || 5} minutes after the shift start. Approved time off never counts as a no-show.</p>`;
+      ${r.lates || r.noShow || r.missingOut || r.unscheduled || r.overs || r.autos ? `<div style="margin-top:4px">${[r.lates ? ['warn', r.lates + ' late'] : null, r.noShow ? ['warn', r.noShow + ' no-show'] : null, r.overs ? ['warn', r.overs + ' over shift'] : null, r.autos ? ['warn', r.autos + ' auto clock-out'] : null, r.missingOut ? ['warn', r.missingOut + ' no clock-out'] : null, r.unscheduled ? ['mute', r.unscheduled + ' unscheduled'] : null].filter(Boolean).map(([c, t]) => `<span class="pill ${c}">${t}</span>`).join(' ')}</div>` : ''}</div><span>›</span>`)).join('') || '<div class="empty">No shifts or punches.</div>'}</div>
+    <p class="sub">Late means clocking in more than ${data.lateAfter || 5} minutes after the shift start.${OVER() ? ' Over shift means working more than ' + OVER() + ' minutes past the scheduled shift.' : ''} Anyone still clocked in at night is clocked out automatically and flagged. Approved time off never counts as a no-show.</p>`;
 }
 function punchSheet(){
   const s = sheet, p = s.id ? (data.punches || []).find(x => x.id === s.id) : null;

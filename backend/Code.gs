@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '4.4';
+const VERSION = '4.5';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Morning of', 'Morning and before', 'Off'];
 
@@ -47,6 +47,8 @@ const SETTINGS = [
   ['App address',                  'https://salem-bell.github.io/Peregrine-App/', 'Where staff open the app and add it to their home screen.'],
   ['Shift presets',                'Open 06:30-12:30, Mid 10:00-15:00, Close 12:00-18:05', 'One-tap shift times on the schedule editor: Name HH:MM-HH:MM, separated by commas.'],
   ['Late after (minutes)',         '5',                         'Clock-ins this many minutes after the shift start count as late.'],
+  ['Flag shifts over by (minutes)', '30',                       'Punches that run this many minutes past the scheduled shift get flagged in Time sheets, and managers get a notification while it\'s happening. Off to turn off.'],
+  ['Auto clock-out at',            '11:59 PM',                  'Anyone still clocked in is clocked out at this time each night (and flagged so a manager can check it). Off to turn off.'],
   ['Shop location (lat, lng)',     '',                          'Optional. e.g. 32.9483, -96.7299. Clock-ins farther away than the distance below are flagged (not blocked).'],
   ['Clock-in distance (meters)',   '200',                       'How close to the shop counts as "at the shop".'],
   ['Test portal',                  '',                          'The certification test web app address (ends in /exec). Test links that start with ? are added to it.'],
@@ -438,6 +440,7 @@ function state_(ss, me, slim, have) {
   // Time clock
   if (want('clock')) {
   out.lateAfter = Number(setting_(ss, 'Late after (minutes)')) || 5;
+  out.overAfter = overAfter_(ss);
   out.shiftTypes = shiftTypes_(ss);
   out.geo = /\d/.test(setting_(ss, 'Shop location (lat, lng)'));
   out.punches = punchesFor_(rv_(ss, 'Time clock', 2500), me, first, '9999', tz);   // only the newest rows of the Time clock are read
@@ -799,6 +802,7 @@ function act_(ss, me, p, touched) {
     }
     // ----- time clock -----
     case 'clockIn': {
+      try { clockTick_(ss); } catch (e) {}                 // closes a forgotten punch from last night before starting a new one
       const sh = tab('Time clock'), v = vals_(sh);
       if (v.some(r => String(r[1]).trim() === me.name && openPunch_(r))) throw new Error('You\'re already clocked in');
       const now = new Date(), shiftId = matchShift_(ss, me.name, now, tz);
@@ -1197,6 +1201,7 @@ function mail_(ss, to, subject, hello, intro, lines) {
 function sendShiftReminders() {
   const ss = SpreadsheetApp.getActive();
   try { cleanPhotos_(ss); } catch (e) {}
+  try { clockTick_(ss); } catch (e) { console.warn('clock: ' + e); }
   try { payrollTick_(ss, false); } catch (e) { console.warn('payroll: ' + e); }
   if (/^off$/i.test(setting_(ss, 'Shift reminder emails'))) return;
   const tz = ss.getSpreadsheetTimeZone(), now = new Date(), today = Utilities.formatDate(now, tz, 'yyyy-MM-dd'), hm = Utilities.formatDate(now, tz, 'HH:mm');
@@ -1350,7 +1355,49 @@ function floor_(ss, users, today, tz, isMgr) {
   if (!isMgr) out.missing = out.missing.length;        // leads: how many, not who
   return out;
 }
-function openPunch_(r) { return r[3] && !r[4] && Date.now() - toMs_(r[3]) < 16 * 36e5; }
+function openPunch_(r) { return !!(r[3] && !r[4] && Date.now() - toMs_(r[3]) < 16 * 36e5 && Date.now() < autoOutAt_(r[3])); }
+/** When a punch that started at `inAt` gets clocked out automatically (Settings › Auto clock-out at; default 11:59 PM that night). Infinity = off. */
+function autoOutAt_(inAt) {
+  const ss = SpreadsheetApp.getActive(), v = setting_(ss, 'Auto clock-out at') || '11:59 PM';
+  if (/^off$/i.test(v)) return Infinity;
+  const tz = ss.getSpreadsheetTimeZone(), hm = /^\d{1,2}:\d{2}/.test(v) ? hhmm_(v, tz) : '23:59', d = Utilities.formatDate(new Date(toMs_(inAt)), tz, 'yyyy-MM-dd');
+  let t = atLocal_(d, hm, tz).getTime(); if (t <= toMs_(inAt)) t = atLocal_(addDays_(d, 1), hm, tz).getTime();   // clocked in after the cut-off: that's tomorrow's
+  return t;
+}
+function overAfter_(ss) { const v = setting_(ss, 'Flag shifts over by (minutes)'); return /^off$/i.test(v) ? 0 : Number(v) || 30; }
+/** Every 15 minutes: close punches left open past the nightly cut-off, and tell managers about anyone running long on their shift. */
+function clockTick_(ss) {
+  const sh = ss.getSheetByName('Time clock'); if (!sh) return;
+  const tz = ss.getSpreadsheetTimeZone(), now = Date.now(), v = vals_(sh), pushes = [], changed = [];
+  const users = vals_(ss.getSheetByName('Users')).filter(r => String(r[0]).trim() && truthy_(r[3]));
+  const uid = n => { const u = users.find(r => String(r[0]).trim() === n); return u ? String(u[6]) : ''; };
+  const mgrs = users.filter(r => role_(r[1]) === 'Manager').map(r => String(r[6]));
+  const log = ss.getSheetByName('Reminder log') || (buildTab_(ss, 'Reminder log'), ss.getSheetByName('Reminder log'));
+  const sent = {}; vals_(log).slice(-1500).forEach(r => { sent[String(r[0])] = 1; }); const logRows = [];
+  const over = overAfter_(ss), shifts = over ? vals_(ss.getSheetByName('Shifts')).map(r => pubObj_(r, tz)).filter(x => x && x.id) : [];
+  v.forEach((r, i) => {
+    if (!r[0] || !r[1] || !r[3] || r[4]) return;
+    const inMs = toMs_(r[3]), name = String(r[1]).trim(); if (!inMs || now - inMs > 7 * 864e5) return;   // very old open rows: leave them for a manager
+    const cut = autoOutAt_(r[3]);
+    if (now >= cut) {
+      const at = new Date(cut), note = String(r[8] || ''), msg = 'Auto clocked out at ' + Utilities.formatDate(at, tz, 'h:mm a');
+      sh.getRange(i + 2, 5).setValue(at); sh.getRange(i + 2, 8).setValue('auto clock-out'); sh.getRange(i + 2, 9).setValue(note ? note + ' · ' + msg : msg);
+      changed.push(name);
+      const id = uid(name); if (id) pushes.push({ uid: id, kind: 'clock', title: 'You were clocked out automatically', body: 'You were still clocked in at ' + Utilities.formatDate(at, tz, 'h:mm a') + '. If you left earlier, tell a manager so they can fix your time.', url: '?go=more:time', tag: 'autoout-' + r[0] });
+      return;
+    }
+    if (!over) return;
+    const x = shifts.find(s => s.id === String(r[5] || '')); if (!x) return;                    // unscheduled punches already show as "Not scheduled"
+    const end = atLocal_(x.date, x.end || '23:59', tz).getTime(), start = atLocal_(x.date, x.start || '00:00', tz).getTime();
+    const by = Math.max(now - end, (now - inMs) - (end - start)) / 6e4, key = 'over:' + r[0];
+    if (by <= over || sent[key]) return;
+    mgrs.filter(m => m !== uid(name)).forEach(m => pushes.push({ uid: m, kind: 'clock', title: '⏱ ' + name.split(' ')[0] + ' is ' + Math.round(by) + ' min over their shift', body: name + ' was scheduled ' + t12_(x.start) + '–' + t12_(x.end) + ' and is still clocked in.', url: '?go=more:time', tag: key }));
+    logRows.push([key, name, 'over', new Date()]); sent[key] = 1;
+  });
+  if (logRows.length) log.getRange(log.getLastRow() + 1, 1, logRows.length, 4).setValues(logRows);
+  if (changed.length) { dirty_(['Time clock']); try { (ss.getSheetByName('Audit') || (buildTab_(ss, 'Audit'), ss.getSheetByName('Audit'))).appendRow([new Date(), 'Auto clock-out', 'Clocked out ' + changed.join(', ')]); } catch (e) {} }
+  if (pushes.length) try { push_(ss, pushes); } catch (e) {}
+}
 function put_(sh, row) {
   const n = Math.max(sh.getLastRow(), 1), col = sh.getRange(1, 1, n, 1).getValues();
   let r = col.findIndex((x, i) => i > 0 && String(x[0]).trim() === '') + 1;
