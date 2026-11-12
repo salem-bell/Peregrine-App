@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '4.5';
+const VERSION = '4.6';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Morning of', 'Morning and before', 'Off'];
 
@@ -28,7 +28,7 @@ const TABS = {
   'Messages':      ['ID', 'Channel ID', 'From ID', 'From', 'Sent', 'Text', 'Photo (Drive file)', 'Reply to (message ID)', 'Read marks (user IDs)'],
   'Chat reads':    ['User ID', 'Channel ID', 'Read at'],
   'Tests':         ['Test', 'Link (full address, or ?level=… to add to Settings › Test portal)', 'Results tab', 'Must have passed first', 'Who sees it', 'Order'],
-  'Requests':      ['ID', 'Created', 'From', 'Type', 'Date', 'Details', 'Status', 'Decided by', 'Decided at', 'Note'],
+  'Requests':      ['ID', 'Created', 'From', 'Type', 'Date', 'Details', 'Status', 'Decided by', 'Decided at', 'Note', 'Last day (time off)'],
   'Links':         ['Name', 'Link', 'Who sees it', 'Order'],
   'Audit':         ['When', 'Who', 'What'],
   'Reminder log':  ['Key', 'Name', 'Kind', 'Sent'],
@@ -143,7 +143,7 @@ function buildTab_(ss, name) {
   const box = c => sh.getRange(2, c, 999, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build());
   if (name === 'Users') { list(2, ROLES); text(3); box(4); sh.getRange(2, 7, 999, 2).setFontColor('#888888'); list(10, REMIND_); sh.getRange(2, 11, 999, 1).setNumberFormat('$#,##0.00'); box(12); }
   if (name === 'Shifts') { text(1); text(2); text(3); }
-  if (name === 'Requests') { text(5); list(4, ['Time off', 'Swap', 'Cover']); list(7, ['Pending', 'Approved', 'Denied', 'Cancelled']); }
+  if (name === 'Requests') { text(5); text(11); list(4, ['Time off', 'Swap', 'Cover']); list(7, ['Pending', 'Approved', 'Denied', 'Cancelled']); }
   if (name === 'Checklists') box(4);
   if (name === 'Announcements') { box(6); box(7); sh.getRange(2, 5, 999, 1).setWrap(true); }
   if (name === 'Links') list(3, ['Everyone', 'Leads and managers', 'Managers']);
@@ -463,8 +463,9 @@ function state_(ss, me, slim, have) {
   // Requests
   if (want('reqs')) {
   const reqs = rv_(ss, 'Requests').filter(r => r[0]).map(r => ({ id: String(r[0]), created: toIso_(r[1]), from: String(r[2] || ''), type: String(r[3] || ''), date: ymd_(r[4], tz) || String(r[4] || ''),
-    details: String(r[5] || ''), status: String(r[6] || 'Pending'), by: String(r[7] || ''), at: toIso_(r[8]), note: String(r[9] || '') }));
-  out.requests = reqs.filter(q => isMgr || q.from === me.name || (isLead && q.type === 'Time off' && (q.status === 'Approved' || q.status === 'Pending'))).filter(q => q.status === 'Pending' || !q.date || q.date >= addDays_(today, -14)).sort((a, b) => String(b.created).localeCompare(String(a.created)));
+    details: String(r[5] || ''), status: String(r[6] || 'Pending'), by: String(r[7] || ''), at: toIso_(r[8]), note: String(r[9] || ''), until: ymd_(r[10], tz) || '' }))
+    .map(q => { if (!/^\d{4}-/.test(q.until) || q.until <= q.date) q.until = ''; return q; });
+  out.requests = reqs.filter(q => isMgr || q.from === me.name || (isLead && q.type === 'Time off' && (q.status === 'Approved' || q.status === 'Pending'))).filter(q => q.status === 'Pending' || !q.date || (q.until || q.date) >= addDays_(today, -14)).sort((a, b) => String(b.created).localeCompare(String(a.created)));
 
   }
 
@@ -563,7 +564,14 @@ function act_(ss, me, p, touched) {
       const type = ['Time off', 'Swap', 'Cover'].indexOf(String(p.type)) >= 0 ? String(p.type) : 'Time off';
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(p.date || ''))) throw new Error('Pick a date');
       if (p.date < today) throw new Error('That date has passed');
-      const sh = tab('Requests'); sh.appendRow([nextId_(sh, 'r'), new Date(), me.name, type, p.date, clean_(p.details, 1000), 'Pending', '', '', '']);
+      let until = type === 'Time off' && /^\d{4}-\d{2}-\d{2}$/.test(String(p.until || '')) ? String(p.until) : '';
+      if (until && until < p.date) throw new Error('The last day is before the first day');
+      if (until && until > addDays_(p.date, 89)) throw new Error('Time off can be up to 90 days at a time');
+      if (until === p.date) until = '';
+      const sh = tab('Requests'); if (sh.getLastColumn() < TABS.Requests.length) buildTab_(ss, 'Requests');
+      const row = sh.getLastRow() + 1;
+      sh.getRange(row, 1, 1, 11).setValues([[nextId_(sh, 'r'), new Date(), me.name, type, p.date, clean_(p.details, 1000), 'Pending', '', '', '', until]]);
+      sh.getRange(row, 11).setNumberFormat('@').setValue(until);
       return;
     }
     case 'cancelRequest': {
@@ -576,7 +584,8 @@ function act_(ss, me, p, touched) {
       const sh = tab('Requests'), r = findRow_(sh, p.id); if (!r) throw new Error('That request was removed');
       const st = p.approve === '1' ? 'Approved' : 'Denied';
       sh.getRange(r, 7, 1, 4).setValues([[st, me.name, new Date(), clean_(p.note, 300)]]);
-      audit(st + ' ' + sh.getRange(r, 4).getValue() + ' request from ' + sh.getRange(r, 3).getValue() + ' for ' + sh.getRange(r, 5).getValue());
+      const last = sh.getLastColumn() >= 11 ? ymd_(sh.getRange(r, 11).getValue(), tz) : '';
+      audit(st + ' ' + sh.getRange(r, 4).getValue() + ' request from ' + sh.getRange(r, 3).getValue() + ' for ' + ymd_(sh.getRange(r, 5).getValue(), tz) + (last && /^\d{4}-/.test(last) ? ' to ' + last : ''));
       return;
     }
     // ----- team management (managers) -----

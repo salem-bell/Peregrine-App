@@ -280,8 +280,11 @@ const notGone = s => s.status !== 'removed';
 const STATUS = { draft: ['mute', 'Draft'], changed: ['warn', 'Not published'], removed: ['warn', 'Removing'] };
 const statusPill = s => STATUS[s.status] ? `<span class="pill ${STATUS[s.status][0]}">${STATUS[s.status][1]}</span>` : '';
 const weekPending = wk => (data.shifts || []).filter(s => s.date >= wk && s.date <= plus(wk, 6) && s.status && s.status !== 'published');
-const approvedOff = (name, d) => (data.requests || []).some(q => q.from === name && q.type === 'Time off' && q.date === d && q.status === 'Approved');
-const pendingOff = (name, d) => (data.requests || []).some(q => q.from === name && q.type === 'Time off' && q.date === d && q.status === 'Pending');
+const offOn = (q, d) => q.type === 'Time off' && q.date && q.date <= d && d <= (q.until || q.date);     // time off can run several days
+const approvedOff = (name, d) => (data.requests || []).some(q => q.from === name && offOn(q, d) && q.status === 'Approved');
+const pendingOff = (name, d) => (data.requests || []).some(q => q.from === name && offOn(q, d) && q.status === 'Pending');
+const offDays = q => q.until ? Math.round((pd(q.until) - pd(q.date)) / 864e5) + 1 : 1;
+const reqWhen = q => !q.date ? '' : q.until ? dayName(q.date) + ' – ' + dayName(q.until) + ' (' + offDays(q) + ' days)' : dayName(q.date);
 function unavail(name, d, start, end){       // the availability rule that clashes with this time, if any
   return (data.availability || []).find(a => a.name === name && (a.day === d || a.day === DOW[pd(d).getDay()]) &&
     (!a.from || !start || (mins(start) < mins(a.to) && mins(end || '23:59') > mins(a.from))));
@@ -701,7 +704,7 @@ function viewScheduleBuild(seg){
   const mineOnly = schedMine && !mgr();
   const dayCard = d => {
     const list = shiftsOn(d).filter(s => !mineOnly || s.name === data.me.name);
-    const offs = lead() ? (data.requests || []).filter(q => q.type === 'Time off' && q.date === d && q.status === 'Approved').map(q => first(q.from)) : [];
+    const offs = lead() ? (data.requests || []).filter(q => offOn(q, d) && q.status === 'Approved').map(q => first(q.from)) : [];
     return `<h2 ${d === T() ? 'id="todayh" class="today-h"' : ''}>${dayName(d)}${d !== T() && d !== plus(T(), 1) ? '' : ' · ' + shortDay(d)}</h2><div class="card">
       ${list.map(s => { const cf = lead() ? conflicts(s) : [];
         const inner = `<div class="txt ${s.status === 'removed' ? 'gone' : ''}"><b>${esc(s.name)}</b> ${statusPill(s)}<div class="sub">${t12(s.start)}–${t12(s.end)} · ${hrs(mins(s.end) - mins(s.start))}${s.position ? ' · ' + esc(s.position) : ''}${s.notes ? ' · ' + esc(s.notes) : ''}</div>${cf.length ? `<div style="margin-top:4px">${cf.map(([c, t]) => `<span class="pill ${c}">${esc(t)}</span>`).join(' ')}</div>` : ''}</div>${mgr() ? '<span class="sub">Edit</span>' : ''}`;
@@ -1258,6 +1261,10 @@ const hm24 = t => { const m = String(t || '').match(/^(\d{1,2}):(\d{2})/); retur
 const remShow = mode => ({ night: /Night before|^Both$/.test(mode || ''), morning: /Morning/.test(mode || ''), before: /Before shift|Both|and before/.test(mode || '') });
 document.addEventListener('change', e => { const f = e.target.closest && e.target.closest('form[data-form=reminders]'); if (!f || e.target.name !== 'mode') return;
   const s = remShow(e.target.value); f.querySelectorAll('[data-rem]').forEach(x => { x.hidden = !s[x.dataset.rem]; }); });
+document.addEventListener('change', e => { const f = e.target.closest && e.target.closest('form[data-form=request]'); if (!f) return;
+  const thru = f.querySelector('[data-reqthru]'), until = f.elements.namedItem('until'), first = f.elements.namedItem('date');
+  if (e.target.name === 'type' && thru) thru.hidden = e.target.value !== 'Time off';
+  if (e.target.name === 'date' && until){ until.min = first.value; if (until.value && until.value < first.value) until.value = ''; } });
 /* ----- announcements ----- */
 function annRow(a){
   return `<div class="row" style="display:block"><div style="display:flex;gap:8px;align-items:baseline"><b style="flex:1">${a.pinned ? '📌 ' : ''}${esc(a.title)}</b><span class="sub">${ago(a.posted)}</span></div>
@@ -1277,9 +1284,9 @@ function viewNews(){
 /* ----- requests ----- */
 function reqRow(q){
   const cls = q.status === 'Approved' ? 'ok' : q.status === 'Denied' ? 'warn' : 'mute';
-  return `<div class="row" style="display:block"><div style="display:flex;gap:8px;align-items:center"><b style="flex:1">${esc(q.type)} · ${q.date ? dayName(q.date) : ''}</b><span class="pill ${cls}">${esc(q.status)}</span></div>
+  return `<div class="row" style="display:block"><div style="display:flex;gap:8px;align-items:center"><b style="flex:1">${esc(q.type)} · ${reqWhen(q)}</b><span class="pill ${cls}">${esc(q.status)}</span></div>
     <div class="sub">${mgr() && q.from !== data.me.name ? esc(q.from) + ' · ' : ''}${esc(q.details)}${q.note ? ' — ' + esc(q.by) + ': ' + esc(q.note) : ''}</div>
-    ${q.status === 'Pending' && mgr() && q.from !== data.me.name ? `<div class="btns" style="margin-top:8px"><button class="btn sm go" data-decide="${esc(q.id)}" data-ok="1">Approve</button><button class="btn sm" data-decide="${esc(q.id)}" data-ok="0">Deny</button>${shiftsOn(q.date).some(s => s.name === q.from) ? '<span class="pill warn" style="align-self:center">Scheduled that day</span>' : ''}</div>` : ''}
+    ${q.status === 'Pending' && mgr() && q.from !== data.me.name ? `<div class="btns" style="margin-top:8px"><button class="btn sm go" data-decide="${esc(q.id)}" data-ok="1">Approve</button><button class="btn sm" data-decide="${esc(q.id)}" data-ok="0">Deny</button>${(n => n ? `<span class="pill warn" style="align-self:center">Scheduled ${q.until ? n + (n > 1 ? ' shifts' : ' shift') + ' in this time' : 'that day'}</span>` : '')(Array.from({ length: offDays(q) }, (_, k) => plus(q.date, k)).reduce((a, d) => a + shiftsOn(d).filter(s => s.name === q.from).length, 0))}</div>` : ''}
     ${q.status === 'Pending' && q.from === data.me.name ? `<div class="btns" style="margin-top:8px"><button class="btn sm" data-cancelreq="${esc(q.id)}">Cancel request</button></div>` : ''}</div>`;
 }
 function viewRequests(){
@@ -1289,7 +1296,8 @@ function viewRequests(){
     ${mgr() ? `<h2>Waiting for you</h2><div class="card">${pend.map(reqRow).join('') || '<div class="empty">Nothing to approve.</div>'}</div>` : ''}
     <h2>New request</h2><div class="card"><form class="stack" data-form="request">
       <label class="f">What<select name="type"><option>Time off</option><option>Swap</option><option>Cover</option></select></label>
-      <label class="f">Date<input name="date" type="date" min="${T()}" value="${plus(T(), 1)}"></label>
+      <label class="f">First day<input name="date" type="date" min="${T()}" value="${plus(T(), 1)}"></label>
+      <label class="f" data-reqthru>Last day<input name="until" type="date" min="${T()}"><span class="sub">Leave blank for one day.</span></label>
       <label class="f">Details<textarea name="details" maxlength="1000" placeholder="e.g. Swap my Saturday open with Kelsey"></textarea></label><button class="btn go">Send to managers</button></form></div>
     <h2>Yours</h2><div class="card">${mine.map(reqRow).join('') || '<div class="empty">No requests.</div>'}</div>
     ${others.length ? `<h2>Recently decided</h2><div class="card">${others.map(reqRow).join('')}</div>` : ''}
@@ -1734,7 +1742,11 @@ document.addEventListener('submit', async e => {
   if (kind === 'group'){ const members = [...f.querySelectorAll('input[name=m]:checked')].map(x => x.value).join(','); sheet = null; if (LIVE){ render(); liveMake({ kind: 'group', name: v('name'), members }, 'Group made'); return; } act('newChannel', { kind: 'group', name: v('name'), members }).then(r => { if (r) toast('Group made'); }); return; }
   if (kind === 'channel'){ sheet = null; if (LIVE){ render(); liveMake({ kind: 'channel', name: v('name'), who: v('who') }, 'Channel made'); return; } act('newChannel', { kind: 'channel', name: v('name'), who: v('who') }).then(r => { if (r) toast('Channel made'); }); return; }
   if (kind === 'announce'){ if (!v('title')){ toast('Add a title'); return; } act('announce', { title: v('title'), message: f.elements.namedItem('message').value, pinned: v('pinned'), mustAck: v('mustAck') }).then(r => { if (r) toast('Posted'); }); f.reset(); return; }
-  if (kind === 'request'){ (data.requests = data.requests || []).unshift({ id: 'tmp' + Date.now(), from: data.me.name, type: v('type'), date: v('date'), details: v('details'), status: 'Pending', created: new Date().toISOString() }); render(); act('request', { type: v('type'), date: v('date'), details: v('details') }).then(r => { if (r) toast('Sent to managers'); }); f.reset(); return; }
+  if (kind === 'request'){
+    const until = v('type') === 'Time off' && v('until') && v('until') !== v('date') ? v('until') : '';
+    if (!v('date')){ toast('Pick a date'); return; }
+    if (until && until < v('date')){ toast('The last day is before the first day'); return; }
+    (data.requests = data.requests || []).unshift({ id: 'tmp' + Date.now(), from: data.me.name, type: v('type'), date: v('date'), until, details: v('details'), status: 'Pending', created: new Date().toISOString() }); render(); act('request', { type: v('type'), date: v('date'), until, details: v('details') }).then(r => { if (r) toast('Sent to managers'); }); f.reset(); return; }
   if (kind === 'user'){
     if (!v('name')){ toast('Add a name'); return; }
     const p = { name: v('name'), role: v('role'), phone: v('phone'), email: v('email'), wage: v('wage') };
