@@ -369,3 +369,11 @@ mark{background:rgba(210,146,41,.32);color:inherit;border-radius:3px;padding:0 1
 .locbtn{all:unset;cursor:pointer;font:inherit;letter-spacing:inherit;text-transform:inherit;color:inherit} .locbtn span{font-size:.7em;opacity:.8}
 [data-rem][hidden]{display:none!important}
 [data-reqthru][hidden]{display:none!important}
+/* refresh: the ↻ button spins while loading; pull down from the top on phones */
+@keyframes ptspin{to{transform:rotate(360deg)}}
+#refresh{display:inline-block;transition:transform .2s} #refresh.spin{animation:ptspin .8s linear infinite;pointer-events:none;opacity:.85}
+html,body{overscroll-behavior-y:contain}
+#ptr{position:fixed;left:50%;top:calc(env(safe-area-inset-top,0px) + 54px);z-index:30;width:40px;height:40px;margin-top:-40px;border-radius:50%;display:grid;place-items:center;
+  background:var(--card,#fff);color:var(--accent);box-shadow:0 2px 10px rgba(0,0,0,.18);font-size:1.25rem;opacity:0;transform:translate(-50%,0);pointer-events:none;transition:opacity .15s}
+#ptr.ready{color:var(--ink)} #ptr.go span{display:inline-block;animation:ptspin .8s linear infinite}
+#ptr:not(.go){transition:opacity .15s, transform .25s ease-out}

@@ -231,7 +231,8 @@ async function refresh(p, o){
   const isAct = !!(p && p.action), seq = ++seqStarted;
   if (isAct){ pending++; lastAct = seq; }
   let got = null, err = null;
-  try { got = (!isAct && !(o && o.fresh) && await edgeLoad()) || await post({ fn: 'api', token: TOKEN, p: Object.assign({ have: haveNow() }, p || {}) }); } catch (e) { err = e; }
+  try { got = (!isAct && !(o && o.fresh) && await edgeLoad()) || (o && o.edgeOnly ? null : await post({ fn: 'api', token: TOKEN, p: Object.assign({ have: haveNow() }, p || {}) })); } catch (e) { err = e; }
+  if (!got && !err && o && o.edgeOnly) return null;
   if (got && got.edge !== undefined && got.edge !== EDGE){ EDGE = got.edge; save('pt-edge', EDGE); }
   if (isAct && got) wrote(got);
   if (isAct) pending--;
@@ -247,6 +248,43 @@ async function refresh(p, o){
   }
   data = mergeGot(data, got); offline = false; liveSync(); save('pt-cache', JSON.stringify(data)); render(); pushCheck(); if (pendingGo){ const g = pendingGo; pendingGo = ''; goTo(g); } return got;
 }
+/* Refresh by hand (the ↻ button or pulling down): show the Cloudflare copy straight away – it's at most a minute old – then
+   check with the Sheet itself in the background. The button spins until the Sheet has answered. */
+let refreshing = null;
+function manualRefresh(){
+  if (chat.open){ openChat(chat.open); return Promise.resolve(); }
+  if (refreshing) return refreshing;
+  const btn = $('#refresh'); if (btn) btn.classList.add('spin');
+  refreshing = (async () => {
+    try { await refresh(undefined, { edgeOnly: true }); } catch (_) {}
+    const r = await refresh(undefined, { fresh: true }); if (r) toast('Up to date');
+  })().finally(() => { refreshing = null; const b2 = $('#refresh'); if (b2) b2.classList.remove('spin'); ptrDone(); });
+  return refreshing;
+}
+/* Pull down from the top of the page to refresh (phones). */
+const PTR = { y0: 0, dy: 0, on: false, el: null };
+function ptrEl(){ if (!PTR.el){ PTR.el = document.createElement('div'); PTR.el.id = 'ptr'; PTR.el.innerHTML = '<span>↻</span>'; document.body.appendChild(PTR.el); } return PTR.el; }
+function ptrDone(){ const el = PTR.el; if (!el) return; el.classList.remove('go'); el.style.transform = ''; el.style.opacity = ''; }
+document.addEventListener('touchstart', e => {
+  PTR.on = false; if (e.touches.length !== 1 || !TOKEN || !data || refreshing) return;
+  if (window.scrollY > 0 || sheet || viewer || chat.open || tab === 'chat' || $('#overlay').innerHTML.trim()) return;
+  const t = e.target; if (t.closest && (t.closest('input,textarea,select,[contenteditable],.msgs') || (t.closest('.gridwrap') && t.closest('.gridwrap').scrollTop > 0))) return;
+  PTR.on = true; PTR.y0 = e.touches[0].clientY; PTR.dy = 0;
+}, { passive: true });
+document.addEventListener('touchmove', e => {
+  if (!PTR.on) return;
+  PTR.dy = e.touches[0].clientY - PTR.y0; if (window.scrollY > 0) { PTR.on = false; ptrDone(); return; }
+  if (PTR.dy <= 0) { ptrDone(); return; }
+  const pull = Math.min(110, PTR.dy * 0.5), el = ptrEl(); el.style.transition = 'none';
+  el.style.opacity = String(Math.min(1, pull / 60)); el.style.transform = `translate(-50%, ${pull}px) rotate(${pull * 4}deg)`;
+  el.classList.toggle('ready', pull >= 60);
+}, { passive: true });
+document.addEventListener('touchend', () => {
+  if (!PTR.on) return; PTR.on = false;
+  const el = PTR.el; if (!el) return; el.style.transition = '';
+  if (Math.min(110, PTR.dy * 0.5) >= 60){ el.classList.add('go'); el.style.transform = 'translate(-50%, 60px)'; if (navigator.vibrate) try { navigator.vibrate(10); } catch (_) {} manualRefresh(); }
+  else ptrDone();
+}, { passive: true });
 function saving(){ const el = $('#saving'); if (el) el.hidden = !pending; }
 function signOut(msg){ lastWriteAt = 0; save('pt-lastwrite', null); stopChat(); liveEnd(); TOKEN = ''; data = null; save('pt-token', null); save('pt-cache', null); render(); if (msg) toast(msg.charAt(0).toUpperCase() + msg.slice(1)); }
 
@@ -1540,7 +1578,7 @@ document.addEventListener('click', async e => {
   if (!b){ const td = e.target.closest && e.target.closest('td[data-cell]'); if (td && lead()){ const [who, date] = td.dataset.cell.split('|'); sheet = { kind: 'shift', date, name: who, start: (data.presets[0] || {}).start, end: (data.presets[0] || {}).end }; render(); } return; }
   const d = b.dataset;
   if (d.prepok !== undefined){ prepSeenAll(); sheet = null; if (d.golist === undefined){ render(); return; } }   // prep pop-up: Got it / Open the prep list
-  if (b.id === 'refresh'){ if (chat.open) { openChat(chat.open); return; } refresh(undefined, { fresh: true }).then(r => { if (r) toast('Up to date'); }); return; }   // the refresh button always asks the Sheet itself
+  if (b.id === 'refresh'){ manualRefresh(); return; }   // the refresh button always asks the Sheet itself
   if (d.install !== undefined && installEvt){ installEvt.prompt(); installEvt = null; return; }
   if (d.ack){ const a = data.announcements.find(x => x.id === d.ack); if (a) a.read = true; render(); act('read', { id: d.ack }); return; }
   if (d.tab){ tab = d.tab; save('pt-tab', tab); sheet = null; viewer = null; editUser = null; tsPerson = ''; if (tab === 'more') moreView = ''; stopChat(); window.scrollTo(0, 0); /* a tab always opens on its main screen: backs out of a DM, a More page, etc. */ render(); if (tab === 'schedule') scrollToday(); return; }
