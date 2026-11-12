@@ -1286,7 +1286,7 @@ function reqRow(q){
   const cls = q.status === 'Approved' ? 'ok' : q.status === 'Denied' ? 'warn' : 'mute';
   return `<div class="row" style="display:block"><div style="display:flex;gap:8px;align-items:center"><b style="flex:1">${esc(q.type)} · ${reqWhen(q)}</b><span class="pill ${cls}">${esc(q.status)}</span></div>
     <div class="sub">${mgr() && q.from !== data.me.name ? esc(q.from) + ' · ' : ''}${esc(q.details)}${q.note ? ' — ' + esc(q.by) + ': ' + esc(q.note) : ''}</div>
-    ${q.status === 'Pending' && mgr() && q.from !== data.me.name ? `<div class="btns" style="margin-top:8px"><button class="btn sm go" data-decide="${esc(q.id)}" data-ok="1">Approve</button><button class="btn sm" data-decide="${esc(q.id)}" data-ok="0">Deny</button>${(n => n ? `<span class="pill warn" style="align-self:center">Scheduled ${q.until ? n + (n > 1 ? ' shifts' : ' shift') + ' in this time' : 'that day'}</span>` : '')(Array.from({ length: offDays(q) }, (_, k) => plus(q.date, k)).reduce((a, d) => a + shiftsOn(d).filter(s => s.name === q.from).length, 0))}</div>` : ''}
+    ${q.status === 'Pending' && mgr() ? `<div class="btns" style="margin-top:8px"><button class="btn sm go" data-decide="${esc(q.id)}" data-ok="1">Approve</button><button class="btn sm" data-decide="${esc(q.id)}" data-ok="0">Deny</button>${(n => n ? `<span class="pill warn" style="align-self:center">Scheduled ${q.until ? n + (n > 1 ? ' shifts' : ' shift') + ' in this time' : 'that day'}</span>` : '')(Array.from({ length: offDays(q) }, (_, k) => plus(q.date, k)).reduce((a, d) => a + shiftsOn(d).filter(s => s.name === q.from).length, 0))}</div>` : ''}
     ${q.status === 'Pending' && q.from === data.me.name ? `<div class="btns" style="margin-top:8px"><button class="btn sm" data-cancelreq="${esc(q.id)}">Cancel request</button></div>` : ''}</div>`;
 }
 function viewRequests(){
@@ -1298,7 +1298,7 @@ function viewRequests(){
       <label class="f">What<select name="type"><option>Time off</option><option>Swap</option><option>Cover</option></select></label>
       <label class="f">First day<input name="date" type="date" min="${T()}" value="${plus(T(), 1)}"></label>
       <label class="f" data-reqthru>Last day<input name="until" type="date" min="${T()}"><span class="sub">Leave blank for one day.</span></label>
-      <label class="f">Details<textarea name="details" maxlength="1000" placeholder="e.g. Swap my Saturday open with Kelsey"></textarea></label><button class="btn go">Send to managers</button></form></div>
+      <label class="f">Details<textarea name="details" maxlength="1000" placeholder="e.g. Swap my Saturday open with Kelsey"></textarea></label><button class="btn go">${mgr() ? 'Send' : 'Send to managers'}</button>${mgr() ? '<p class="sub">Your own time off is approved right away.</p>' : ''}</form></div>
     <h2>Yours</h2><div class="card">${mine.map(reqRow).join('') || '<div class="empty">No requests.</div>'}</div>
     ${others.length ? `<h2>Recently decided</h2><div class="card">${others.map(reqRow).join('')}</div>` : ''}
     <p class="sub">Regular times you can't work go under <button class="lnk" data-more="avail">Availability</button>.</p>`;
@@ -1746,7 +1746,7 @@ document.addEventListener('submit', async e => {
     const until = v('type') === 'Time off' && v('until') && v('until') !== v('date') ? v('until') : '';
     if (!v('date')){ toast('Pick a date'); return; }
     if (until && until < v('date')){ toast('The last day is before the first day'); return; }
-    (data.requests = data.requests || []).unshift({ id: 'tmp' + Date.now(), from: data.me.name, type: v('type'), date: v('date'), until, details: v('details'), status: 'Pending', created: new Date().toISOString() }); render(); act('request', { type: v('type'), date: v('date'), until, details: v('details') }).then(r => { if (r) toast('Sent to managers'); }); f.reset(); return; }
+    (data.requests = data.requests || []).unshift({ id: 'tmp' + Date.now(), from: data.me.name, type: v('type'), date: v('date'), until, details: v('details'), status: mgr() && v('type') === 'Time off' ? 'Approved' : 'Pending', created: new Date().toISOString() }); render(); act('request', { type: v('type'), date: v('date'), until, details: v('details') }).then(r => { if (r) toast(mgr() && v('type') === 'Time off' ? 'Time off approved' : 'Sent to managers'); }); f.reset(); return; }
   if (kind === 'user'){
     if (!v('name')){ toast('Add a name'); return; }
     const p = { name: v('name'), role: v('role'), phone: v('phone'), email: v('email'), wage: v('wage') };

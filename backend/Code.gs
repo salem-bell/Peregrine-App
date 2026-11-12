@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '4.6';
+const VERSION = '4.7';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Morning of', 'Morning and before', 'Off'];
 
@@ -570,9 +570,11 @@ function act_(ss, me, p, touched) {
       if (until === p.date) until = '';
       const sh = tab('Requests'); if (sh.getLastColumn() < TABS.Requests.length) buildTab_(ss, 'Requests');
       const row = sh.getLastRow() + 1;
-      sh.getRange(row, 1, 1, 11).setValues([[nextId_(sh, 'r'), new Date(), me.name, type, p.date, clean_(p.details, 1000), 'Pending', '', '', '', until]]);
+      const auto = type === 'Time off' && isMgr;          // managers' own time off doesn't wait for anyone
+      sh.getRange(row, 1, 1, 11).setValues([[nextId_(sh, 'r'), new Date(), me.name, type, p.date, clean_(p.details, 1000), auto ? 'Approved' : 'Pending', auto ? me.name : '', auto ? new Date() : '', auto ? 'Approved automatically (manager)' : '', until]]);
       sh.getRange(row, 11).setNumberFormat('@').setValue(until);
-      return;
+      if (auto) audit('Approved own time off for ' + p.date + (until ? ' to ' + until : '') + ' (manager, automatic)');
+      return { approved: auto };
     }
     case 'cancelRequest': {
       const sh = tab('Requests'), r = findRow_(sh, p.id); if (!r) return;
