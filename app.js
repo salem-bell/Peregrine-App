@@ -1214,7 +1214,12 @@ function goTo(go){
 function viewReminders(){
   const me = data.me, R = data.reminders || {}, cal = API && me.cal ? API + '?cal=' + encodeURIComponent(me.cal) : '';
   const webcal = cal.replace(/^https?:/, 'webcal:');
-  const modes = [['Night before', 'Night before at ' + t12(R.night || '19:00')], ['Before shift', R.hours + ' hours before'], ['Both', 'Both'], ['Off', 'Off']];
+  const my = me.remind || {}, night = my.night || hm24(R.night) || '19:00', morning = my.morning || '07:00', before = my.before || (R.hours || 2) * 60;
+  const modes = [['Night before', 'The night before'], ['Morning of', 'The morning of'], ['Before shift', 'A little before it starts'], ['Both', 'Night before + before it starts'], ['Morning and before', 'Morning of + before it starts'], ['Off', 'Off']];
+  const times = (from, to, step) => { const o = []; for (let m = from; m <= to; m += step) o.push(pad(Math.floor(m / 60)) + ':' + pad(m % 60)); return o; };
+  const sel = (name, list, cur, label) => `<select name="${name}">${(list.indexOf(cur) < 0 ? [cur].concat(list) : list).map(x => `<option value="${x}" ${x === cur ? 'selected' : ''}>${esc(label(x))}</option>`).join('')}</select>`;
+  const lead = m => m < 60 ? m + ' minutes before' : (m / 60) + (m === 60 ? ' hour' : ' hours') + ' before';
+  const show = remShow(me.reminders);
   return `${back('settings')}<h1>Shift reminders</h1>
     ${R.on ? '' : '<div class="hint">Shift reminders are turned off for the shop right now. A manager can turn them on in the sheet\'s Settings.</div>'}
     ${R.on && R.by !== 'email' ? (pushOn_() ? '<div class="hint">Reminders come as a notification on this ' + deviceKind() + '.</div>'
@@ -1223,6 +1228,9 @@ function viewReminders(){
       ${R.by && R.by !== 'push' ? `<label class="f">Email for reminders<input name="email" type="email" autocomplete="email" maxlength="120" value="${esc(me.email || '')}" placeholder="you@example.com"></label>` : ''}
       <div class="f" style="display:grid;gap:6px;font-size:.8rem;color:var(--muted)">When to remind me
         ${modes.map(([k, n]) => `<label class="opt"><input type="radio" name="mode" value="${k}" ${me.reminders === k ? 'checked' : ''}> ${esc(n)}</label>`).join('')}</div>
+      <label class="f" data-rem="night" ${show.night ? '' : 'hidden'}>Night-before reminder at${sel('night', times(15 * 60, 23 * 60, 30), night, t12)}</label>
+      <label class="f" data-rem="morning" ${show.morning ? '' : 'hidden'}>Morning reminder at${sel('morning', times(4 * 60, 12 * 60, 30), morning, t12)}<span class="sub">If your shift starts before this, you'll get the before-shift one (or none).</span></label>
+      <label class="f" data-rem="before" ${show.before ? '' : 'hidden'}>How long before the shift${sel('before', [15, 30, 45, 60, 90, 120, 180, 240, 360, 480, 720], before, lead)}</label>
       <div class="btns"><button class="btn go">Save</button>${me.email && R.by && R.by !== 'push' ? '<button type="button" class="btn" data-testmail>Send me a test</button>' : ''}</div></form></div>
     ${cal ? `<h2>Put your shifts in your calendar</h2><div class="card"><div class="row" style="display:block">
       <p style="margin:0 0 10px">Your shifts show up in your phone's calendar and update by themselves, with an alert 1 hour before each one.</p>
@@ -1232,6 +1240,10 @@ function viewReminders(){
         <b>Google Calendar:</b> copy the link, then on a computer go to calendar.google.com › Other calendars › + › From URL, and paste it. Google refreshes it every few hours, so last-minute changes can show up late – the emails are faster.<br>
         This link is private to you. If you get a new sign-in code, the old link stops working and you'll need to add it again.</div></details></div></div>` : ''}`;
 }
+const hm24 = t => { const m = String(t || '').match(/^(\d{1,2}):(\d{2})/); return m ? pad(+m[1]) + ':' + m[2] : ''; };
+const remShow = mode => ({ night: /Night before|^Both$/.test(mode || ''), morning: /Morning/.test(mode || ''), before: /Before shift|Both|and before/.test(mode || '') });
+document.addEventListener('change', e => { const f = e.target.closest && e.target.closest('form[data-form=reminders]'); if (!f || e.target.name !== 'mode') return;
+  const s = remShow(e.target.value); f.querySelectorAll('[data-rem]').forEach(x => { x.hidden = !s[x.dataset.rem]; }); });
 /* ----- announcements ----- */
 function annRow(a){
   return `<div class="row" style="display:block"><div style="display:flex;gap:8px;align-items:baseline"><b style="flex:1">${a.pinned ? '📌 ' : ''}${esc(a.title)}</b><span class="sub">${ago(a.posted)}</span></div>
@@ -1692,7 +1704,10 @@ document.addEventListener('submit', async e => {
   if (kind === 'punch'){ const p = { id: sheet && sheet.id || '', name: v('name'), date: v('date'), in: v('in'), out: v('out'), note: v('note') }; if (f.elements.namedItem('type')) p.type = v('type'); sheet = null; act('savePunch', p).then(r => { if (r) toast('Saved'); }); return; }
   if (kind === 'reminders'){ const mode = (f.querySelector('input[name=mode]:checked') || {}).value || '';
     const em = f.elements.namedItem('email') ? v('email') : (data.me.email || ''), push = data.reminders && data.reminders.by === 'push';
-    act('myReminders', { email: em, mode }).then(r => { if (r) toast(mode === 'Off' ? 'Reminders off' : push ? (pushOn_() ? 'Saved' : 'Saved – turn on notifications to get them') : em ? 'Saved' : 'Saved – add an email to get them'); }); return; }
+    const pick = n => f.elements.namedItem(n) ? f.elements.namedItem(n).value : undefined;
+    const night = pick('night'), morning = pick('morning'), before = Number(pick('before')) || 0;
+    data.me.reminders = mode; data.me.remind = { night, morning, before };
+    act('myReminders', { email: em, mode, night, morning, before }).then(r => { if (r) toast(mode === 'Off' ? 'Reminders off' : push ? (pushOn_() ? 'Saved' : 'Saved – turn on notifications to get them') : em ? 'Saved' : 'Saved – add an email to get them'); }); return; }
   if (kind === 'avail'){ const day = v('day') === 'date' ? v('date') : v('day'); if (!day){ toast('Pick a date'); return; }
     (data.availability = data.availability || []).push({ id: 'tmp' + Date.now(), name: data.me.name, day, from: v('from'), to: v('to'), note: v('note') }); render(); act('addAvail', { day, from: v('from'), to: v('to'), note: v('note') }).then(r => { if (r) toast('Added'); }); f.reset(); return; }
   if (kind === 'editchat'){ const c = curChat(); if (!c) { sheet = null; render(); return; } if (!v('name')){ toast('Give it a name'); return; }
