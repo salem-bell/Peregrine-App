@@ -1137,14 +1137,23 @@ const b64u8 = b => { b = String(b).replace(/-/g, '+').replace(/_/g, '/'); while 
 let pushSub = null, pushChecked = false;
 const pushOn_ = () => !!(pushSub && pushOK() && Notification.permission === 'granted');
 /** After the data loads: find this device's subscription, and make sure the server has it (covers renewed subscriptions). */
-async function pushCheck(){
-  if (pushChecked || !pushOK() || !data || !data.push) return; pushChecked = true;
+/* Is this device subscribed? Asked of the app's background worker once it's running (navigator.serviceWorker.ready) –
+   asking too early (before the worker has started, which fast loading made common) found nothing and showed Off for good.
+   Re-checked whenever the app comes back to the screen and when Settings/Notifications open. */
+let pushAt = 0;
+async function pushCheck(force){
+  if (!pushOK() || !data || !data.push || pushChecked === 'busy') return;
+  if (!force && pushChecked && Date.now() - pushAt < 5000) return;
+  pushChecked = 'busy';
   try {
-    const reg = await navigator.serviceWorker.getRegistration(); pushSub = reg ? await reg.pushManager.getSubscription() : null;
+    const reg = await Promise.race([navigator.serviceWorker.ready, new Promise(r => setTimeout(() => r(null), 10000))]);
+    if (!reg){ pushChecked = false; return; }                      // worker still not running: try again next time
+    const was = !!pushSub; pushSub = await reg.pushManager.getSubscription(); pushChecked = true; pushAt = Date.now();
     if (pushSub && data.push.ready && Notification.permission === 'granted' && (data.push.devices || []).indexOf(pushSub.endpoint) < 0) act('pushSub', { sub: JSON.stringify(pushSub), device: deviceName() });
-    render();
-  } catch (_) {}
+    if (was !== !!pushSub) render();
+  } catch (_) { pushChecked = false; }
 }
+document.addEventListener('visibilitychange', () => { if (!document.hidden) pushCheck(true); });
 async function pushTurnOn(){
   if (pushNeedsHome()){ moreView = 'push'; tab = 'more'; render(); return; }
   if (!pushOK()){ toast('This browser can\'t get notifications'); return; }
@@ -1166,6 +1175,7 @@ async function pushTurnOff(){
   toast('Notifications off on this ' + deviceKind());
 }
 function viewPush(){
+  pushCheck();                                      // re-check this device whenever the screen opens
   const P = data.push || {}, pr = P.prefs || {}, on = pushOn_(), back = '<button class="btn sm" data-more="settings">‹ Settings</button>';
   let top;
   if (!P.ready) top = `<div class="empty">Push notifications aren't set up for the shop yet.${mgr() ? ' Fill in the Push settings in the sheet.' : ' Ask a manager.'}</div>`;
@@ -1415,6 +1425,7 @@ function viewMoreList(){
 }
 /** Settings: everything about this person and this phone, in one place (phone: from More; desktop: in the sidebar). */
 function viewSettings(){
+  pushCheck();
   const item = (k, label, sub) => rowBtn(`data-more="${k}"`, `<div class="txt"><b>${label}</b>${sub ? `<div class="sub">${sub}</div>` : ''}</div><span>›</span>`), R = data.reminders || {};
   const remindSub = data.me.reminders === 'Off' ? 'Off' : R.by === 'push' ? data.me.reminders + ' · by notification' : data.me.email ? data.me.reminders + ' · ' + esc(data.me.email) : 'Off – no email';
   return `${back()}<h1>Settings</h1><div class="card">
