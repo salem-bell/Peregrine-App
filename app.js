@@ -836,7 +836,7 @@ function shiftSheet(){
 /* ----- availability ----- */
 function viewAvail(){
   const all = data.availability || [], mineL = all.filter(a => a.name === data.me.name);
-  const row = a => `<div class="row"><div class="txt"><b>${/^\d{4}-/.test(a.day) ? dayName(a.day) : 'Every ' + ({ Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday', Sat: 'Saturday', Sun: 'Sunday' })[a.day]}</b><div class="sub">${a.from ? t12(a.from) + '–' + t12(a.to) : 'All day'}${a.note ? ' · ' + esc(a.note) : ''}</div></div>${a.name === data.me.name || mgr() ? `<button class="btn sm" data-delavail="${esc(a.id)}">Remove</button>` : ''}</div>`;
+  const row = a => `<div class="row"><div class="txt"><b>${/^\d{4}-/.test(a.day) ? dayName(a.day) : 'Every ' + ({ Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday', Sat: 'Saturday', Sun: 'Sunday' })[a.day]}</b><div class="sub">${a.from ? t12(a.from) + '–' + t12(a.to) : 'All day'}${a.note ? ' · ' + esc(a.note) : ''}</div></div>${a.name === data.me.name || mgr() ? `<button class="btn sm" data-editavail="${esc(a.id)}">Edit</button><button class="btn sm" data-delavail="${esc(a.id)}">Delete</button>` : ''}</div>`;
   const others = mgr() ? [...new Set(all.filter(a => a.name !== data.me.name).map(a => a.name))].sort() : [];
   return `${back()}<h1>Availability</h1><p class="sub">Times you <b>can't</b> work. Managers see these when building the schedule. For one-off days off, send a time-off request instead.</p>
     <div class="card">${mineL.map(row).join('') || '<div class="empty">You haven\'t added any.</div>'}</div>
@@ -1334,10 +1334,36 @@ function reqRow(q){
   return `<div class="row" style="display:block"><div style="display:flex;gap:8px;align-items:center"><b style="flex:1">${esc(q.type)} · ${reqWhen(q)}</b><span class="pill ${cls}">${esc(q.status)}</span></div>
     <div class="sub">${mgr() && q.from !== data.me.name ? esc(q.from) + ' · ' : ''}${esc(q.details)}${q.note ? ' — ' + esc(q.by) + ': ' + esc(q.note) : ''}</div>
     ${q.status === 'Pending' && mgr() ? `<div class="btns" style="margin-top:8px"><button class="btn sm go" data-decide="${esc(q.id)}" data-ok="1">Approve</button><button class="btn sm" data-decide="${esc(q.id)}" data-ok="0">Deny</button>${(n => n ? `<span class="pill warn" style="align-self:center">Scheduled ${q.until ? n + (n > 1 ? ' shifts' : ' shift') + ' in this time' : 'that day'}</span>` : '')(Array.from({ length: offDays(q) }, (_, k) => plus(q.date, k)).reduce((a, d) => a + shiftsOn(d).filter(s => s.name === q.from).length, 0))}</div>` : ''}
-    ${q.status === 'Pending' && q.from === data.me.name ? `<div class="btns" style="margin-top:8px"><button class="btn sm" data-cancelreq="${esc(q.id)}">Cancel request</button></div>` : ''}</div>`;
+    ${reqCanChange(q) ? `<div class="btns" style="margin-top:8px"><button class="btn sm" data-editreq="${esc(q.id)}">Edit</button><button class="btn sm" data-cancelreq="${esc(q.id)}">${q.status === 'Approved' ? 'Cancel time off' : 'Cancel request'}</button></div>` : ''}</div>`;
+}
+/** Your own pending or approved request that hasn't finished yet – or anyone's, for a manager. */
+const reqCanChange = q => !String(q.id).startsWith('tmp') && (q.status === 'Pending' || q.status === 'Approved') && (q.from === data.me.name || mgr()) && (mgr() || (q.until || q.date) >= T());
+function reqEditSheet(){
+  const q = (data.requests || []).find(x => x.id === sheet.id); if (!q) return '';
+  const off = q.type === 'Time off', mine = q.from === data.me.name;
+  return `<div class="sheet" role="dialog" aria-label="Edit request"><div class="sheet-in"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="margin:0">Edit ${esc(q.type.toLowerCase())}</h1><button class="btn sm" data-closesheet>Close</button></div>
+    ${mine ? '' : `<p class="sub" style="margin:0">${esc(q.from)}'s request</p>`}
+    <form class="stack" data-form="reqedit" style="padding:0">
+      <label class="f">${off ? 'First day' : 'Date'}<input name="date" type="date" ${mgr() ? '' : `min="${T()}"`} value="${esc(q.date)}"></label>
+      ${off ? `<label class="f">Last day<input name="until" type="date" min="${esc(q.date)}" value="${esc(q.until || '')}"><span class="sub">Leave blank for one day.</span></label>` : ''}
+      <label class="f">Details<textarea name="details" maxlength="1000">${esc(q.details)}</textarea></label>
+      ${q.status === 'Approved' && mine && !mgr() ? '<p class="sub" style="margin:0">This is approved. Changing it sends it back to a manager to approve again.</p>' : ''}
+      <button class="btn go">Save changes</button></form></div></div>`;
+}
+function availEditSheet(){
+  const a = (data.availability || []).find(x => x.id === sheet.id); if (!a) return '';
+  const isDate = /^\d{4}-/.test(a.day), days = { Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday', Sat: 'Saturday', Sun: 'Sunday' };
+  return `<div class="sheet" role="dialog" aria-label="Edit availability"><div class="sheet-in"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="margin:0">Edit time you can't work</h1><button class="btn sm" data-closesheet>Close</button></div>
+    ${a.name !== data.me.name ? `<p class="sub" style="margin:0">${esc(a.name)}</p>` : ''}
+    <form class="stack" data-form="availedit" style="padding:0">
+      <label class="f">When<select name="day">${Object.keys(days).map(x => `<option value="${x}" ${a.day === x ? 'selected' : ''}>Every ${days[x]}</option>`).join('')}<option value="date" ${isDate ? 'selected' : ''}>One date…</option></select></label>
+      <label class="f" data-onlydate ${isDate ? '' : 'hidden'}>Date<input name="date" type="date" value="${isDate ? esc(a.day) : ''}"></label>
+      <div class="two"><label class="f">From (blank = all day)<input name="from" type="time" value="${esc(a.from || '')}"></label><label class="f">To<input name="to" type="time" value="${esc(a.to || '')}"></label></div>
+      <label class="f">Note (optional)<input name="note" maxlength="200" value="${esc(a.note || '')}"></label>
+      <button class="btn go">Save changes</button></form></div></div>`;
 }
 function viewRequests(){
-  const all = data.requests || [], pend = mgr() ? all.filter(q => q.status === 'Pending' && q.from !== data.me.name) : [];
+  const all = (data.requests || []).filter(q => q.status !== 'Cancelled'), pend = mgr() ? all.filter(q => q.status === 'Pending' && q.from !== data.me.name) : [];
   const mine = all.filter(q => q.from === data.me.name), others = mgr() ? all.filter(q => q.status !== 'Pending' && q.from !== data.me.name) : [];
   return `${back()}<h1>Time off & swaps</h1>
     ${mgr() ? `<h2>Waiting for you</h2><div class="card">${pend.map(reqRow).join('') || '<div class="empty">Nothing to approve.</div>'}</div>` : ''}
@@ -1672,7 +1698,7 @@ function render(){
   if (same && tab !== 'chat'){ const g2 = $('.gridwrap'); if (keep && g2){ g2.scrollTop = keep[0]; g2.scrollLeft = keep[1]; } if (window.scrollY !== wy) window.scrollTo(0, wy); }   // a save or refresh redraws the page; stay where you were
   if (draft !== null){ const t = $('.composer textarea'); if (t){ t.value = draft; t.focus(); } }
   if (!sheet && !viewer && !runner && !joined && prepPopItems().length) sheet = { kind: 'preppop' };
-  const ovHtml = runner ? viewRunner() : viewer ? viewViewer() : sheet ? (sheet.kind === 'shift' ? shiftSheet() : sheet.kind === 'publish' ? publishSheet() : sheet.kind === 'punch' ? punchSheet() : sheet.kind === 'editchat' ? editChatSheet() : sheet.kind === 'loc' ? locSheet() : sheet.kind === 'preppop' ? prepPopSheet() : sheet.kind === 'testacc' ? testAccSheet() : sheet.kind === 'trainnew' ? trainNewSheet() : sheet.kind === 'trainnote' ? trainNoteSheet() : pickSheet(sheet.kind)) : '';
+  const ovHtml = runner ? viewRunner() : viewer ? viewViewer() : sheet ? (sheet.kind === 'shift' ? shiftSheet() : sheet.kind === 'publish' ? publishSheet() : sheet.kind === 'punch' ? punchSheet() : sheet.kind === 'editchat' ? editChatSheet() : sheet.kind === 'loc' ? locSheet() : sheet.kind === 'preppop' ? prepPopSheet() : sheet.kind === 'testacc' ? testAccSheet() : sheet.kind === 'reqedit' ? reqEditSheet() : sheet.kind === 'availedit' ? availEditSheet() : sheet.kind === 'trainnew' ? trainNewSheet() : sheet.kind === 'trainnote' ? trainNoteSheet() : pickSheet(sheet.kind)) : '';
   if (ovHtml !== lastOvHtml){ $('#overlay').innerHTML = ovHtml; lastOvHtml = ovHtml; }
   restoreForms(formSnap);
   document.body.classList.toggle('noscroll', !!(viewer || sheet || runner));
@@ -1768,7 +1794,11 @@ document.addEventListener('click', async e => {
   if (d.read){ const a = data.announcements.find(x => x.id === d.read); if (a) a.read = true; render(); act('read', { id: d.read }); return; }
   if (d.unann){ if (!confirm('Remove this announcement for everyone?')) return; data.announcements = data.announcements.filter(x => x.id !== d.unann); render(); act('unannounce', { id: d.unann }); return; }
   if (d.decide){ const note = d.ok === '1' ? '' : (prompt('Reason (optional) – they will see it') || ''); act('decide', { id: d.decide, approve: d.ok, note }).then(r => { if (r) toast(d.ok === '1' ? 'Approved' : 'Denied'); }); return; }
-  if (d.cancelreq){ act('cancelRequest', { id: d.cancelreq }); return; }
+  if (d.cancelreq){ const q = (data.requests || []).find(x => x.id === d.cancelreq); if (!q) return;
+    if (q.status === 'Approved' && !confirm('Cancel ' + (q.from === data.me.name ? 'your' : q.from + '\'s') + ' approved time off (' + reqWhen(q) + ')?')) return;
+    q.status = 'Cancelled'; render(); act('cancelRequest', { id: q.id }).then(r => { if (r) toast(q.from === data.me.name ? 'Cancelled' : 'Removed'); }); return; }
+  if (d.editreq){ sheet = { kind: 'reqedit', id: d.editreq }; render(); return; }
+  if (d.editavail){ sheet = { kind: 'availedit', id: d.editavail }; render(); return; }
   if (d.addshift){ sheet = { kind: 'shift', date: d.addshift, name: d.who || '', start: (data.presets[0] || {}).start, end: (data.presets[0] || {}).end }; render(); return; }
   if (d.editshift){ const s = data.shifts.find(x => x.id === d.editshift); if (s) { sheet = Object.assign({ kind: 'shift' }, s); render(); } return; }
   if (d.delshift){ if (!confirm('Delete this shift?')) return; const x = data.shifts.find(s => s.id === d.delshift);
@@ -1801,7 +1831,7 @@ document.addEventListener('click', async e => {
   if (d.print !== undefined){ window.print(); return; }
   if (d.copyweek !== undefined){ if (!confirm('Copy last week\'s shifts into this week? Shifts already here stay; exact duplicates are skipped.')) return; act('copyWeek', { from: plus(week, -7), to: week }).then(r => { if (r) toast('Copied'); }); return; }
   if (d.clearweek !== undefined){ if (!confirm('Delete every shift this week?')) return; act('clearWeek', { from: week }).then(r => { if (r) toast('Week cleared'); }); return; }
-  if (d.delavail){ data.availability = data.availability.filter(a => a.id !== d.delavail); render(); act('delAvail', { id: d.delavail }); return; }
+  if (d.delavail){ if (!confirm('Delete this time you can\'t work?')) return; data.availability = data.availability.filter(a => a.id !== d.delavail); render(); act('delAvail', { id: d.delavail }); return; }
   if (d.editpunch !== undefined){ sheet = { kind: 'punch', id: d.editpunch, date: d.pdate, name: d.pname || tsPerson, start: d.pstart, end: d.pend }; render(); return; }
   if (d.delpunch){ if (!confirm('Delete this punch?')) return; sheet = null; act('deletePunch', { id: d.delpunch }); return; }
   if (d.pushon !== undefined){ pushTurnOn(); return; }
@@ -1832,7 +1862,7 @@ document.addEventListener('input', e => {
     if (u && (val === '' || (!isNaN(+val) && +val >= 0 && +val < 1000))){ u.wage = val === '' ? 0 : +val; render();
       clearTimeout(wageTimer[w]); wageTimer[w] = setTimeout(() => act('setWage', { id: w, wage: val }), 900); } }
 });
-document.addEventListener('change', e => { if (e.target.name === 'day' && e.target.closest('form[data-form=avail]')){ const f = e.target.closest('form'); f.querySelector('[data-onlydate]').hidden = e.target.value !== 'date'; } });
+document.addEventListener('change', e => { if (e.target.name === 'day' && e.target.closest('form[data-form=avail],form[data-form=availedit]')){ const f = e.target.closest('form'); f.querySelector('[data-onlydate]').hidden = e.target.value !== 'date'; } });
 let tch = null, noTap = 0;
 document.addEventListener('touchstart', e => { const b = e.target.closest && e.target.closest('[data-bub]'); if (!b || !v3() || b.dataset.bub === 'tmp' || e.touches.length > 1) { tch = null; return; }
   const t = e.touches[0]; tch = { b, row: b.closest('.mrow'), x: t.clientX, y: t.clientY, dx: 0, h: false };
@@ -1920,6 +1950,20 @@ document.addEventListener('submit', async e => {
     const night = pick('night'), morning = pick('morning'), before = Number(pick('before')) || 0;
     data.me.reminders = mode; data.me.remind = { night, morning, before };
     act('myReminders', { email: em, mode, night, morning, before }).then(r => { if (r) toast(mode === 'Off' ? 'Reminders off' : push ? (pushOn_() ? 'Saved' : 'Saved – turn on notifications to get them') : em ? 'Saved' : 'Saved – add an email to get them'); }); return; }
+  if (kind === 'reqedit'){
+    const q = (data.requests || []).find(x => x.id === sheet.id); if (!q) { sheet = null; render(); return; }
+    const until = q.type === 'Time off' && v('until') && v('until') !== v('date') ? v('until') : '';
+    if (!v('date')){ toast('Pick a date'); return; }
+    if (until && until < v('date')){ toast('The last day is before the first day'); return; }
+    const again = q.status === 'Approved' && q.from === data.me.name && !mgr();
+    Object.assign(q, { date: v('date'), until, details: v('details') }); if (again) q.status = 'Pending'; sheet = null; render();
+    act('editRequest', { id: q.id, date: q.date, until, details: q.details }).then(r => { if (r) toast(again ? 'Saved – sent to a manager to approve again' : 'Saved'); }); return; }
+  if (kind === 'availedit'){
+    const a = (data.availability || []).find(x => x.id === sheet.id); if (!a) { sheet = null; render(); return; }
+    const day = v('day') === 'date' ? v('date') : v('day'); if (!day){ toast('Pick a date'); return; }
+    if ((v('from') && !v('to')) || (!v('from') && v('to')) || (v('from') && v('to') <= v('from'))){ toast('Give a start and an end time, or leave both blank for all day'); return; }
+    Object.assign(a, { day, from: v('from'), to: v('to'), note: v('note') }); sheet = null; render();
+    act('editAvail', { id: a.id, day, from: a.from, to: a.to, note: a.note }).then(r => { if (r) toast('Saved'); }); return; }
   if (kind === 'avail'){ const day = v('day') === 'date' ? v('date') : v('day'); if (!day){ toast('Pick a date'); return; }
     (data.availability = data.availability || []).push({ id: 'tmp' + Date.now(), name: data.me.name, day, from: v('from'), to: v('to'), note: v('note') }); render(); act('addAvail', { day, from: v('from'), to: v('to'), note: v('note') }).then(r => { if (r) toast('Added'); }); f.reset(); return; }
   if (kind === 'editchat'){ const c = curChat(); if (!c) { sheet = null; render(); return; } if (!v('name')){ toast('Give it a name'); return; }

@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '4.91';
+const VERSION = '4.92';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Morning of', 'Morning and before', 'Off'];
 
@@ -614,10 +614,36 @@ function act_(ss, me, p, touched) {
       if (auto) audit('Approved own time off for ' + p.date + (until ? ' to ' + until : '') + ' (manager, automatic)');
       return { approved: auto };
     }
-    case 'cancelRequest': {
+    case 'cancelRequest': {                           // the person (or a manager) takes back a request – pending or approved
       const sh = tab('Requests'), r = findRow_(sh, p.id); if (!r) return;
-      if (String(sh.getRange(r, 3).getValue()) !== me.name) throw new Error('That isn\'t your request');
-      if (String(sh.getRange(r, 7).getValue()) === 'Pending') sh.getRange(r, 7).setValue('Cancelled'); return;
+      const row = sh.getRange(r, 1, 1, Math.max(11, sh.getLastColumn())).getValues()[0], from = String(row[2]).trim(), st = String(row[6] || 'Pending');
+      if (from !== me.name && !isMgr) throw new Error('That isn\'t your request');
+      if (st !== 'Pending' && st !== 'Approved') return;
+      const last = ymd_(row[10], tz) || ymd_(row[4], tz);
+      if (st === 'Approved' && last < today && !isMgr) throw new Error('That time off has already happened – ask a manager to change it');
+      sh.getRange(r, 7, 1, 4).setValues([['Cancelled', me.name, new Date(), from === me.name ? 'Cancelled by ' + first_(me.name) : 'Removed by ' + me.name]]);
+      if (st === 'Approved' || from !== me.name) audit('Cancelled ' + row[3] + ' for ' + from + ' on ' + ymd_(row[4], tz) + (ymd_(row[10], tz) ? ' to ' + ymd_(row[10], tz) : '') + (st === 'Approved' ? ' (was approved)' : ''));
+      return;
+    }
+    case 'editRequest': {                             // change the dates or details of a request
+      const sh = tab('Requests'), r = findRow_(sh, p.id); if (!r) throw new Error('That request was removed');
+      if (sh.getLastColumn() < TABS.Requests.length) buildTab_(ss, 'Requests');
+      const row = sh.getRange(r, 1, 1, 11).getValues()[0], from = String(row[2]).trim(), type = String(row[3]), st = String(row[6] || 'Pending');
+      if (from !== me.name && !isMgr) throw new Error('That isn\'t your request');
+      if (st !== 'Pending' && st !== 'Approved') throw new Error('Only pending or approved requests can be changed');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(p.date || ''))) throw new Error('Pick a date');
+      if (p.date < today && !isMgr) throw new Error('That date has passed');
+      let until = type === 'Time off' && /^\d{4}-\d{2}-\d{2}$/.test(String(p.until || '')) ? String(p.until) : '';
+      if (until && until < p.date) throw new Error('The last day is before the first day');
+      if (until && until > addDays_(p.date, 89)) throw new Error('Time off can be up to 90 days at a time');
+      if (until === p.date) until = '';
+      const was = ymd_(row[4], tz) + (ymd_(row[10], tz) ? ' to ' + ymd_(row[10], tz) : '');
+      sh.getRange(r, 5).setNumberFormat('@').setValue(String(p.date)); sh.getRange(r, 6).setValue(clean_(p.details, 1000)); sh.getRange(r, 11).setNumberFormat('@').setValue(until);
+      // Someone changing their own approved time off asks again – unless they're a manager (their own is approved automatically).
+      let again = false;
+      if (st === 'Approved' && from === me.name && !isMgr) { sh.getRange(r, 7, 1, 4).setValues([['Pending', '', '', 'Changed after approval (was ' + was + ')']]); again = true; }
+      if (st === 'Approved' || from !== me.name) audit('Changed ' + type + ' for ' + from + ' from ' + was + ' to ' + p.date + (until ? ' to ' + until : '') + (again ? ' – needs approval again' : ''));
+      return { pending: again };
     }
     case 'decide': {
       needMgr();
@@ -843,6 +869,15 @@ function act_(ss, me, p, touched) {
       const from = /^\d{2}:\d{2}$/.test(p.from || '') ? p.from : '', to = /^\d{2}:\d{2}$/.test(p.to || '') ? p.to : '';
       if ((from && !to) || (!from && to) || (from && to <= from)) throw new Error('Give a start and an end time, or leave both blank for all day');
       tab('Availability').appendRow([nextId_(tab('Availability'), 'u'), name, day, from, to, clean_(p.note, 200), new Date()]); return;
+    }
+    case 'editAvail': {
+      const sh = tab('Availability'), r = findRow_(sh, p.id); if (!r) throw new Error('That was removed');
+      if (String(sh.getRange(r, 2).getValue()).trim() !== me.name && !isMgr) throw new Error('That isn\'t yours');
+      const day = String(p.day || ''); if (!/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)$/.test(day) && !/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error('Pick a day of the week or a date');
+      const from = /^\d{2}:\d{2}$/.test(p.from || '') ? p.from : '', to = /^\d{2}:\d{2}$/.test(p.to || '') ? p.to : '';
+      if ((from && !to) || (!from && to) || (from && to <= from)) throw new Error('Give a start and an end time, or leave both blank for all day');
+      sh.getRange(r, 3).setNumberFormat('@'); sh.getRange(r, 4, 1, 2).setNumberFormat('@');
+      sh.getRange(r, 3, 1, 5).setValues([[day, from, to, clean_(p.note, 200), new Date()]]); return;
     }
     case 'delAvail': {
       const sh = tab('Availability'), r = findRow_(sh, p.id); if (!r) return;
@@ -1647,6 +1682,7 @@ function hhmm_(v, tz) {
 }
 function toMs_(v) { if (v instanceof Date) return v.getTime(); const n = Number(v); return n > 1e11 ? n : (v ? Date.parse(v) || 0 : 0); }
 function toIso_(v) { if (v instanceof Date && !isNaN(v)) return v.toISOString(); const n = Number(v); return n > 1e11 ? new Date(n).toISOString() : ''; }
+const first_ = n => String(n || '').trim().split(/\s+/)[0];
 function clean_(v, max) { let t = String(v == null ? '' : v).slice(0, max).trim(); return /^[=+\-@]/.test(t) ? "'" + t : t; }
 function esc_(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function nextId_(sh, prefix) {
