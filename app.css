@@ -378,3 +378,7 @@ html,body{overscroll-behavior-y:contain}
 #ptr.ready{color:var(--ink)} #ptr.go span{display:inline-block;animation:ptspin .8s linear infinite}
 #ptr:not(.go){transition:opacity .15s, transform .25s ease-out}
 .ackp .thumb{font-style:normal;font-size:.85rem;line-height:1} .ackp.mine{border-color:var(--accent)}
+/* training checklist */
+.trow{align-items:flex-start;gap:12px} .tchk{all:unset;cursor:pointer;flex:none;width:26px;height:26px;border-radius:7px;border:2px solid var(--line);display:grid;place-items:center;font-weight:700;color:#fff;margin-top:1px}
+.trow.on .tchk{background:var(--teal);border-color:var(--teal)} .tby{color:var(--teal)} .trow .lnk{flex:none;align-self:center}
+[data-trainother][hidden]{display:none!important}

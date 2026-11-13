@@ -157,7 +157,7 @@ function act(action, params){
    sections that haven't changed come back listed under "same" and are kept from the copy on this phone.
    A normal load covers this pay period and last week (data.from onward); older weeks are fetched when someone pages back. */
 const SECTION_FIELDS = { lists: ['checklists', 'history'], news: ['announcements'], sched: ['shifts', 'unpublished', 'positions', 'presets', 'availability'],
-  clock: ['lateAfter', 'overAfter', 'shiftTypes', 'geo', 'punches', 'open', 'floor'], prep: ['prep'], chat: ['chat', 'channels'], reqs: ['requests'], links: ['links'], team: ['users', 'pay', 'period', 'myPay'] };
+  clock: ['lateAfter', 'overAfter', 'shiftTypes', 'geo', 'punches', 'open', 'floor'], prep: ['prep'], chat: ['chat', 'channels'], reqs: ['requests'], links: ['links'], team: ['users', 'pay', 'period', 'myPay'], train: ['training'] };
 const haveNow = () => data && data.v && data.me ? data.v : undefined;
 let HIST = { key: '', from: '', shifts: [], punches: [] }, histBusy = '';
 function mergeGot(keep, got){
@@ -1347,11 +1347,67 @@ function viewRequests(){
 }
 
 /* ----- resources (in-app PDFs) ----- */
+const opensIn = u => /\/spreadsheets\//.test(u) ? '<div class="sub">Opens in Google Sheets</div>' : /\/document\//.test(u) ? '<div class="sub">Opens in Google Docs</div>' : /drive\.google\.com/.test(u) ? '<div class="sub">Opens in Google Drive</div>' : '';
+
+/* ----- training: a Level I checklist per trainee, for leads and managers ----- */
+let trainSel = '';
+const TR = () => data.training || { items: [], active: [], filed: [] };
+const trDone = t => TR().items.filter(it => t.done && t.done[it.skill]).length;
+const trBar = t => { const n = TR().items.length, d = trDone(t); return `<div class="progress"><i style="width:${n ? Math.round(d / n * 100) : 0}%"></i></div><div class="sub" style="margin-top:4px">${d} of ${n} skills</div>`; };
+function viewTraining(){
+  const T = TR(), t = trainSel && T.active.find(x => x.id === trainSel);
+  if (t) return viewTrainee(t);
+  trainSel = '';
+  const leadLinks = (data.links || []).filter(l => l.tier !== 'Everyone');
+  return `${back()}<h1>Training</h1>
+    <div class="btns" style="margin-bottom:10px"><button class="btn go" data-trainnew>Start a trainee checklist</button></div>
+    <h2>In training</h2><div class="card">${T.active.map(x => rowBtn(`data-trainopen="${esc(x.id)}"`, `<div class="txt"><b>${esc(x.name)}</b><div class="sub">${x.trainer ? 'Trainer: ' + esc(first(x.trainer)) + ' · ' : ''}${x.started ? 'Started ' + shortDay(x.started) : ''}</div>${trBar(x)}</div><span>›</span>`)).join('') || '<div class="empty">Nobody in training. Start a checklist when a new barista begins.</div>'}</div>
+    ${T.filed.length ? `<h2>Filed</h2><div class="card">${T.filed.map(x => `<a class="row" href="${esc(x.filed)}" target="_blank" rel="noopener" style="text-decoration:none"><div class="txt"><b>${esc(x.name)}</b><div class="sub">Filed${x.filedAt ? ' ' + shortDay(ymdOf(new Date(x.filedAt))) : ''}${x.filedBy ? ' by ' + esc(first(x.filedBy)) : ''} · opens in Google Docs</div></div><span>↗</span></a>`).join('')}</div>` : ''}
+    ${leadLinks.length ? `<h2>Lead resources</h2><div class="card">${leadLinks.map(l => l.file && !/\/spreadsheets\//.test(l.url) ? rowBtn(`data-pdf="${esc(l.id)}"`, `<div class="txt"><b>${esc(l.name)}</b><div class="sub">${l.tier === 'Managers' ? 'Managers · ' : ''}Opens in the app</div></div><span>›</span>`) : `<a class="row" href="${esc(l.url)}" target="_blank" rel="noopener" style="text-decoration:none"><div class="txt"><b>${esc(l.name)}</b>${opensIn(l.url)}</div><span>↗</span></a>`).join('')}</div>` : ''}
+    <p class="sub">Only leads and managers see Training. The skills come from the Training items tab in the sheet.${T.folder ? '' : ' Add a folder in Settings › Training records folder so managers can file finished checklists.'}</p>`;
+}
+function viewTrainee(t){
+  const T = TR(), secs = [...new Set(T.items.map(x => x.section))], n = T.items.length, d = trDone(t);
+  const row = it => { const x = t.done[it.skill];
+    return `<div class="row trow ${x ? 'on' : ''}"><button class="tchk" data-traincheck="${esc(it.skill)}" aria-pressed="${x ? 'true' : 'false'}" aria-label="${esc(it.skill)}">${x ? '✓' : ''}</button>
+      <div class="txt"><b>${esc(it.skill)}</b><div class="sub">${esc(it.standard)}</div>${x ? `<div class="sub tby">✓ ${esc(first(x.by))}${x.at ? ' · ' + shortDay(ymdOf(new Date(x.at))) : ''}${x.note ? ' · ' + esc(x.note) : ''}</div>` : ''}</div>
+      ${x ? `<button class="lnk" data-trainnote="${esc(it.skill)}">${x.note ? 'Edit note' : 'Note'}</button>` : ''}</div>`; };
+  return `<button class="btn sm" data-trainback style="margin-bottom:6px">‹ Training</button>
+    <h1>${esc(t.name)}</h1>
+    <div class="card"><div class="row"><div class="txt"><div class="sub">Primary trainer: <b>${esc(t.trainer || '—')}</b> · Started ${t.started ? shortDay(t.started) : '—'}</div>${trBar(t)}</div></div></div>
+    ${secs.map(sec => `<h2>${esc(sec)}</h2><div class="card">${T.items.filter(x => x.section === sec).map(row).join('')}</div>`).join('')}
+    <h2>Level I sign-off</h2>
+    <form class="card stack" data-form="trainedit" style="padding:14px">
+      <label class="f">Primary trainer<select name="trainer">${[...new Set([t.trainer].concat((data.people || []).filter(u => u.role !== 'Staff').map(u => u.name)))].filter(Boolean).map(nm => `<option ${nm === t.trainer ? 'selected' : ''}>${esc(nm)}</option>`).join('')}</select></label>
+      <label class="f">Start date<input type="date" name="started" value="${esc(t.started || '')}"></label>
+      <label class="f">Level I test score (12 of 15 to pass)<input type="number" name="score" min="0" max="15" inputmode="numeric" value="${esc(t.score)}" placeholder="—"></label>
+      <label class="f">Anything to keep an eye on<textarea name="watch" rows="3" maxlength="1000">${esc(t.watch)}</textarea></label>
+      <button class="btn go">Save</button></form>
+    ${mgr() ? `<div class="card"><div class="row"><div class="txt"><b>File in Drive</b><div class="sub">${d < n ? (n - d) + ' skill' + (n - d > 1 ? 's' : '') + ' not checked off yet. ' : 'Every skill is checked off. '}Filing saves this checklist as a Google Doc in your HR folder and takes it off this list.</div></div></div>
+      <div class="btns" style="padding:0 14px 14px"><button class="btn go" data-trainfile="${esc(t.id)}" ${T.folder ? '' : 'disabled title="Add Settings › Training records folder first"'}>File checklist</button><button class="btn" data-traindel="${esc(t.id)}">Delete</button></div></div>` : '<p class="sub">When training is done, a manager files this checklist in Drive.</p>'}`;
+}
+function trainNewSheet(){
+  const busy = new Set(TR().active.map(x => x.name)), staff = (data.people || []).filter(u => u.role === 'Staff' && !busy.has(u.name)).map(u => u.name).sort();
+  const trainers = (data.people || []).filter(u => u.role !== 'Staff').map(u => u.name).sort();
+  return `<div class="sheet" role="dialog" aria-label="New trainee checklist"><div class="sheet-in"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="margin:0">New checklist</h1><button class="btn sm" data-closesheet>Close</button></div>
+    <form class="stack" data-form="trainnew" style="padding:0">
+      <label class="f">Trainee<select name="who"><option value="">Pick someone…</option>${staff.map(nm => `<option>${esc(nm)}</option>`).join('')}<option value="*">Someone not in the app yet…</option></select></label>
+      <label class="f" data-trainother hidden>Their name<input name="other" maxlength="80" autocomplete="off"></label>
+      <label class="f">Primary trainer<select name="trainer">${trainers.map(nm => `<option ${nm === data.me.name ? 'selected' : ''}>${esc(nm)}</option>`).join('')}</select></label>
+      <label class="f">Start date<input type="date" name="started" value="${T()}"></label>
+      <button class="btn go">Start checklist</button></form></div></div>`;
+}
+function trainNoteSheet(){
+  const t = TR().active.find(x => x.id === trainSel), x = t && t.done[sheet.skill]; if (!x) return '';
+  return `<div class="sheet" role="dialog" aria-label="Note"><div class="sheet-in"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="margin:0">${esc(sheet.skill)}</h1><button class="btn sm" data-closesheet>Close</button></div>
+    <form class="stack" data-form="trainnote" style="padding:0"><label class="f">Note<textarea name="note" rows="4" maxlength="300" placeholder="What still needs work, or anything the next trainer should know">${esc(x.note)}</textarea></label><button class="btn go">Save note</button></form></div></div>`;
+}
+document.addEventListener('change', e => { const f = e.target.closest && e.target.closest('form[data-form=trainnew]'); if (!f || e.target.name !== 'who') return; const o = f.querySelector('[data-trainother]'); if (o) o.hidden = e.target.value !== '*'; });
 function viewResources(){
   const tiers = ['Everyone', 'Leads and managers', 'Managers'], ls = data.links || [];
   return `${back()}<h1>Resources</h1>${tiers.map(t => { const xs = ls.filter(l => l.tier === t); return xs.length ? `<h2>${t === 'Everyone' ? 'Everyone' : t}</h2><div class="card">${xs.map(l =>
     l.file && !/\/spreadsheets\//.test(l.url) ? rowBtn(`data-pdf="${esc(l.id)}"`, `<div class="txt"><b>${esc(l.name)}</b><div class="sub">Opens in the app</div></div><span>›</span>`)
-      : `<a class="row" href="${esc(l.url)}" target="_blank" rel="noopener" style="text-decoration:none"><div class="txt"><b>${esc(l.name)}</b>${/\/spreadsheets\//.test(l.url) ? '<div class="sub">Opens in Google Sheets</div>' : ''}</div><span>↗</span></a>`).join('')}</div>` : ''; }).join('') || '<div class="card"><div class="empty">No resources yet.</div></div>'}`;
+      : `<a class="row" href="${esc(l.url)}" target="_blank" rel="noopener" style="text-decoration:none"><div class="txt"><b>${esc(l.name)}</b>${opensIn(l.url)}</div><span>↗</span></a>`).join('')}</div>` : ''; }).join('') || '<div class="card"><div class="empty">No resources yet.</div></div>'}`;
 }
 async function openPdf(id){
   const l = (data.links || []).find(x => x.id === id); if (!l) return;
@@ -1494,7 +1550,7 @@ function viewTeam(){
 }
 
 function viewMore(){
-  const views = { settings: viewSettings, push: viewPush, reminders: viewReminders, requests: viewRequests, avail: viewAvail, time: viewTime, news: viewNews, resources: viewResources, team: () => mgr() ? viewTeam() : viewMoreList() };
+  const views = { settings: viewSettings, push: viewPush, reminders: viewReminders, requests: viewRequests, avail: viewAvail, time: viewTime, news: viewNews, resources: viewResources, training: () => lead() ? viewTraining() : viewMoreList(), team: () => mgr() ? viewTeam() : viewMoreList() };
   if (!views[moreView] && wide()) moreView = 'settings';   // desktop has no More list – the sidebar lists everything
   return views[moreView] ? views[moreView]() : viewMoreList();
 }
@@ -1510,6 +1566,7 @@ function viewMoreList(){
       ${item('avail', 'Availability', 'When you can\'t work')}
       ${rowBtn('data-tab="tests" class="mobonly"', '<div class="txt"><b>Tests</b><div class="sub">Training & certification</div></div><span>›</span>')}
       ${item('resources', 'Resources', 'Recipes, guides, handbooks')}
+      ${lead() ? item('training', 'Training', 'Trainee checklists and lead resources', pill(((data.training || {}).active || []).length)) : ''}
       ${mgr() ? item('team', 'Team & sign-in codes') : ''}</div>
     <div class="card">${item('settings', 'Settings', 'Notifications, reminders, look, sign out')}</div>
     <p class="sub" style="text-align:center">Peregrine Team · server ${esc(data.version || '')}</p>`;
@@ -1546,7 +1603,7 @@ function deskMore(){
   if (!wide() || !data) return '';
   const pendN = mgr() ? (data.requests || []).filter(q => q.status === 'Pending' && q.from !== data.me.name).length : 0, unreadN = (data.announcements || []).filter(a => !a.read).length;
   const it = (k, n, ic, badge) => `<button data-more="${k}" class="deskonly" ${tab === 'more' && (moreView === k || (k === 'settings' && /^(push|reminders)$/.test(moreView))) ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}${badge ? `<span class="n">${badge}</span>` : ''}</button>`;
-  return `<div class="tabsep deskonly" aria-hidden="true"></div>${it('news', 'Announcements', '⚑', unreadN)}${it('time', mgr() ? 'Time sheets' : 'My time', '⏱')}${it('requests', 'Time off & swaps', '⇄', pendN)}${it('avail', 'Availability', '◷')}${it('resources', 'Resources', '❏')}${mgr() ? it('team', 'Team', '☺') : ''}
+  return `<div class="tabsep deskonly" aria-hidden="true"></div>${it('news', 'Announcements', '⚑', unreadN)}${it('time', mgr() ? 'Time sheets' : 'My time', '⏱')}${it('requests', 'Time off & swaps', '⇄', pendN)}${it('avail', 'Availability', '◷')}${it('resources', 'Resources', '❏')}${lead() ? it('training', 'Training', '✓') : ''}${mgr() ? it('team', 'Team', '☺') : ''}
     <div class="tabspacer deskonly" aria-hidden="true"></div>${it('settings', 'Settings', '⚙︎')}`;
 }
 function setShop(t){ const el = $('#shop'); if (canSwitch()) el.innerHTML = `<button class="locbtn" data-locs aria-label="Switch location">${esc(locName(HERE))} <span aria-hidden="true">▾</span></button>`; else el.textContent = t; }   // with the switcher, the bar names the location
@@ -1576,7 +1633,7 @@ function render(){
   if (same && tab !== 'chat'){ const g2 = $('.gridwrap'); if (keep && g2){ g2.scrollTop = keep[0]; g2.scrollLeft = keep[1]; } if (window.scrollY !== wy) window.scrollTo(0, wy); }   // a save or refresh redraws the page; stay where you were
   if (draft !== null){ const t = $('.composer textarea'); if (t){ t.value = draft; t.focus(); } }
   if (!sheet && !viewer && !runner && !joined && prepPopItems().length) sheet = { kind: 'preppop' };
-  $('#overlay').innerHTML = runner ? viewRunner() : viewer ? viewViewer() : sheet ? (sheet.kind === 'shift' ? shiftSheet() : sheet.kind === 'publish' ? publishSheet() : sheet.kind === 'punch' ? punchSheet() : sheet.kind === 'editchat' ? editChatSheet() : sheet.kind === 'loc' ? locSheet() : sheet.kind === 'preppop' ? prepPopSheet() : sheet.kind === 'testacc' ? testAccSheet() : pickSheet(sheet.kind)) : '';
+  $('#overlay').innerHTML = runner ? viewRunner() : viewer ? viewViewer() : sheet ? (sheet.kind === 'shift' ? shiftSheet() : sheet.kind === 'publish' ? publishSheet() : sheet.kind === 'punch' ? punchSheet() : sheet.kind === 'editchat' ? editChatSheet() : sheet.kind === 'loc' ? locSheet() : sheet.kind === 'preppop' ? prepPopSheet() : sheet.kind === 'testacc' ? testAccSheet() : sheet.kind === 'trainnew' ? trainNewSheet() : sheet.kind === 'trainnote' ? trainNoteSheet() : pickSheet(sheet.kind)) : '';
   document.body.classList.toggle('noscroll', !!(viewer || sheet || runner));
   if (keepWage){ const el = document.querySelector(keepWage[0]); if (el){ el.value = keepWage[1]; el.focus(); try { el.setSelectionRange(keepWage[2], keepWage[2]); } catch (_) {} } }
   const sf = document.querySelector('form[data-form=shift]'), est = $('#est'); if (sf && est) est.innerHTML = shiftEstimate(sf);
@@ -1678,6 +1735,20 @@ document.addEventListener('click', async e => {
     sheet = null; render(); act('deleteShift', { id: d.delshift }); return; }
   if (d.restore){ const x = data.shifts.find(s => s.id === d.restore); if (x) x.status = 'changed'; sheet = null; render(); act('restoreShift', { id: d.restore }); return; }
   if (d.onsched){ const u = (data.users || []).find(x => x.id === d.onsched); if (u) u.onSchedule = d.to === '1'; render(); act('setOnSchedule', { id: d.onsched, on: d.to }).then(r => { if (r && u) toast(first(u.name) + (d.to === '1' ? ' is back on the schedule' : ' is hidden from the schedule')); }); return; }
+  if (d.trainnew !== undefined){ sheet = { kind: 'trainnew' }; render(); return; }
+  if (d.trainopen){ trainSel = d.trainopen; render(); window.scrollTo(0, 0); return; }
+  if (d.trainback !== undefined){ trainSel = ''; render(); window.scrollTo(0, 0); return; }
+  if (d.trainnote){ sheet = { kind: 'trainnote', skill: d.trainnote }; render(); return; }
+  if (d.traincheck){ const t = TR().active.find(x => x.id === trainSel); if (!t) return; const sk = d.traincheck, had = t.done[sk];
+    if (had && had.by !== data.me.name && !confirm('Un-check "' + sk + '"? ' + first(had.by) + ' checked it off.')) return;
+    if (had) delete t.done[sk]; else t.done[sk] = { by: data.me.name, at: new Date().toISOString(), note: '' };
+    render(); act('trainCheck', { id: t.id, skill: sk, done: had ? '0' : '1' }); return; }
+  if (d.trainfile){ const t = TR().active.find(x => x.id === d.trainfile); if (!t) return; const left = TR().items.length - trDone(t);
+    if (!confirm((left ? left + ' skill' + (left > 1 ? 's are' : ' is') + ' not checked off. ' : '') + 'File ' + t.name + '\'s checklist in Drive now?')) return;
+    b.disabled = true; b.textContent = 'Filing…';
+    act('trainFile', { id: t.id }).then(r => { if (r && r.result && r.result.url){ toast('Filed in Drive'); trainSel = ''; render(); } else { b.disabled = false; b.textContent = 'File checklist'; } }); return; }
+  if (d.traindel){ const t = TR().active.find(x => x.id === d.traindel); if (!t || !confirm('Delete ' + t.name + '\'s checklist? This can\'t be undone.')) return;
+    data.training.active = TR().active.filter(x => x.id !== t.id); trainSel = ''; render(); act('trainDelete', { id: t.id }); return; }
   if (d.testacc){ sheet = { kind: 'testacc', test: d.testacc }; render(); return; }
   if (d.publish !== undefined){ sheet = { kind: 'publish' }; render(); return; }
   if (d.sendweek !== undefined){ if (!confirm('Email everyone working the week of ' + shortDay(week) + ' their shifts?')) return; b.disabled = true;
@@ -1776,6 +1847,19 @@ document.addEventListener('submit', async e => {
     if (ex) Object.assign(ex, p, { status: ex.status === 'draft' ? 'draft' : 'changed' }); else { p.cid = 'tmp' + Date.now() + Math.random().toString(36).slice(2, 5); data.shifts.push(Object.assign({}, p, { id: p.cid, status: 'draft' })); }
     data.shifts.sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
     sheet = null; render(); act('saveShift', p).then(r => { if (r) toast(p.id ? 'Shift saved' : 'Shift added'); }); return; }
+  if (kind === 'trainnew'){
+    const name = v('who') === '*' ? v('other') : v('who'); if (!name){ toast('Pick the trainee'); return; }
+    const tmp = { id: 'tmp' + Date.now(), name, trainer: v('trainer'), started: v('started') || T(), status: 'In training', score: '', watch: '', done: {} };
+    data.training = TR(); data.training.active = data.training.active.concat(tmp); sheet = null; trainSel = ''; render();
+    act('trainStart', { name, trainer: v('trainer'), started: v('started') }).then(r => { if (r && r.result && r.result.id){ trainSel = r.result.id; render(); } }); return; }
+  if (kind === 'trainnote'){
+    const t = TR().active.find(x => x.id === trainSel), sk = sheet.skill; if (t && t.done[sk]) t.done[sk].note = v('note'); sheet = null; render();
+    if (t) act('trainCheck', { id: t.id, skill: sk, done: '1', note: v('note') }); return; }
+  if (kind === 'trainedit'){
+    const t = TR().active.find(x => x.id === trainSel); if (!t) return;
+    if (v('score') !== '' && !(Number(v('score')) >= 0 && Number(v('score')) <= 15)){ toast('The test score is out of 15'); return; }
+    Object.assign(t, { trainer: v('trainer'), started: v('started') || t.started, score: v('score'), watch: v('watch') }); render();
+    act('trainEdit', { id: t.id, trainer: t.trainer, started: t.started, score: t.score, watch: t.watch }).then(r => { if (r) toast('Saved'); }); return; }
   if (kind === 'testacc'){
     const t = (tdata.tests || []).find(x => x.name === sheet.test); if (!t) return;
     const allow = [], block = []; [...f.elements].forEach(el => { if (!el.name || el.name.indexOf('p:') !== 0) return; const n = el.name.slice(2); if (el.value === 'allow') allow.push(n); if (el.value === 'block') block.push(n); });

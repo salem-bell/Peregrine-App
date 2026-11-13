@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '4.8';
+const VERSION = '4.9';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Morning of', 'Morning and before', 'Off'];
 
@@ -29,7 +29,10 @@ const TABS = {
   'Chat reads':    ['User ID', 'Channel ID', 'Read at'],
   'Tests':         ['Test', 'Link (full address, or ?level=… to add to Settings › Test portal)', 'Results tab', 'Must have passed first', 'Who sees it', 'Order', 'Also allowed (names – they skip the "passed first" step)', 'Not allowed (names)'],
   'Requests':      ['ID', 'Created', 'From', 'Type', 'Date', 'Details', 'Status', 'Decided by', 'Decided at', 'Note', 'Last day (time off)'],
-  'Links':         ['Name', 'Link', 'Who sees it', 'Order'],
+  'Links':         ['Name', 'Link', 'Who sees it', 'Order', 'Opens in (blank = the app, or Drive)'],
+  'Training items': ['Section', 'Skill', 'Standard', 'Order'],
+  'Trainees':      ['ID', 'Trainee', 'Primary trainer', 'Start date', 'Status', 'Level I test score (of 15)', 'Anything to keep an eye on', 'Filed (link)', 'Filed at', 'Filed by'],
+  'Training log':  ['Trainee ID', 'Skill', 'Checked off by', 'Checked off at', 'Note'],
   'Audit':         ['When', 'Who', 'What'],
   'Reminder log':  ['Key', 'Name', 'Kind', 'Sent'],
   'Push':          ['User ID', 'Name', 'Endpoint', 'Keys (do not edit)', 'Device', 'Added', 'Last sent'],
@@ -77,6 +80,7 @@ const SETTINGS = [
   ['Chat service secret',          '',                          'Must match SECRET_PEREGRINE in the team-chat Worker. Don\'t share it.'],
   ['Push public key',              '',                          'Must match VAPID_PUBLIC in the Worker.'],
   ['Delete chat photos after (days)', '60',                     'Photos sent in Messages are deleted from Drive after this many days. The message stays, marked "Photo expired".'],
+  ['Training records folder',      '',                          'The Drive folder where finished trainee checklists are filed as Google Docs (Training in the app).'],
   ['Test results sheet',           'https://docs.google.com/spreadsheets/d/1dl8gi2SkPfYOjBzX0syp2WkWssg7t-rpZChpeZNm5QQ/edit', 'The sheet the tests write results to. The app shows each person their own results.'],
 ];
 
@@ -151,12 +155,42 @@ function buildTab_(ss, name) {
   if (name === 'Availability') { text(3); text(4); text(5); }
   if (name === 'Time clock') { text(3); }
   if (name === 'Prep') { text(4); }
+  if (name === 'Trainees') { text(4); text(6); }
+  if (name === 'Links') list(5, ['', 'Drive']);
   if (name === 'Channels') { list(3, ['channel', 'group', 'dm']); list(5, ['Everyone', 'Leads and managers', 'Managers']); }
   const ex = examples_(name);
   if (ex.length) sh.getRange(2, 1, ex.length, header.length).setValues(ex.map(r => header.map((_, i) => r[i] === undefined ? '' : r[i])));
   sh.autoResizeColumns(1, header.length);
 }
 
+/** The Level I skill checklist from the Lead Training Guide. Edit the Training items tab to change it. */
+const TRAIN_ITEMS_ = [
+  ['Shifts 1–4 (untipped)', 'Coffee Fundamentals session', 'Attended; can explain seed, species, processing, brew methods'],
+  ['Shifts 1–4 (untipped)', 'Steps of Service + 5ft/10ft', 'Greets and guides a guest the Peregrine way'],
+  ['Shifts 1–4 (untipped)', 'Dress code, tip pool, shift drinks', 'Knows the rules'],
+  ['Shifts 1–4 (untipped)', 'Food handler certificate', 'Copy given to the Manager by end of week 2'],
+  ['Shifts 1–4 (untipped)', 'Drip coffee', 'Grind 9.5, 135g portions'],
+  ['Shifts 1–4 (untipped)', 'Hot tea', 'Black: kettle, 4 min · Green: Curtis, 3 min · asks about sweetener'],
+  ['Shifts 1–4 (untipped)', 'House espresso knowledge', '17.5g, 20–24 sec, 1.5oz'],
+  ['Shifts 1–4 (untipped)', 'Single-origin espresso', '18g, puck screen, 20–24 sec, 1.5oz'],
+  ['Shifts 1–4 (untipped)', 'Taste diagnosis', 'Fixes sour (finer) and bitter (coarser) shots'],
+  ['Shifts 1–4 (untipped)', 'Americano hot / iced', 'Iced: cup full of ice first'],
+  ['Shifts 1–4 (untipped)', 'Milk texture and temp', 'Latte 145–155F, cappuccino 130–140F, cortado ~130F'],
+  ['Shifts 1–4 (untipped)', 'Core drinks', 'Latte, cappuccino, cortado, macchiato, café au lait'],
+  ['Shifts 1–4 (untipped)', 'Kid-temp drinks', 'Steamers and hot chocolate at 120–130F'],
+  ['Shifts 1–4 (untipped)', 'Pour over knowledge', 'Filling canisters, and understanding the brew recipe'],
+  ['Shifts 1–4 (untipped)', 'Flavored and signature lattes', 'Clear 32g, dark 40g, same hot or iced'],
+  ['Shifts 1–4 (untipped)', 'Seasonals', 'Current seasonal menu'],
+  ['Shifts 1–4 (untipped)', 'Tea lattes', 'Matcha (40g), chai, London Fog, hot and iced'],
+  ['Shifts 1–4 (untipped)', 'POS orders and modifiers', 'Accurate item, size, milk, syrup'],
+  ['Shifts 5–8 (tipped)', 'Register on a real shift', 'Accurate orders, cash handled correctly, tip split at shift change'],
+  ['Shifts 5–8 (tipped)', 'Iced menu', 'Lemonades, cream sodas, craft drinks'],
+  ['Shifts 5–8 (tipped)', 'Multiple tickets', 'Keeps 2–3 tickets moving in a sensible order'],
+  ['Shifts 5–8 (tipped)', 'Opening', 'Checklist done in a timely manner'],
+  ['Shifts 5–8 (tipped)', 'Closing', 'Checklist done in a timely manner'],
+  ['Shifts 5–8 (tipped)', 'Drawer count (with Lead)', 'Counts, rounds, $200 base, knows the $5 rule'],
+  ['Shifts 5–8 (tipped)', 'Rush on bar', 'Holds bar through a rush']
+];
 function examples_(name) {
   const tz = Session.getScriptTimeZone(), d = n => Utilities.formatDate(new Date(Date.now() + n * 864e5), tz, 'yyyy-MM-dd');
   switch (name) {
@@ -170,6 +204,7 @@ function examples_(name) {
     case 'Channels': return [['general', 'General', 'channel', '', 'Everyone', 'Setup', new Date()], ['training', 'Training', 'channel', '', 'Everyone', 'Setup', new Date()],
                              ['inventory', 'Inventory', 'channel', '', 'Everyone', 'Setup', new Date()], ['schedule', 'Schedule & swaps', 'channel', '', 'Everyone', 'Setup', new Date()],
                              ['leads', 'Leads & managers', 'channel', '', 'Leads and managers', 'Setup', new Date()]];
+    case 'Training items': return TRAIN_ITEMS_.map((r, i) => [r[0], r[1], r[2], i + 1]);
     case 'Tests': return [['Barista Level I', '?level=1', 'Barista Level I', '', 'Everyone', 1], ['Barista Level II', '?level=2', 'Barista Level II', 'Barista Level I', 'Everyone', 2],
                           ['Coffee Knowledge', '', 'Coffee Knowledge', 'Barista Level I', 'Everyone', 3], ['Lead (Level III)', '?level=3', 'Lead (Level III)', 'Barista Level II', 'Everyone', 4],
                           ['Level IV – Coffee Knowledge', '?level=4', 'Level IV Coffee Knowledge', 'Lead (Level III)', 'Leads and managers', 5]];
@@ -372,7 +407,7 @@ function api_(token, p) {
 const SECTIONS_ = {
   lists: ['Checklists', 'Checklist log', 'Settings'], news: ['Announcements', 'Reads', 'Users'], sched: ['Shifts', 'Availability', 'Settings', 'Users'],
   clock: ['Time clock', 'Users', 'Shifts', 'Settings'], prep: ['Prep', 'Shifts', 'Users'], chat: ['Channels', 'Messages', 'Chat reads', 'Users', 'Settings'],
-  reqs: ['Requests'], links: ['Links'], team: ['Users', 'Settings']
+  reqs: ['Requests'], links: ['Links'], team: ['Users', 'Settings'], train: ['Training items', 'Trainees', 'Training log']
 };
 const SLIM_SKIP_ = ['lists', 'news', 'clock', 'prep', 'chat', 'links'];
 function secVersion_(name, me, today) { return [VERSION, name, me.id, me.role, today, Math.floor(Date.now() / 9e5), gen_('*')].concat(SECTIONS_[name].map(gen_)).join('|'); }
@@ -474,8 +509,11 @@ function state_(ss, me, slim, have) {
   const can = w => /^manager/i.test(w) ? isMgr : /lead/i.test(w) ? isLead : true;
   out.links = rv_(ss, 'Links').map((r, i) => ({ r, i })).filter(({ r }) => r[0] && /^https?:\/\//.test(String(r[1])) && can(String(r[2] || 'Everyone')))
     .map(({ r, i }) => ({ id: 'L' + (i + 2), name: String(r[0]), url: String(r[1]), tier: /^manager/i.test(String(r[2])) ? 'Managers' : /lead/i.test(String(r[2])) ? 'Leads and managers' : 'Everyone',
-      file: !!driveId_(r[1]), order: Number(r[3]) || 0 })).sort((a, b) => a.order - b.order);
+      file: !!driveId_(r[1]) && !/^drive$/i.test(String(r[4] || '').trim()), order: Number(r[3]) || 0 })).sort((a, b) => a.order - b.order);
   }
+
+  // Training checklists – leads and managers only
+  if (isLead && want('train')) out.training = training_(ss, tz);
 
   // Team (managers), pay settings
   if (want('team')) {
@@ -883,6 +921,54 @@ function act_(ss, me, p, touched) {
       for (let i = v.length - 1; i >= 0; i--) if (String(v[i][2]) === String(p.endpoint || '') && String(v[i][0]) === me.id) sh.deleteRow(i + 2);
       return;
     }
+    case 'trainStart': {                              // a new trainee checklist
+      if (!isLead) throw new Error('Only leads and managers can start a training checklist');
+      const name = clean_(p.name, 80); if (!name) throw new Error('Who is the trainee?');
+      const sh = tab('Trainees');
+      if (vals_(sh).some(r => String(r[1]).trim().toLowerCase() === name.toLowerCase() && !r[7])) throw new Error(name + ' already has a checklist going');
+      const id = nextId_(sh, 't'), started = /^\d{4}-\d{2}-\d{2}$/.test(String(p.started || '')) ? String(p.started) : today, row = sh.getLastRow() + 1;
+      sh.getRange(row, 4).setNumberFormat('@');
+      sh.getRange(row, 1, 1, 10).setValues([[id, name, clean_(p.trainer, 80) || me.name, started, 'In training', '', '', '', '', '']]);
+      audit('Started a training checklist for ' + name);
+      return { id };
+    }
+    case 'trainCheck': {                              // check off (or un-check) one skill
+      if (!isLead) throw new Error('Only leads and managers can check off training');
+      const id = String(p.id || ''), skill = String(p.skill || '').trim(); if (!skill) throw new Error('Which skill?');
+      const t = vals_(tab('Trainees')).find(r => String(r[0]) === id); if (!t) throw new Error('That checklist is gone'); if (t[7]) throw new Error('That checklist is already filed');
+      const sh = tab('Training log'), v = vals_(sh), i = v.findIndex(r => String(r[0]) === id && String(r[1]).trim() === skill);
+      if (p.done === false || p.done === '0' || p.done === 0) { if (i >= 0) sh.deleteRow(i + 2); return; }
+      if (i >= 0) { if (p.note !== undefined) sh.getRange(i + 2, 5).setValue(clean_(p.note, 300)); return; }
+      sh.appendRow([id, skill, me.name, new Date(), clean_(p.note, 300)]);
+      return;
+    }
+    case 'trainEdit': {                               // trainer, start date, test score, notes
+      if (!isLead) throw new Error('Only leads and managers can edit training');
+      const sh = tab('Trainees'), v = vals_(sh), i = v.findIndex(r => String(r[0]) === String(p.id || '')); if (i < 0) throw new Error('That checklist is gone');
+      if (v[i][7]) throw new Error('That checklist is already filed');
+      if (p.trainer !== undefined) sh.getRange(i + 2, 3).setValue(clean_(p.trainer, 80));
+      if (p.started !== undefined && /^\d{4}-\d{2}-\d{2}$/.test(String(p.started))) sh.getRange(i + 2, 4).setNumberFormat('@').setValue(String(p.started));
+      if (p.score !== undefined) { const n = String(p.score).trim(); if (n !== '' && !(Number(n) >= 0 && Number(n) <= 15)) throw new Error('The test score is out of 15'); sh.getRange(i + 2, 6).setNumberFormat('@').setValue(n); }
+      if (p.watch !== undefined) sh.getRange(i + 2, 7).setValue(clean_(p.watch, 1000));
+      return;
+    }
+    case 'trainFile': {                               // a manager files the finished checklist in Drive
+      if (!isMgr) throw new Error('Only managers can file a checklist');
+      const id = String(p.id || ''), url = trainDoc_(ss, id, me, tz);
+      const sh = tab('Trainees'), v = vals_(sh), i = v.findIndex(r => String(r[0]) === id);
+      sh.getRange(i + 2, 5).setValue('Filed'); sh.getRange(i + 2, 8, 1, 3).setValues([[url, new Date(), me.name]]);
+      tab('Training log');                            // so the app reloads training
+      audit('Filed the training checklist for ' + v[i][1]);
+      return { url };
+    }
+    case 'trainDelete': {
+      if (!isMgr) throw new Error('Only managers can delete a checklist');
+      const id = String(p.id || ''), sh = tab('Trainees'), v = vals_(sh), i = v.findIndex(r => String(r[0]) === id); if (i < 0) return;
+      const lg = tab('Training log'), lv = vals_(lg);
+      for (let k = lv.length - 1; k >= 0; k--) if (String(lv[k][0]) === id) lg.deleteRow(k + 2);
+      sh.deleteRow(i + 2); audit('Deleted the training checklist for ' + v[i][1]);
+      return;
+    }
     case 'testAccess': {                              // a manager sets who gets a test
       if (!isMgr) throw new Error('Only managers can change test access');
       const sh = ss.getSheetByName('Tests'); if (!sh) throw new Error('No Tests tab');
@@ -1075,6 +1161,45 @@ function cleanPhotos_(ss) {
   if (n) dirty_('Messages');
 }
 
+/** Trainee checklists in progress (with what's checked off), and the last few filed ones. */
+function training_(ss, tz, fresh) {
+  ['Training items', 'Trainees', 'Training log'].forEach(n => { if (!ss.getSheetByName(n)) buildTab_(ss, n); });
+  const rv = n => fresh ? vals_(ss.getSheetByName(n)) : rv_(ss, n);     // fresh: read the sheet itself (filing right after a change)
+  const items = rv('Training items').filter(r => String(r[1]).trim()).map((r, i) => ({ section: String(r[0] || '').trim() || 'Skills', skill: String(r[1]).trim(), standard: String(r[2] || ''), order: Number(r[3]) || i + 1 })).sort((a, b) => a.order - b.order);
+  const all = rv('Trainees').filter(r => r[0] && String(r[1]).trim()).map(r => ({ id: String(r[0]), name: String(r[1]).trim(), trainer: String(r[2] || ''), started: ymd_(r[3], tz), status: String(r[4] || 'In training'),
+    score: String(r[5] === '' || r[5] == null ? '' : r[5]), watch: String(r[6] || ''), filed: String(r[7] || ''), filedAt: toIso_(r[8]), filedBy: String(r[9] || ''), done: {} }));
+  rv('Training log').forEach(r => { const t = all.find(x => x.id === String(r[0])); if (t && !t.filed && String(r[1]).trim()) t.done[String(r[1]).trim()] = { by: String(r[2] || ''), at: toIso_(r[3]), note: String(r[4] || '') }; });
+  return { items, active: all.filter(t => !t.filed), filed: all.filter(t => t.filed).slice(-12).reverse(), folder: !!setting_(ss, 'Training records folder') };
+}
+/** A finished checklist as a Google Doc in Settings › Training records folder. */
+function trainDoc_(ss, id, me, tz) {
+  const url = setting_(ss, 'Training records folder'), fid = (String(url).match(/folders\/([\w-]{20,})/) || [])[1] || driveId_(url);
+  if (!fid) throw new Error('Add a Drive folder in Settings › Training records folder first');
+  const T = training_(ss, tz, true), t = T.active.find(x => x.id === id); if (!t) throw new Error('That checklist is already filed or gone');
+  const today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd'), when = iso => iso ? Utilities.formatDate(new Date(iso), tz, 'M/d/yyyy') : '';
+  const doc = DocumentApp.create(t.name + ' – Level I Training Checklist – ' + today), b = doc.getBody(), H = DocumentApp.ParagraphHeading;
+  b.getParagraphs()[0].setText('Level I skill checklist').setHeading(H.HEADING1);
+  b.appendParagraph('Trainee: ' + t.name + '   ·   Primary trainer: ' + (t.trainer || '—') + '   ·   Start date: ' + (t.started ? longDay_(t.started) : '—'));
+  const sections = [...new Set(T.items.map(x => x.section))], known = new Set(T.items.map(x => x.skill)), extra = Object.keys(t.done).filter(k => !known.has(k));
+  const table = (title, list) => {
+    b.appendParagraph(title).setHeading(H.HEADING2);
+    const rows = [['Skill', 'Standard', 'Checked off by', 'Date', 'Notes']].concat(list.map(it => { const d = t.done[it.skill]; return [it.skill, it.standard || '', d ? d.by : '', d ? when(d.at) : '', d ? d.note : '']; }));
+    const tb = b.appendTable(rows); tb.getRow(0).editAsText().setBold(true);
+  };
+  sections.forEach(sec => table(sec, T.items.filter(x => x.section === sec)));
+  if (extra.length) table('Other', extra.map(k => ({ skill: k, standard: '' })));
+  const doneN = T.items.filter(x => t.done[x.skill]).length;
+  b.appendParagraph('Level I sign-off').setHeading(H.HEADING2);
+  b.appendParagraph('Skills checked off: ' + doneN + ' of ' + T.items.length);
+  b.appendParagraph('Level I test score: ' + (t.score !== '' ? t.score : '____') + ' / 15 (12 to pass)');
+  b.appendParagraph('Trainer: I\'ve worked with this barista and I\'m comfortable with them on regular shifts, overlapped at open, close and drawer until Level II.');
+  b.appendParagraph('Anything to keep an eye on: ' + (t.watch || '—'));
+  ['Trainee', 'Trainer', 'Manager'].forEach(w => b.appendParagraph(w + ' signature: ______________________   Date: ____________'));
+  b.appendParagraph('Filed from the Peregrine Team app by ' + me.name + ' on ' + longDay_(today) + '.').editAsText().setItalic(true);
+  doc.saveAndClose();
+  DriveApp.getFileById(doc.getId()).moveTo(DriveApp.getFolderById(fid));
+  return doc.getUrl();
+}
 /** Each test with this person's latest result (from the results sheet) and whether it's unlocked. */
 function tests_(ss, me) {
   const portal = setting_(ss, 'Test portal').replace(/[?#].*$/, '');
