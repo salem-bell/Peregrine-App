@@ -137,7 +137,7 @@ async function edgeLoad(){
   } catch (_) { return null; }
   finally { clearTimeout(t); INFLIGHT.delete(rec); }
 }
-function unstick(){ const now = Date.now(); INFLIGHT.forEach(r => { if (now - r.at > (r.read ? 4000 : 15000)) r.ctl.abort(); }); }
+function unstick(){ const now = Date.now(); INFLIGHT.forEach(r => { if (r.read && now - r.at > 4000) r.ctl.abort(); }); }
 // Answers can arrive out of order: show only the newest, and never let a background refresh overwrite a change that is still saving.
 let seqStarted = 0, seqShown = 0, pending = 0, lastAct = 0;
 // Batched saves (server 2.6+): edits queue up while one request is out, then go together in one request.
@@ -208,7 +208,12 @@ async function flush(){
     const m = String(err.message || err);
     batch.forEach(b => b.res(null));
     if (/^signin/.test(m)){ queue = []; pending = 0; saving(); signOut(m.replace(/^signin:\s*/, '')); return; }
-    toast(m === 'timeout' ? 'That took too long – check it saved' : m);
+    if (m === 'timeout' || /fetch|network|load/i.test(m)){
+      toast('Still saving – checking in a moment…');
+      if (queue.length) flush(); else { saving(); setTimeout(() => { if (!pending) refresh(undefined, { fresh: true }).then(r => { if (r) toast('Checked – showing what was saved'); }); }, 6000); }
+      return;
+    }
+    toast(m);
     if (queue.length) flush(); else { saving(); setTimeout(() => refresh(), 300); }
     return;
   }
@@ -1607,16 +1612,48 @@ function deskMore(){
     <div class="tabspacer deskonly" aria-hidden="true"></div>${it('settings', 'Settings', '⚙︎')}`;
 }
 function setShop(t){ const el = $('#shop'); if (canSwitch()) el.innerHTML = `<button class="locbtn" data-locs aria-label="Switch location">${esc(locName(HERE))} <span aria-hidden="true">▾</span></button>`; else el.textContent = t; }   // with the switcher, the bar names the location
+/* A save, a refresh or a chat update redraws the screen. Whatever someone is in the middle of choosing in an open
+   pop-up (or in a form they've started on the page) is put back after the redraw, so a choice never "reverts".
+   Parts of the screen that come out exactly the same aren't rebuilt at all. */
+let lastMainHtml = '', lastOvHtml = '';
+const DIRTY_FORMS = new Set();
+const sheetId = () => sheet ? [sheet.kind, sheet.id, sheet.date, sheet.name, sheet.test, sheet.skill].join('|') : '';
+const formKey = f => f.closest('#overlay') ? 'ov|' + f.dataset.form + '|' + sheetId() : 'mn|' + f.dataset.form + '|' + tab + '|' + moreView + '|' + trainSel;
+function snapForms(){
+  const out = {}, ae = document.activeElement;
+  document.querySelectorAll('form[data-form]').forEach(f => {
+    const k = formKey(f); if (k.indexOf('ov|') !== 0 && !DIRTY_FORMS.has(k)) return;
+    const vals = {}; [...f.elements].forEach(el => { if (!el.name || el.type === 'submit' || el.type === 'button' || el.type === 'file') return;
+      if (el.type === 'radio'){ if (el.checked) vals[el.name] = el.value; else if (!(el.name in vals)) vals[el.name] = null; }
+      else vals[el.name] = el.type === 'checkbox' ? el.checked : el.value; });
+    out[k] = { vals, focus: ae && ae.form === f && ae.name ? [ae.name, ae.selectionStart, ae.selectionEnd] : null };
+  });
+  return out;
+}
+function restoreForms(snap){
+  document.querySelectorAll('form[data-form]').forEach(f => {
+    const sv = snap[formKey(f)]; if (!sv) return;
+    const changed = [];
+    [...f.elements].forEach(el => { if (!el.name || !(el.name in sv.vals)) return; const v = sv.vals[el.name];
+      if (el.type === 'radio'){ const on = el.value === v; if (el.checked !== on){ el.checked = on; if (on) changed.push(el); } }
+      else if (el.type === 'checkbox'){ if (el.checked !== v){ el.checked = v; changed.push(el); } }
+      else if (el.value !== v){ el.value = v; changed.push(el); } });
+    changed.forEach(el => { if (el.tagName === 'SELECT' || el.type === 'radio' || el.type === 'checkbox') el.dispatchEvent(new Event('change', { bubbles: true })); });
+    if (sv.focus){ const el = f.elements.namedItem(sv.focus[0]); if (el && el.focus && document.activeElement !== el){ el.focus(); try { el.setSelectionRange(sv.focus[1], sv.focus[2]); } catch (_) {} } }
+  });
+}
+document.addEventListener('input', e => { const f = e.target.form; if (f && f.dataset.form) DIRTY_FORMS.add(formKey(f)); }, true);
+document.addEventListener('change', e => { const f = e.target.form; if (f && f.dataset.form && e.isTrusted) DIRTY_FORMS.add(formKey(f)); }, true);
 function render(){
   syncBadge();
   if (rowDrag){ rowDrag.later = true; return; }       // don't redraw under a finger mid-drag
   $('#offline').hidden = !offline;
-  if (joined && TOKEN){ $('#tabs').hidden = true; $('#refresh').hidden = true; $('#overlay').innerHTML = ''; $('#main').innerHTML = viewJoined(); return; }
-  if (!TOKEN || !data){ $('#tabs').hidden = true; $('#refresh').hidden = true; $('#overlay').innerHTML = ''; setShop(load('pt-shop') || window.PT_NAME || 'Peregrine'); $('#main').innerHTML = TOKEN ? '<div class="empty">Loading…</div>' : viewSignIn(); return; }
+  if (joined && TOKEN){ $('#tabs').hidden = true; $('#refresh').hidden = true; $('#overlay').innerHTML = ''; lastMainHtml = lastOvHtml = ''; $('#main').innerHTML = viewJoined(); return; }
+  if (!TOKEN || !data){ $('#tabs').hidden = true; $('#refresh').hidden = true; $('#overlay').innerHTML = ''; lastMainHtml = lastOvHtml = ''; setShop(load('pt-shop') || window.PT_NAME || 'Peregrine'); $('#main').innerHTML = TOKEN ? '<div class="empty">Loading…</div>' : viewSignIn(); return; }
   data.meId = data.me.id;
   const short = String(data.name || 'Peregrine').replace(/\s+(coffee|roasters?|roastery|co\.?)\b.*$/i, '') || data.name; setShop(short); save('pt-shop', short); $('#refresh').hidden = false;
   const gate = mustRead();
-  if (gate.length){ $('#tabs').hidden = true; $('#overlay').innerHTML = ''; $('#main').innerHTML = viewMustRead(gate[0], gate.length); return; }
+  if (gate.length){ $('#tabs').hidden = true; $('#overlay').innerHTML = ''; lastMainHtml = lastOvHtml = ''; $('#main').innerHTML = viewMustRead(gate[0], gate.length); return; }
   const chatN = (data.channels || []).reduce((n, c) => n + c.unread, 0);
   const badge = { lists: prepMine().length, chat: chatN, more: (mgr() ? (data.requests || []).filter(q => q.status === 'Pending' && q.from !== data.me.name).length : 0) + (data.announcements || []).filter(a => !a.read).length };
   $('#tabs').hidden = false;
@@ -1628,12 +1665,16 @@ function render(){
   document.body.classList.toggle('wide', wide() && tab === 'schedule' && lead() && schedView !== 'mine');
   const vkey = tab + '|' + schedView + '|' + week + '|' + moreView, same = vkey === lastView, gw = $('.gridwrap'), keep = same && gw ? [gw.scrollTop, gw.scrollLeft] : null, wy = window.scrollY; lastView = vkey;
   const ms0 = $('#msgs'), keepMs = ms0 && tab === 'chat' && chat.open ? [chat.open, ms0.scrollTop, ms0.scrollHeight - ms0.scrollTop - ms0.clientHeight] : null;
-  $('#main').innerHTML = tab === 'tests' ? viewTests() : tab === 'lists' ? viewLists() : tab === 'schedule' ? viewSchedule() : tab === 'chat' ? viewChat() : tab === 'more' ? viewMore() : viewToday();
+  const formSnap = snapForms();
+  const mainHtml = tab === 'tests' ? viewTests() : tab === 'lists' ? viewLists() : tab === 'schedule' ? viewSchedule() : tab === 'chat' ? viewChat() : tab === 'more' ? viewMore() : viewToday();
+  if (mainHtml !== lastMainHtml || !$('#main').firstChild){ $('#main').innerHTML = mainHtml; lastMainHtml = mainHtml; }
   if (keepMs && chat.open === keepMs[0]){ const ms = $('#msgs'); if (ms) ms.scrollTop = keepMs[2] < 80 ? ms.scrollHeight : keepMs[1]; }
   if (same && tab !== 'chat'){ const g2 = $('.gridwrap'); if (keep && g2){ g2.scrollTop = keep[0]; g2.scrollLeft = keep[1]; } if (window.scrollY !== wy) window.scrollTo(0, wy); }   // a save or refresh redraws the page; stay where you were
   if (draft !== null){ const t = $('.composer textarea'); if (t){ t.value = draft; t.focus(); } }
   if (!sheet && !viewer && !runner && !joined && prepPopItems().length) sheet = { kind: 'preppop' };
-  $('#overlay').innerHTML = runner ? viewRunner() : viewer ? viewViewer() : sheet ? (sheet.kind === 'shift' ? shiftSheet() : sheet.kind === 'publish' ? publishSheet() : sheet.kind === 'punch' ? punchSheet() : sheet.kind === 'editchat' ? editChatSheet() : sheet.kind === 'loc' ? locSheet() : sheet.kind === 'preppop' ? prepPopSheet() : sheet.kind === 'testacc' ? testAccSheet() : sheet.kind === 'trainnew' ? trainNewSheet() : sheet.kind === 'trainnote' ? trainNoteSheet() : pickSheet(sheet.kind)) : '';
+  const ovHtml = runner ? viewRunner() : viewer ? viewViewer() : sheet ? (sheet.kind === 'shift' ? shiftSheet() : sheet.kind === 'publish' ? publishSheet() : sheet.kind === 'punch' ? punchSheet() : sheet.kind === 'editchat' ? editChatSheet() : sheet.kind === 'loc' ? locSheet() : sheet.kind === 'preppop' ? prepPopSheet() : sheet.kind === 'testacc' ? testAccSheet() : sheet.kind === 'trainnew' ? trainNewSheet() : sheet.kind === 'trainnote' ? trainNoteSheet() : pickSheet(sheet.kind)) : '';
+  if (ovHtml !== lastOvHtml){ $('#overlay').innerHTML = ovHtml; lastOvHtml = ovHtml; }
+  restoreForms(formSnap);
   document.body.classList.toggle('noscroll', !!(viewer || sheet || runner));
   if (keepWage){ const el = document.querySelector(keepWage[0]); if (el){ el.value = keepWage[1]; el.focus(); try { el.setSelectionRange(keepWage[2], keepWage[2]); } catch (_) {} } }
   const sf = document.querySelector('form[data-form=shift]'), est = $('#est'); if (sf && est) est.innerHTML = shiftEstimate(sf);
@@ -1817,6 +1858,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey
 
 document.addEventListener('submit', async e => {
   const f = e.target.closest('form[data-form]'); if (!f) return; e.preventDefault();
+  DIRTY_FORMS.delete(formKey(f));
   const v = n => { const el = f.elements.namedItem(n); return el ? (el.type === 'checkbox' ? (el.checked ? '1' : '0') : el.value.trim()) : ''; };
   const kind = f.dataset.form, btn = f.querySelector('button.go');
   if (kind === 'join'){

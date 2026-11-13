@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '4.9';
+const VERSION = '4.91';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Morning of', 'Morning and before', 'Off'];
 
@@ -1724,7 +1724,11 @@ function pushData_(force) {
   const c = CacheService.getScriptCache(), props = PropertiesService.getScriptProperties(), tz = ss.getSpreadsheetTimeZone(), today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
   const last = Number(props.getProperty('DATA_PUSHED') || 0), dirtyAt = Number(c.get('DATA_DIRTY') || 0), now = Date.now();
   if (!force && dirtyAt < last && now - last < 14 * 60000 && props.getProperty('DATA_DAY') === today) return { idle: true };
-  const lock = LockService.getScriptLock(); if (!lock.tryLock(3000)) return { busy: true };
+  // No script lock here: building everyone's copy takes a while, and holding the lock made saves wait (and time out).
+  // A short cache flag keeps two pushes from running at once. Reads don't need the lock; a copy built from data that
+  // changed mid-build is older than the save, so the app ignores it, and the save marks the data for the next push.
+  if (!force && c.get('DATA_PUSHING')) return { busy: true };
+  c.put('DATA_PUSHING', String(Date.now()), 300);
   try {
     const started = Date.now(), full = force || now - Number(props.getProperty('DATA_FULL') || 0) > 3600000;
     const users = rv_(ss, 'Users').filter(r => String(r[0]).trim() && truthy_(r[3]) && r[6] && /^\d{4}$/.test(String(r[2]).trim()));
@@ -1751,7 +1755,7 @@ function pushData_(force) {
     try { c.put('DATA_H', JSON.stringify(hashes), 21600); if (missing.length) c.put('DATA_DIRTY', String(Date.now()), 21600); } catch (e) {}
     const p = { DATA_PUSHED: String(started), DATA_DAY: today }; if (full) p.DATA_FULL = String(started); props.setProperties(p);
     return { ok: true, people: users.length, sent: Object.keys(states).length, kb: Math.round(body.length / 1024), ms: Date.now() - started };
-  } finally { lock.releaseLock(); }
+  } finally { c.remove('DATA_PUSHING'); }
 }
 /** Menu: Team › Fast loading. Makes a secret if there isn't one, starts the every-minute sender, and sends everything once. */
 function setupFastLoading() {
