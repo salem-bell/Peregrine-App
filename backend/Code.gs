@@ -42,7 +42,7 @@ const SETTINGS = [
   ['Positions',                    'Bar, Register, Lead',       'Positions for the schedule, separated by commas.'],
   ['Ask for the code again every', '60',                        'Days before a phone asks for the name and code again (0 = never).'],
   ['Managers sign in again every', '7',                         'Days before a manager\'s phone asks for the name and code again (shorter, because a manager\'s sign-in sees everything). 0 = same as everyone.'],
-  ['Schedule days shown',          '14',                        'How many days ahead the schedule shows.'],
+  ['Schedule days shown',          '60',                        'How many days ahead staff can see their published shifts (up to 60). Managers and leads always see 8 weeks.'],
   ['Server address',               '',                          'Paste the Web app URL from Deploy › Manage deployments (ends in /exec). The menu uses it.'],
   ['App address',                  'https://salem-bell.github.io/Peregrine-App/', 'Where staff open the app and add it to their home screen.'],
   ['Shift presets',                'Open 06:30-12:30, Mid 10:00-15:00, Close 12:00-18:05', 'One-tap shift times on the schedule editor: Name HH:MM-HH:MM, separated by commas.'],
@@ -425,7 +425,7 @@ function state_(ss, me, slim, have) {
   }
 
   // Schedule
-  const days = Math.min(Math.max(Number(setting_(ss, 'Schedule days shown')) || 14, 1), 60);
+  const days = Math.min(Math.max(Number(setting_(ss, 'Schedule days shown')) || 60, 1), 60);
   const first = out.from, last = addDays_(today, isLead ? 56 : days - 1);
   if (want('sched')) {
   out.shifts = shiftsFor_(ss, me, first, last, tz);

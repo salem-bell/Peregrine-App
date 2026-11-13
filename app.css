@@ -377,3 +377,4 @@ html,body{overscroll-behavior-y:contain}
   background:var(--card,#fff);color:var(--accent);box-shadow:0 2px 10px rgba(0,0,0,.18);font-size:1.25rem;opacity:0;transform:translate(-50%,0);pointer-events:none;transition:opacity .15s}
 #ptr.ready{color:var(--ink)} #ptr.go span{display:inline-block;animation:ptspin .8s linear infinite}
 #ptr:not(.go){transition:opacity .15s, transform .25s ease-out}
+.ackp .thumb{font-style:normal;font-size:.85rem;line-height:1} .ackp.mine{border-color:var(--accent)}

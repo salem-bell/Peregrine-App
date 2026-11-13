@@ -992,9 +992,9 @@ function viewConversation(){
     const lastR = !next || nextSep || next.fromId !== m.fromId || gap(m, next) > 5;
     const pic = m.photo ? picTag(m) : m.expired ? '<div class="msg exp"><i>Photo expired</i></div>' : '';
     const real = m.id !== 'tmp', acks = m.acks || [];
-    const meta = chat.meta === m.id ? `<div class="meta ${mine ? 'me' : ''}">${timeOf(m.at)}${v3() && real ? ` · <button class="lnk" data-reply="${esc(m.id)}">Reply</button>` : ''}${v3() && real && !mine ? ` · <button class="lnk" data-ack="${esc(m.id)}">${m.ackMine ? 'Unmark read' : 'Mark read'}</button>` : ''}${mgr() && real ? ` · <button class="lnk" data-delmsg="${esc(m.id)}">Delete</button>` : ''}</div>` : '';
+    const meta = chat.meta === m.id ? `<div class="meta ${mine ? 'me' : ''}">${timeOf(m.at)}${v3() && real ? ` · <button class="lnk" data-reply="${esc(m.id)}">Reply</button>` : ''}${m.text ? ` · <button class="lnk" data-copymsg="${esc(m.id)}">Copy</button>` : ''}${v3() && real && !mine ? ` · <button class="lnk" data-mack="${esc(m.id)}">${m.ackMine ? 'Remove 👍' : '👍'}</button>` : ''}${mgr() && real ? ` · <button class="lnk" data-delmsg="${esc(m.id)}">Delete</button>` : ''}</div>` : '';
     const quote = m.reply ? `<button type="button" class="quote" data-jump="${esc(m.reply.id)}"><b>${esc(m.reply.from ? (m.reply.from === data.me.name ? 'You' : first(m.reply.from)) : '')}</b><span>${m.reply.photo && !m.reply.text ? '📷 Photo' : esc(m.reply.text)}</span></button>` : '';
-    const ackPill = acks.length ? `<div class="ackrow ${mine ? 'me' : ''}"><button class="ackp ${m.ackMine ? 'mine' : ''}" data-acks="${esc(m.id)}" aria-label="Read by ${esc(acks.join(', '))}">${SVG_READ}${acks.length > 1 ? `<span>${acks.length}</span>` : ''}</button></div>` : '';
+    const ackPill = acks.length ? `<div class="ackrow ${mine ? 'me' : ''}"><button class="ackp ${m.ackMine ? 'mine' : ''}" data-acks="${esc(m.id)}" aria-label="👍 from ${esc(acks.join(', '))}"><i class="thumb">👍</i>${acks.length > 1 ? `<span>${acks.length}</span>` : ''}</button></div>` : '';
     // Under your newest message: Sending… → Sent → Delivered → Seen
     const isLastMine = mine && i === msgs.length - 1 && v3();
     const after = x => x.at && new Date(x.at) >= new Date(m.at);
@@ -1050,6 +1050,10 @@ function toggleAck(id){ const m = (chat.msgs || []).find(x => x.id === id); if (
   chat.meta = ''; render(); if (navigator.vibrate) try { navigator.vibrate(12); } catch (_) {}
   if (LIVE){ LIVE.send({ t: 'ack', id }); return; }
   openChat(chat.open, null, undefined, undefined, { ack: id }); }
+async function copyText(t){
+  try { if (navigator.clipboard && window.isSecureContext){ await navigator.clipboard.writeText(t); return true; } } catch (_) {}
+  try { const a = document.createElement('textarea'); a.value = t; a.setAttribute('readonly', ''); a.style.cssText = 'position:fixed;top:0;left:0;opacity:0'; document.body.appendChild(a); a.select(); a.setSelectionRange(0, t.length); const ok = document.execCommand('copy'); a.remove(); return ok; } catch (_) { return false; }
+}
 function startReply(id){ const m = (chat.msgs || []).find(x => x.id === id); if (!m) return;
   chat.reply = { id: m.id, from: m.from, text: m.text ? m.text.slice(0, 90) : '' }; chat.meta = ''; render(); const t = $('.composer textarea'); if (t) t.focus(); }
 let searchT = 0, searchN = 0;
@@ -1625,8 +1629,9 @@ document.addEventListener('click', async e => {
   if (d.newgroup !== undefined){ sheet = { kind: 'group' }; render(); return; }
   if (d.reply){ startReply(d.reply); return; }
   if (d.unreply !== undefined){ chat.reply = null; render(); return; }
-  if (d.ack){ if (chat.open) toggleAck(d.ack); return; }
-  if (d.acks){ const m = (chat.msgs || []).find(x => x.id === d.acks); if (m) toast('Read by ' + (m.acks || []).map(n => n === data.me.name ? 'you' : first(n)).join(', ')); return; }
+  if (d.mack){ if (chat.open) toggleAck(d.mack); return; }
+  if (d.copymsg){ const m = (chat.msgs || []).find(x => x.id === d.copymsg); chat.meta = ''; render(); if (m && m.text) copyText(m.text).then(ok => toast(ok ? 'Copied' : 'Couldn\'t copy')); return; }
+  if (d.acks){ const m = (chat.msgs || []).find(x => x.id === d.acks); if (m) toast('👍 from ' + (m.acks || []).map(n => n === data.me.name ? 'you' : first(n)).join(', ')); return; }
   if (d.seenall !== undefined){ const c = curChat(), last = (chat.msgs || []).filter(m => m.fromId === chat.me).pop(); toast('Seen by ' + (chat.seen || []).filter(x => last && new Date(x.at) >= new Date(last.at)).map(x => first(x.name)).join(', ')); return; }
   if (d.jump){ jumpTo(d.jump); return; }
   if (d.openfind){ const [c, id] = d.openfind.split('|'); chat.msgs = []; openChat(c, null, undefined, undefined, { find: id }); return; }
