@@ -1509,7 +1509,7 @@ function testAccSheet(){
     <form class="stack" data-form="testacc" style="padding:0">
       <label class="f">Who sees it<select name="who">${['Everyone', 'Leads and managers', 'Managers', 'Only people picked'].map(w => `<option ${w === t.who ? 'selected' : ''}>${w}</option>`).join('')}</select></label>
       <label class="f">Must pass first<select name="need"><option value="">Nothing – open right away</option>${others.map(n => `<option ${n === t.need ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label>
-      <h2 style="margin:6px 0 0">People</h2><p class="sub" style="margin:0">Allow shows it to someone and lets them skip the "must pass first" step. Block hides it from them.</p>
+      <h2 style="margin:6px 0 0">People</h2><p class="sub" style="margin:0">Allow shows it to someone and lets them skip the "must pass first" step. Block hides it from them. The test pages follow these settings too (within a minute).</p>
       <div class="card">${people.map(n => `<div class="row"><div class="txt">${esc(n)}<div class="sub">Default: ${def(n)}</div></div><select name="p:${esc(n)}" style="width:auto"><option value="" ${!st(n) ? 'selected' : ''}>Default</option><option value="allow" ${st(n) === 'allow' ? 'selected' : ''}>Allow</option><option value="block" ${st(n) === 'block' ? 'selected' : ''}>Block</option></select></div>`).join('')}</div>
       <button class="btn go">Save</button></form></div></div>`;
 }
