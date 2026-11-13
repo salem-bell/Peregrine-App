@@ -808,7 +808,7 @@ function publishSheet(){
     <p class="sub">${shortDay(week)} – ${shortDay(plus(week, 6))}</p>
     <div class="card">${[['draft', 'new shifts'], ['changed', 'changed shifts'], ['removed', 'shifts to remove']].filter(([k]) => c(k)).map(([k, n]) => `<div class="row"><div class="txt">${n}</div><b>${c(k)}</b></div>`).join('')}
       <div class="row"><div class="txt sub">Affects ${people.map(n => esc(first(n))).join(', ')}</div></div></div>
-    <form class="stack" data-form="publish" style="padding:0"><label class="opt"><input type="checkbox" name="notify" checked> Notify the team – email the people affected and post in Schedule & swaps</label>
+    <form class="stack" data-form="publish" style="padding:0"><label class="opt"><input type="checkbox" name="notify"> Notify the team – email and notify the people affected, and post in Schedule & swaps</label><p class="sub" style="margin:0">Leave it off to publish quietly – the team still sees the new schedule in the app.</p>
       <button class="btn go">Publish</button></form></div></div>`;
 }
 function shiftSheet(){
@@ -1403,13 +1403,28 @@ function viewTests(){
   const ts = tdata.tests || [];
   const row = t => { const st = t.passed ? '<span class="pill ok">Passed</span>' : t.pending ? '<span class="pill mute">Being scored</span>' : t.last ? `<span class="pill warn">${esc(t.last.result || 'Not yet')}${t.last.score !== '' && t.last.score != null ? ' ' + esc(t.last.score) + '/' + esc(t.last.outOf) : ''}</span>` : !t.unlocked ? '<span class="pill mute">Locked</span>' : '';
     const go = t.unlocked ? (t.inApp ? `<button class="btn sm ${t.passed ? '' : 'go'}" data-taketest="${esc(t.level)}">${t.passed ? 'Retake' : t.taken ? 'Try again' : 'Start the test'}</button>` : t.url ? `<a class="btn sm ${t.passed ? '' : 'go'}" href="${esc(t.url)}" target="_blank" rel="noopener">${t.passed ? 'Retake' : 'Take the test'} ↗</a>` : '<span class="sub">Not set up yet – ask a manager.</span>') : '';
-    return `<div class="row" style="display:block"><div style="display:flex;gap:8px;align-items:center"><b style="flex:1">${esc(t.name)}</b>${st}</div>
+    return `<div class="row" style="display:block"><div style="display:flex;gap:8px;align-items:center"><b style="flex:1">${esc(t.name)}</b>${st}${t.who ? `<button class="btn sm" data-testacc="${esc(t.name)}">Access</button>` : ''}</div>
+      ${t.who ? `<div class="sub">${esc(accSummary(t))}</div>` : ''}
       <div class="sub">${!t.unlocked ? 'Pass ' + esc(t.need) + ' first' : (t.info ? esc(t.info) + ' · ' : '') + (t.taken ? 'Taken ' + t.taken + ' time' + (t.taken > 1 ? 's' : '') + (t.last && t.last.when ? ' · last ' + ago(t.last.when) : '') : 'Not taken yet')}</div>
       ${go ? `<div class="btns" style="margin-top:8px">${go}</div>` : ''}</div>`; };
   return `<h1>Tests</h1>
     ${tdata.results ? `<div class="card"><div class="row"><div class="txt"><b>Test results</b><div class="sub">Everyone's scores and written answers live in the results sheet.</div></div><a class="btn sm" href="${esc(tdata.results)}" target="_blank" rel="noopener">Open sheet ↗</a></div></div>` : ''}
     <h2>Certification</h2><div class="card">${ts.map(row).join('') || '<div class="empty">No tests set up.</div>'}</div>
     <p class="sub">Each level unlocks when you pass the one before it. You can retake a test; your best result counts.</p>`;
+}
+const accSummary = t => [t.who === 'Only people picked' ? 'Only: ' + (t.allow.length ? t.allow.map(first).join(', ') : 'nobody yet') : 'Shown to ' + t.who.toLowerCase(), t.need ? 'after ' + t.need : '', t.who !== 'Only people picked' && t.allow.length ? 'also ' + t.allow.map(first).join(', ') : '', t.block.length ? 'not ' + t.block.map(first).join(', ') : ''].filter(Boolean).join(' · ');
+function testAccSheet(){
+  const t = (tdata && tdata.tests || []).find(x => x.name === sheet.test); if (!t) return '';
+  const others = (tdata.tests || []).filter(x => x.name !== t.name).map(x => x.name), people = (data.people || []).filter(u => u.role !== 'Manager').map(u => u.name).sort();
+  const st = n => t.block.indexOf(n) >= 0 ? 'block' : t.allow.indexOf(n) >= 0 ? 'allow' : '';
+  const def = n => { const u = (data.people || []).find(x => x.name === n) || {}; return t.who === 'Only people picked' || t.who === 'Managers' ? 'Hidden' : t.who === 'Leads and managers' && u.role !== 'Lead' ? 'Hidden' : 'Shown'; };
+  return `<div class="sheet" role="dialog" aria-label="Test access"><div class="sheet-in"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="margin:0">${esc(t.name)}</h1><button class="btn sm" data-closesheet>Close</button></div>
+    <form class="stack" data-form="testacc" style="padding:0">
+      <label class="f">Who sees it<select name="who">${['Everyone', 'Leads and managers', 'Managers', 'Only people picked'].map(w => `<option ${w === t.who ? 'selected' : ''}>${w}</option>`).join('')}</select></label>
+      <label class="f">Must pass first<select name="need"><option value="">Nothing – open right away</option>${others.map(n => `<option ${n === t.need ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label>
+      <h2 style="margin:6px 0 0">People</h2><p class="sub" style="margin:0">Allow shows it to someone and lets them skip the "must pass first" step. Block hides it from them.</p>
+      <div class="card">${people.map(n => `<div class="row"><div class="txt">${esc(n)}<div class="sub">Default: ${def(n)}</div></div><select name="p:${esc(n)}" style="width:auto"><option value="" ${!st(n) ? 'selected' : ''}>Default</option><option value="allow" ${st(n) === 'allow' ? 'selected' : ''}>Allow</option><option value="block" ${st(n) === 'block' ? 'selected' : ''}>Block</option></select></div>`).join('')}</div>
+      <button class="btn go">Save</button></form></div></div>`;
 }
 async function startTest(level){
   runner = { level, loading: true }; render();
@@ -1561,7 +1576,7 @@ function render(){
   if (same && tab !== 'chat'){ const g2 = $('.gridwrap'); if (keep && g2){ g2.scrollTop = keep[0]; g2.scrollLeft = keep[1]; } if (window.scrollY !== wy) window.scrollTo(0, wy); }   // a save or refresh redraws the page; stay where you were
   if (draft !== null){ const t = $('.composer textarea'); if (t){ t.value = draft; t.focus(); } }
   if (!sheet && !viewer && !runner && !joined && prepPopItems().length) sheet = { kind: 'preppop' };
-  $('#overlay').innerHTML = runner ? viewRunner() : viewer ? viewViewer() : sheet ? (sheet.kind === 'shift' ? shiftSheet() : sheet.kind === 'publish' ? publishSheet() : sheet.kind === 'punch' ? punchSheet() : sheet.kind === 'editchat' ? editChatSheet() : sheet.kind === 'loc' ? locSheet() : sheet.kind === 'preppop' ? prepPopSheet() : pickSheet(sheet.kind)) : '';
+  $('#overlay').innerHTML = runner ? viewRunner() : viewer ? viewViewer() : sheet ? (sheet.kind === 'shift' ? shiftSheet() : sheet.kind === 'publish' ? publishSheet() : sheet.kind === 'punch' ? punchSheet() : sheet.kind === 'editchat' ? editChatSheet() : sheet.kind === 'loc' ? locSheet() : sheet.kind === 'preppop' ? prepPopSheet() : sheet.kind === 'testacc' ? testAccSheet() : pickSheet(sheet.kind)) : '';
   document.body.classList.toggle('noscroll', !!(viewer || sheet || runner));
   if (keepWage){ const el = document.querySelector(keepWage[0]); if (el){ el.value = keepWage[1]; el.focus(); try { el.setSelectionRange(keepWage[2], keepWage[2]); } catch (_) {} } }
   const sf = document.querySelector('form[data-form=shift]'), est = $('#est'); if (sf && est) est.innerHTML = shiftEstimate(sf);
@@ -1663,6 +1678,7 @@ document.addEventListener('click', async e => {
     sheet = null; render(); act('deleteShift', { id: d.delshift }); return; }
   if (d.restore){ const x = data.shifts.find(s => s.id === d.restore); if (x) x.status = 'changed'; sheet = null; render(); act('restoreShift', { id: d.restore }); return; }
   if (d.onsched){ const u = (data.users || []).find(x => x.id === d.onsched); if (u) u.onSchedule = d.to === '1'; render(); act('setOnSchedule', { id: d.onsched, on: d.to }).then(r => { if (r && u) toast(first(u.name) + (d.to === '1' ? ' is back on the schedule' : ' is hidden from the schedule')); }); return; }
+  if (d.testacc){ sheet = { kind: 'testacc', test: d.testacc }; render(); return; }
   if (d.publish !== undefined){ sheet = { kind: 'publish' }; render(); return; }
   if (d.sendweek !== undefined){ if (!confirm('Email everyone working the week of ' + shortDay(week) + ' their shifts?')) return; b.disabled = true;
     act('sendWeek', { from: week }).then(r => { if (r && r.result) toast('Sent to ' + r.result.sent + (r.result.noEmail.length ? ' · no email for ' + r.result.noEmail.map(first).join(', ') : '')); }); return; }
@@ -1760,6 +1776,11 @@ document.addEventListener('submit', async e => {
     if (ex) Object.assign(ex, p, { status: ex.status === 'draft' ? 'draft' : 'changed' }); else { p.cid = 'tmp' + Date.now() + Math.random().toString(36).slice(2, 5); data.shifts.push(Object.assign({}, p, { id: p.cid, status: 'draft' })); }
     data.shifts.sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
     sheet = null; render(); act('saveShift', p).then(r => { if (r) toast(p.id ? 'Shift saved' : 'Shift added'); }); return; }
+  if (kind === 'testacc'){
+    const t = (tdata.tests || []).find(x => x.name === sheet.test); if (!t) return;
+    const allow = [], block = []; [...f.elements].forEach(el => { if (!el.name || el.name.indexOf('p:') !== 0) return; const n = el.name.slice(2); if (el.value === 'allow') allow.push(n); if (el.value === 'block') block.push(n); });
+    Object.assign(t, { who: v('who'), need: v('need'), allow, block }); sheet = null; render();
+    act('testAccess', { test: t.name, who: t.who, need: t.need, allow, block }).then(r => { if (r){ toast('Saved'); tAt = 0; loadTests(); } }); return; }
   if (kind === 'publish'){ const notify = f.elements.namedItem('notify').checked ? '1' : '0'; sheet = null; render();
     act('publish', { from: week, to: plus(week, 6), notify }).then(r => { if (r && r.result) toast('Published' + (notify === '1' ? ' · emailed ' + r.result.emailed + (r.result.noEmail.length ? ' · no email: ' + r.result.noEmail.map(first).join(', ') : '') : '')); }); return; }
   if (kind === 'prep'){ if (!v('item')){ toast('What needs prepping?'); return; } const notify = f.elements.namedItem('notify').checked ? '1' : '0';

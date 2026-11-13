@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '4.7';
+const VERSION = '4.8';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Morning of', 'Morning and before', 'Off'];
 
@@ -27,7 +27,7 @@ const TABS = {
   'Channels':      ['ID', 'Name', 'Kind', 'Members (user IDs; blank = everyone)', 'Who sees it', 'Created by', 'Created'],
   'Messages':      ['ID', 'Channel ID', 'From ID', 'From', 'Sent', 'Text', 'Photo (Drive file)', 'Reply to (message ID)', 'Read marks (user IDs)'],
   'Chat reads':    ['User ID', 'Channel ID', 'Read at'],
-  'Tests':         ['Test', 'Link (full address, or ?level=… to add to Settings › Test portal)', 'Results tab', 'Must have passed first', 'Who sees it', 'Order'],
+  'Tests':         ['Test', 'Link (full address, or ?level=… to add to Settings › Test portal)', 'Results tab', 'Must have passed first', 'Who sees it', 'Order', 'Also allowed (names – they skip the "passed first" step)', 'Not allowed (names)'],
   'Requests':      ['ID', 'Created', 'From', 'Type', 'Date', 'Details', 'Status', 'Decided by', 'Decided at', 'Note', 'Last day (time off)'],
   'Links':         ['Name', 'Link', 'Who sees it', 'Order'],
   'Audit':         ['When', 'Who', 'What'],
@@ -147,7 +147,7 @@ function buildTab_(ss, name) {
   if (name === 'Checklists') box(4);
   if (name === 'Announcements') { box(6); box(7); sh.getRange(2, 5, 999, 1).setWrap(true); }
   if (name === 'Links') list(3, ['Everyone', 'Leads and managers', 'Managers']);
-  if (name === 'Tests') list(5, ['Everyone', 'Leads and managers', 'Managers']);
+  if (name === 'Tests') list(5, ['Everyone', 'Leads and managers', 'Managers', 'Only people picked']);
   if (name === 'Availability') { text(3); text(4); text(5); }
   if (name === 'Time clock') { text(3); }
   if (name === 'Prep') { text(4); }
@@ -718,7 +718,7 @@ function act_(ss, me, p, touched) {
       SpreadsheetApp.flush();
       const range = from === to ? longDay_(from) : longDay_(from) + ' – ' + longDay_(to);
       let emailed = 0, noEmail = [];
-      if (p.notify !== '0' && (published || removed)) {
+      if (p.notify === '1' && (published || removed)) {               // only when the manager ticks Notify the team
         // Email: each affected person gets their whole (published) week, with what changed.
         if (!/^off$/i.test(setting_(ss, 'Email schedule changes'))) {
           const now = vals_(sh).map(r => pubObj_(r, tz)).filter(x => x && inR(x.date));
@@ -881,6 +881,20 @@ function act_(ss, me, p, touched) {
     case 'pushUnsub': {
       const sh = tab('Push'), v = vals_(sh);
       for (let i = v.length - 1; i >= 0; i--) if (String(v[i][2]) === String(p.endpoint || '') && String(v[i][0]) === me.id) sh.deleteRow(i + 2);
+      return;
+    }
+    case 'testAccess': {                              // a manager sets who gets a test
+      if (!isMgr) throw new Error('Only managers can change test access');
+      const sh = ss.getSheetByName('Tests'); if (!sh) throw new Error('No Tests tab');
+      if (sh.getLastColumn() < TABS.Tests.length) sh.getRange(1, 1, 1, TABS.Tests.length).setValues([TABS.Tests]);
+      const v = vals_(sh), i = v.findIndex(r => String(r[0]).trim() === String(p.test || '').trim()); if (i < 0) throw new Error('That test isn\'t in the Tests tab');
+      const team = vals_(ss.getSheetByName('Users')).filter(r => String(r[0]).trim()).map(r => String(r[0]).trim());
+      const pick = a => (Array.isArray(a) ? a : []).map(String).filter(n => team.indexOf(n) >= 0);
+      const who = ['Everyone', 'Leads and managers', 'Managers', 'Only people picked'].indexOf(String(p.who)) >= 0 ? String(p.who) : String(v[i][4] || 'Everyone');
+      const tests = v.map(r => String(r[0]).trim()), need = p.need === '' || (tests.indexOf(String(p.need)) >= 0 && String(p.need) !== tests[i]) ? String(p.need || '') : String(v[i][3] || '');
+      const allow = pick(p.allow), block = pick(p.block).filter(n => allow.indexOf(n) < 0);
+      sh.getRange(i + 2, 4, 1, 2).setValues([[need, who]]); sh.getRange(i + 2, 7, 1, 2).setValues([[allow.join(', '), block.join(', ')]]);
+      audit('Test access for ' + tests[i] + ': ' + who + (need ? ', after ' + need : '') + (allow.length ? ', also ' + allow.join(', ') : '') + (block.length ? ', not ' + block.join(', ') : ''));
       return;
     }
     case 'pushPrefs': {                               // msg=all|direct|off; schedule, prep, remind, news = 1 or 0
@@ -1068,7 +1082,8 @@ function tests_(ss, me) {
   const mine = n => String(n || '').trim().toLowerCase().replace(/\s+/g, ' ');
   const meN = mine(me.name), first = meN.split(' ')[0];
   const results = {};
-  const rows = vals_(ss.getSheetByName('Tests')).filter(r => r[0] && tierOk_(me, String(r[4] || 'Everyone'))).sort((a, b) => (Number(a[5]) || 0) - (Number(b[5]) || 0));
+  const isMgr = me.role === 'Manager';
+  const rows = vals_(ss.getSheetByName('Tests')).filter(r => r[0] && testSees_(me, r)).sort((a, b) => (Number(a[5]) || 0) - (Number(b[5]) || 0));
   rows.forEach(r => {
     const tabName = String(r[2] || ''); if (!book || !tabName) return;
     const sh = book.getSheetByName(tabName); if (!sh) return;
@@ -1080,8 +1095,19 @@ function tests_(ss, me) {
   return rows.map(r => {
     const name = String(r[0]), link = String(r[1] || '').trim(), need = String(r[3] || '').trim(), res = results[name] || { taken: 0, passed: false, last: null };
     const url = /^https?:\/\//.test(link) ? link : link && portal ? portal + (link.charAt(0) === '?' ? link : '?' + link) : '';
-    return { name, url, need, unlocked: !need || !!(results[need] && results[need].passed) || me.role === 'Manager', passed: res.passed, taken: res.taken, last: res.last };
+    const t = { name, url, need, unlocked: !need || !!(results[need] && results[need].passed) || isMgr || inNames_(r[6], me.name), passed: res.passed, taken: res.taken, last: res.last };
+    if (isMgr) Object.assign(t, { who: String(r[4] || 'Everyone'), allow: names_(r[6]), block: names_(r[7]) });   // managers can change who gets each test
+    return t;
   });
+}
+const names_ = v => String(v || '').split(/\s*[,;\n]\s*/).map(x => x.trim()).filter(Boolean);
+const inNames_ = (v, n) => names_(v).some(x => x.toLowerCase() === String(n || '').trim().toLowerCase());
+/** Who sees a test: managers always; "Not allowed" hides it; "Also allowed" shows it; otherwise the "Who sees it" tier. */
+function testSees_(me, r) {
+  if (me.role === 'Manager') return true;
+  if (inNames_(r[7], me.name)) return false;
+  if (inNames_(r[6], me.name)) return true;
+  const w = String(r[4] || 'Everyone'); return /only/i.test(w) ? false : tierOk_(me, w);
 }
 
 function driveId_(url) { const m = String(url || '').match(/\/d\/([\w-]{20,})/) || String(url || '').match(/[?&]id=([\w-]{20,})/); return m ? m[1] : ''; }
