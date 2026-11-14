@@ -192,6 +192,20 @@ export class Space {
       const p = this.one('SELECT type, data FROM photos WHERE key = ?', url.searchParams.get('key') || '');
       return p ? new Response(p.data, { headers: { 'content-type': p.type } }) : json({ error: 'That photo has expired' }, 404);
     }
+    if (url.pathname === '/api') {                              // the Peregrine connector (peregrine-mcp Worker, via its Durable Object binding – not reachable from the internet)
+      const msg = await req.json().catch(() => ({})), me = this.me(who);
+      if (!who.u || !me.active) return json({ t: 'err', msg: 'This sign-in is switched off' }, 403);
+      if (msg.t === 'people') return json({ t: 'people', people: this.q('SELECT id, name, tier FROM people WHERE active = 1 ORDER BY name').map(p => ({ id: p.id, name: p.name, tier: p.tier })) });
+      if (msg.t === 'peek') {                                   // read a conversation without marking it read or showing "Seen"
+        const ch = String(msg.ch || ''); if (!this.canSee(me, ch)) return json({ t: 'err', msg: 'You can\'t see that conversation' }, 403);
+        return json(Object.assign({ t: 'history' }, this.history(me, ch)));
+      }
+      if (['list', 'search', 'send', 'read', 'ack', 'newch'].indexOf(msg.t) < 0) return json({ t: 'err', msg: 'Not available here' }, 400);
+      let out = null; const a = { who, open: '', sid: 'api-' + crypto.randomUUID() }, ws = { serializeAttachment() {}, send() {} };
+      try { await this.handle(ws, a, me, msg, o => { out = out || o; }, text => { out = out || { t: 'err', msg: text }; }); }
+      catch (e) { out = { t: 'err', msg: String(e && e.message || e) }; }
+      return json(out || { t: 'ok' }, out && out.t === 'err' ? 400 : 200);
+    }
     if (url.pathname === '/ws') {
       const pair = new WebSocketPair(), [client, server] = Object.values(pair);
       this.ctx.acceptWebSocket(server, [who.u]);

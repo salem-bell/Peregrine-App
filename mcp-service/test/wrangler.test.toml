@@ -1,0 +1,15 @@
+# Local test copy of ../wrangler.toml: localhost addresses allowed (no strictly-public fetch), stand-in sheet for sign-in.
+name = "peregrine-mcp"
+main = "../src/index.js"
+compatibility_date = "2026-10-01"
+[[durable_objects.bindings]]
+name = "SPACE"
+class_name = "Space"
+script_name = "team-chat"
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "local-test"
+[vars]
+PUBLIC_URL = "http://localhost:8790"
+ALLOWED_REDIRECT_HOSTS = "localhost"
+SIGNIN_OVERRIDE = "{\"richardson\":\"http://localhost:8797/r\",\"westcliffe\":\"http://localhost:8797/w\"}"

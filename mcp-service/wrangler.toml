@@ -1,0 +1,24 @@
+# Peregrine Team connector for Claude (custom connector in claude.ai): read and send team Messages from anywhere.
+# Add it in Claude › Plugins/Connectors › Add custom connector with this address: https://peregrine-mcp.peregrine-team.workers.dev/mcp
+name = "peregrine-mcp"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["global_fetch_strictly_public"]
+
+# The live chat's conversations: team-chat's Durable Objects (deploy team-chat first – it has the /api route this uses).
+[[durable_objects.bindings]]
+name = "SPACE"
+class_name = "Space"
+script_name = "team-chat"
+
+# Sign-ins and tokens (stored hashed/encrypted by the OAuth library).
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "903587dbc33a4d19b7490140282c8ade"
+
+[vars]
+PUBLIC_URL = "https://peregrine-mcp.peregrine-team.workers.dev"
+ALLOWED_REDIRECT_HOSTS = "claude.ai,claude.com"
+
+[observability]
+enabled = true
