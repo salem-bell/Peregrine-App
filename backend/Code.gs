@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '4.96';
+const VERSION = '4.97';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Morning of', 'Morning and before', 'Off'];
 
@@ -2107,16 +2107,27 @@ function importSalesNow() {
   buildSettings_(ss); buildTab_(ss, 'Sales'); buildTab_(ss, 'Sales import');
   if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'importSales')) ScriptApp.newTrigger('importSales').timeBased().everyHours(1).create();
   const r = importSales_(ss);
-  ui.alert('Sales', r.found ? 'Found ' + r.found + ' new report email' + (r.found > 1 ? 's' : '') + '. ' + r.lines.join(' ') : 'No new SkyTab report emails. Checked Gmail for: ' + r.query + '\n\nIf the report is set up in Lighthouse, check it goes to ' + Session.getEffectiveUser().getEmail() + ' as a CSV.', ui.ButtonSet.OK);
+  ui.alert('Sales', r.found ? 'Found ' + r.found + ' new report' + (r.found > 1 ? 's' : '') + '. ' + r.lines.join(' ') : 'No new SkyTab reports yet. The Peregrine inbox relay drops them on the Sales import tab within the hour after the email arrives' + (setting_(ss, 'Sales report search') ? '; this sheet also checks its own Gmail for: ' + r.query : '') + '.', ui.ButtonSet.OK);
 }
 function importSales_(ss) {
-  const query = setting_(ss, 'Sales report search'); if (!query) return { found: 0, lines: [], query: '(off)' };
+  const query = setting_(ss, 'Sales report search');
   const tz = ss.getSpreadsheetTimeZone();
   buildTab_(ss, 'Sales'); buildTab_(ss, 'Sales import');
   const log = ss.getSheetByName('Sales import'), sales = ss.getSheetByName('Sales');
   const seen = {}; vals_(log).forEach(r => { seen[String(r[5])] = 1; });
-  const out = { found: 0, lines: [], query }, logRows = [], got = {};
-  GmailApp.search(query, 0, 20).forEach(th => th.getMessages().forEach(m => {
+  const out = { found: 0, lines: [], query: query || '(off – reports come from the Peregrine inbox relay)' }, logRows = [], got = {};
+  // Reports the Peregrine inbox relay dropped in (Sales import rows with a report but no Result yet)
+  vals_(log).forEach((r, i) => {
+    if (String(r[3]).trim() || !String(r[4]).trim()) return;
+    const when = r[0] instanceof Date ? r[0] : new Date(toMs_(r[0]) || Date.now()), fallback = addDays_(Utilities.formatDate(when, tz, 'yyyy-MM-dd'), -1);
+    let days = {}, err = ''; try { days = parseSalesCsv_(String(r[4]), fallback, tz); } catch (e) { err = String(e.message || e); }
+    const keys = Object.keys(days).sort(), from = String(r[1] || 'Peregrine inbox') + ' · ' + String(r[2] || '');
+    keys.forEach(d => { got[d] = Object.assign(got[d] || {}, days[d], { from, id: String(r[5] || '') }); });
+    const res = err ? 'Couldn\'t read it: ' + err : keys.length ? 'Imported ' + keys.map(d => d + (days[d].net != null ? ' (net $' + days[d].net.toFixed(2) + ')' : ' (gross $' + days[d].gross.toFixed(2) + ')')).join(', ')
+      : 'No net or gross sales found – kept the report here so the import can be adjusted';
+    log.getRange(i + 2, 4).setValue(res); out.found++; out.lines.push(String(r[2] || 'Report') + ': ' + res + '.');
+  });
+  if (query) GmailApp.search(query, 0, 20).forEach(th => th.getMessages().forEach(m => {
     const id = m.getId(); if (seen[id]) return;
     const files = m.getAttachments().filter(a => /\.csv$/i.test(a.getName()) || /csv|comma-separated/i.test(a.getContentType()));
     const subject = m.getSubject(), when = m.getDate(), fallback = addDays_(Utilities.formatDate(when, tz, 'yyyy-MM-dd'), -1);   // "Reporting day: Last day" = the day before it was sent
@@ -2154,7 +2165,7 @@ function salesFor_(ss, users, today, tz) {
   rows.forEach(r => { const d = salesDate_(r[0], tz); if (!d || d < from || d >= today) return;
     const x = { date: d }; SALES_COLS_.forEach((k, i) => { const n = salesNum_(r[i + 1]); if (n !== null) x[k] = n; }); days[d] = x; });
   const list = Object.keys(days).sort().map(d => days[d]);
-  if (!list.length) return { days: [], search: !!setting_(ss, 'Sales report search') };
+  if (!list.length) return { days: [], search: !!setting_(ss, 'Sales report search') || rv_(ss, 'Sales import').length > 0 };
   const wage = {}; users.forEach(r => { wage[String(r[0]).trim()] = Number(r[10]) || 0; });
   const extra = 1 + (Number(setting_(ss, 'Labor cost extra (%)')) || 0) / 100, labor = {}, hours = {};
   rv_(ss, 'Time clock').forEach(r => {
