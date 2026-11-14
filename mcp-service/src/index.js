@@ -15,7 +15,7 @@ const LOCATIONS = [
   { key: 'westcliffe', space: 'westcliffe', name: 'Westcliffe', tz: 'America/Denver',
     api: 'https://script.google.com/macros/s/AKfycbzquvYZLp2-oRIXMbMFxbCbuSLqeEixgEzf7jAKgA0SyJvFX34nSKwBtPtkQ7hk7K3vPQ/exec' },
 ];
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';');
 
 /* ============================================================
@@ -60,6 +60,18 @@ function allowedRedirect(env, host) {
   host = String(host || '').toLowerCase();
   return ok.some(h => host === h || host.endsWith('.' + h));
 }
+/* The sign-in page keeps its place on the server (KV, 15 minutes) under a random ID in the form, not in a browser
+   cookie: some sign-in windows (in-app browsers, strict privacy settings) drop cookies, which broke the first version.
+   The manager's own name + code is what proves it's them, so the form can't be forged into anything useful. */
+const PENDING_TTL = 900;
+const rid = () => [...crypto.getRandomValues(new Uint8Array(24))].map(b => b.toString(16).padStart(2, '0')).join('');
+async function savePending(env, request) { const id = rid(); await env.OAUTH_KV.put('signin:' + id, JSON.stringify({ request, at: Date.now() }), { expirationTtl: PENDING_TTL }); return id; }
+async function loadPending(env, id) { if (!/^[0-9a-f]{48}$/.test(String(id || ''))) return null; const v = await env.OAUTH_KV.get('signin:' + id); try { return v ? JSON.parse(v) : null; } catch (_) { return null; } }
+function denied(request) {
+  const u = new URL(request.redirectUri); u.searchParams.set('error', 'access_denied'); if (request.state) u.searchParams.set('state', request.state);
+  return Response.redirect(u.toString(), 302);
+}
+const expiredPage = () => page('Try again', '<h1>That page expired</h1><p>Go back to Claude and press Connect again.</p>', 400);
 const defaultHandler = {
   async fetch(req, env) {
     const url = new URL(req.url), oauth = env.OAUTH_PROVIDER;
@@ -70,39 +82,35 @@ const defaultHandler = {
         const request = await oauth.parseAuthRequest(req);
         const details = await oauth.describeConsent(request);
         if (!allowedRedirect(env, details.redirectHost)) return page('Not allowed', '<h1>Not allowed</h1><p>This connector only works with Claude.</p>', 403);
-        const consent = await oauth.beginConsent(request);
-        return page('Connect Claude', signInForm(details, consent.handle), 200, consent.headers);
+        return page('Connect Claude', signInForm(details, await savePending(env, request)));
       }
       if (req.method === 'POST') {
-        const form = await req.formData(), handle = String(form.get('handle') || '');
-        if (form.get('decision') !== 'approve') { const d = await oauth.denyConsent(req, handle); return new Response(null, { status: 302, headers: d.headers }); }
+        const form = await req.formData(), handle = String(form.get('handle') || ''), pending = await loadPending(env, handle);
+        if (!pending) return expiredPage();
+        const request = pending.request;
+        if (form.get('decision') !== 'approve') { await env.OAUTH_KV.delete('signin:' + handle); return denied(request); }
         const name = String(form.get('name') || '').trim(), spaces = {}, errors = [];
         for (const l of LOCATIONS) {
           const code = String(form.get('code_' + l.key) || '').trim(); if (!code) continue;
           try { spaces[l.space] = await sheetSignIn(env, l, name, code); } catch (e) { errors.push(e.message); }
         }
         if (errors.length || !Object.keys(spaces).length) {
-          const approvedPeek = await oauth.approveConsent(req, handle, { scope: ['mcp'] }).catch(() => null);   // can't re-show without a fresh request
-          if (approvedPeek) {
-            const fresh = await oauth.beginConsent(approvedPeek.request), details = await oauth.describeConsent(approvedPeek.request);
-            return page('Connect Claude', signInForm(details, fresh.handle, errors.join(' · ') || 'Type at least one code.', { name }), 200, fresh.headers);
-          }
-          return page('Try again', '<h1>That page expired</h1><p>Go back to Claude and connect again.</p>', 400);
+          const details = await oauth.describeConsent(request);
+          return page('Connect Claude', signInForm(details, handle, errors.join(' · ') || 'Type at least one code.', { name }));
         }
-        const approved = await oauth.approveConsent(req, handle, { scope: ['mcp'] });
+        await env.OAUTH_KV.delete('signin:' + handle);                    // works once
         const first = spaces.peregrine || spaces.westcliffe;
         const { redirectTo } = await oauth.completeAuthorization({
-          request: approved.request, userId: 'pt-' + first.u, metadata: { name: first.n, at: new Date().toISOString() },
+          request, userId: 'pt-' + first.u, metadata: { name: first.n, at: new Date().toISOString() },
           scope: ['mcp'], props: { name: first.n, spaces },
         });
-        approved.headers.set('location', redirectTo);
-        return new Response(null, { status: 302, headers: approved.headers });
+        return new Response(null, { status: 302, headers: { location: redirectTo, 'cache-control': 'no-store' } });
       }
       return new Response('Method not allowed', { status: 405 });
     } catch (error) {
       if (error instanceof AuthorizationError && error.redirectTo) return Response.redirect(error.redirectTo, 302);
       if (error instanceof AuthorizationError || error instanceof CimdFetchError) {
-        return page('Try again', `<h1>Couldn't connect</h1><p>${esc(error instanceof AuthorizationError ? error.description : 'This app could not be verified.')}</p><p class="muted">Go back to Claude and connect again.</p>`, 400);
+        return page('Try again', `<h1>Couldn't connect</h1><p>${esc(error instanceof AuthorizationError ? error.description : 'This app could not be verified.')}</p><p class="muted">Go back to Claude and press Connect again.</p>`, 400);
       }
       throw error;
     }

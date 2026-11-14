@@ -1,7 +1,7 @@
 // End-to-end test against two local `wrangler dev` sessions:
 //   chat-service:  wrangler dev --port 8799                          (.dev.vars: SECRET_PEREGRINE="test-peregrine-secret" …)
 //   mcp-service:   wrangler dev -c test/wrangler.test.toml --port 8790
-// Covers: sign-in page (good code, wrong code, staff refused, foreign redirect refused), tokens, every tool,
+// Sign-in sends no cookies (some sign-in windows drop them). Covers: sign-in page (good code, wrong code, staff refused, foreign redirect refused), tokens, every tool,
 // live delivery to a staff phone, private messages, and that the chat service's own routes still behave.
 import { createHmac, createHash, randomBytes } from 'node:crypto';
 import http from 'node:http';
@@ -45,7 +45,7 @@ async function authorize(client, form, redirect = 'http://localhost:9999/cb') {
   for (const f of [].concat(form)) {
     const handle = (html.match(/name="handle" value="([^"]+)"/) || [])[1];
     if (!handle) return { status: res.status, html, steps };
-    res = await fetch(MCP + '/authorize?' + q, { method: 'POST', redirect: 'manual', headers: { cookie: j.get(), 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(Object.assign({ handle }, f)) });
+    res = await fetch(MCP + '/authorize?' + q, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(Object.assign({ handle }, f)) });
     j.set(res); html = res.status === 302 ? '' : await res.text(); steps.push(res.status);
   }
   const loc = res.headers.get('location') || '';
