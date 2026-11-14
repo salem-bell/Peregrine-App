@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '4.93';
+const VERSION = '4.94';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Morning of', 'Morning and before', 'Off'];
 
@@ -294,7 +294,7 @@ function doPost(e) {
     if (body.fn === 'photo') return json_(photo_(body.token, body.id));
     if (body.fn === 'file') return json_(file_(body.token, body.id));
     if (body.fn === 'inventory') return json_(inventory_(body.token, body.counts));
-    if (body.fn === 'tests') { const ss = SpreadsheetApp.getActive(), me = who_(ss, body.token); return json_({ ok: true, tests: tests_(ss, me), results: me.role === 'Manager' ? setting_(ss, 'Test results sheet') : '' }); }
+    if (body.fn === 'tests') { const ss = SpreadsheetApp.getActive(), me = who_(ss, body.token); return json_({ ok: true, tests: tests_(ss, me), results: me.role === 'Manager' ? setting_(ss, 'Test results sheet') : '', team: me.role === 'Manager' ? testTeam_(ss) : null }); }
     return json_({ error: 'Unknown request' });
   } catch (err) {
     return json_({ error: String(err && err.message || err).replace(/^Error:\s*/, '') });
@@ -1267,6 +1267,33 @@ function tests_(ss, me) {
     if (isMgr) Object.assign(t, { who: String(r[4] || 'Everyone'), allow: names_(r[6]), block: names_(r[7]) });   // managers can change who gets each test
     return t;
   });
+}
+/** For managers: every active person and where they stand on each test (from the results sheet). */
+function testTeam_(ss) {
+  let book = null; try { const id = driveId_(setting_(ss, 'Test results sheet')); if (id) book = SpreadsheetApp.openById(id); } catch (_) {}
+  if (!book) return null;
+  const norm = n => String(n || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const people = vals_(ss.getSheetByName('Users')).filter(r => String(r[0]).trim() && truthy_(r[3])).map(r => ({ name: String(r[0]).trim(), role: role_(r[1]) }));
+  const firsts = {}; people.forEach(u => { const f = norm(u.name).split(' ')[0]; firsts[f] = (firsts[f] || 0) + 1; });
+  // A result counts for someone if the full name matches, or a one-word name matches only their first name.
+  const whose = n => { const k = norm(n); if (!k) return null; const full = people.find(u => norm(u.name) === k); if (full) return full.name;
+    if (k.indexOf(' ') < 0 && firsts[k] === 1) { const u = people.find(x => norm(x.name).split(' ')[0] === k); return u ? u.name : null; } return null; };
+  const tests = vals_(ss.getSheetByName('Tests')).filter(r => String(r[0]).trim()).sort((a, b) => (Number(a[5]) || 0) - (Number(b[5]) || 0)).map(r => ({ name: String(r[0]).trim(), tab: String(r[2] || '').trim() || String(r[0]).trim() }));
+  const grid = {}, unmatched = {};
+  tests.forEach(t => {
+    const sh = book.getSheetByName(t.tab); if (!sh) return;
+    vals_(sh).forEach(x => {
+      if (String(x[0]) === 'Submitted' || !String(x[1]).trim()) return;          // header rows (including later ones after a question update)
+      const who = whose(x[1]); if (!who) { unmatched[String(x[1]).trim()] = 1; return; }
+      const res = String(x[4] || '').trim(), pass = /^pass$/i.test(res), wait = !res || /scor/i.test(String(x[2])) || /needs scoring/i.test(res);
+      const g = (grid[who] = grid[who] || {}), cur = g[t.name], at = toIso_(x[0]) || '';
+      const score = String(x[2] == null ? '' : x[2]), out = String(x[3] == null ? '' : x[3]);
+      if (pass) { if (!cur || cur.s !== 'pass') g[t.name] = { s: 'pass', at, score, outOf: out, tries: (cur ? cur.tries : 0) + 1 }; else cur.tries++; return; }
+      if (cur && cur.s === 'pass') { cur.tries++; return; }
+      g[t.name] = { s: wait ? 'wait' : 'fail', at, score: wait ? '' : score, outOf: wait ? '' : out, tries: (cur ? cur.tries : 0) + 1 };
+    });
+  });
+  return { tests: tests.map(t => t.name), people: people.map(u => ({ name: u.name, role: u.role, r: grid[u.name] || {} })), unmatched: Object.keys(unmatched).slice(0, 20) };
 }
 const names_ = v => String(v || '').split(/\s*[,;\n]\s*/).map(x => x.trim()).filter(Boolean);
 const inNames_ = (v, n) => names_(v).some(x => x.toLowerCase() === String(n || '').trim().toLowerCase());

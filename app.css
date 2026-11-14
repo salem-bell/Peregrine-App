@@ -385,3 +385,12 @@ html,body{overscroll-behavior-y:contain}
 /* pinned chats */
 .cpin{font-size:.72rem;margin-left:4px;flex:none;opacity:.85}
 .chatbar .pinbtn{flex:none;font-size:1.05rem;filter:grayscale(1);opacity:.45} .chatbar .pinbtn.on{filter:none;opacity:1}
+/* team test progress */
+.tpwrap{overflow-x:auto;-webkit-overflow-scrolling:touch;border-top:1px solid var(--line)}
+.tpgrid{border-collapse:collapse;width:100%;font-size:.88rem}
+.tpgrid th,.tpgrid td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:center;white-space:nowrap}
+.tpgrid thead th{font-size:.78rem;font-weight:600;vertical-align:bottom;white-space:normal;min-width:62px}
+.tpgrid th small,.tpgrid td small{display:block;font-size:.68rem;font-weight:400;color:var(--muted)}
+.tpgrid tbody th{text-align:left;font-weight:600;position:sticky;left:0;background:var(--card);z-index:1;min-width:120px}
+.tpgrid thead th:first-child{text-align:left;position:sticky;left:0;background:var(--card);z-index:2}
+.tpb{all:unset;cursor:pointer;display:block;width:100%;min-height:24px} .tp.pass{color:var(--ok);font-weight:700;font-size:1rem} .tp.fail{color:var(--warn,#b45309);font-weight:700} .tp.wait{color:var(--muted);font-weight:700} .tp.none{color:var(--line)}

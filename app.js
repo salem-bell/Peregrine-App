@@ -1499,8 +1499,26 @@ function viewTests(){
       ${go ? `<div class="btns" style="margin-top:8px">${go}</div>` : ''}</div>`; };
   return `<h1>Tests</h1>
     ${tdata.results ? `<div class="card"><div class="row"><div class="txt"><b>Test results</b><div class="sub">Everyone's scores and written answers live in the results sheet.</div></div><a class="btn sm" href="${esc(tdata.results)}" target="_blank" rel="noopener">Open sheet ↗</a></div></div>` : ''}
-    <h2>Certification</h2><div class="card">${ts.map(row).join('') || '<div class="empty">No tests set up.</div>'}</div>
+    ${tdata.team ? teamProgress(tdata.team) : ''}
+    <h2>${tdata.team ? 'Tests' : 'Certification'}</h2><div class="card">${ts.map(row).join('') || '<div class="empty">No tests set up.</div>'}</div>
     <p class="sub">Each level unlocks when you pass the one before it. You can retake a test; your best result counts.</p>`;
+}
+/* Managers: who has passed which test. ✓ passed · … waiting to be scored · ✗ taken, not passed yet · – not taken. */
+let tpFilter = '';
+function teamProgress(T){
+  const short = n => n.replace(/^Barista\s+/i, '').replace(/\s*\(.*?\)\s*/g, ' ').replace(/\s+-\s+.*$/, '').trim();
+  const people = T.people.filter(u => u.role !== 'Manager' || Object.keys(u.r).length).filter(u => !tpFilter || (tpFilter === 'staff' ? u.role === 'Staff' : u.role === 'Lead'));
+  const cell = (u, t) => { const x = u.r[t]; if (!x) return '<td class="tp none" aria-label="Not taken">–</td>';
+    const when = x.at ? shortDay(ymdOf(new Date(x.at))) : '', sc = x.score !== '' ? x.score + (x.outOf ? '/' + x.outOf : '') : '';
+    const tip = (x.s === 'pass' ? 'Passed' : x.s === 'wait' ? 'Waiting to be scored' : 'Not passed yet') + (sc ? ' · ' + sc : '') + (when ? ' · ' + when : '') + (x.tries > 1 ? ' · ' + x.tries + ' tries' : '');
+    return `<td class="tp ${x.s}"><button class="tpb" data-tptip="${esc(u.name.split(' ')[0] + ' – ' + t + ': ' + tip)}" title="${esc(tip)}" aria-label="${esc(t + ': ' + tip)}">${x.s === 'pass' ? '✓' : x.s === 'wait' ? '…' : '✗'}${x.s !== 'pass' && sc ? `<small>${esc(sc)}</small>` : ''}</button></td>`; };
+  const passedN = t => T.people.filter(u => u.r[t] && u.r[t].s === 'pass').length;
+  return `<h2>Team progress</h2>
+    <div class="card"><div class="row" style="flex-wrap:wrap;gap:6px"><span class="sub" style="flex:1;min-width:160px">✓ passed · … waiting to be scored · ✗ not passed yet · – not taken. Tap a mark for the score and date.</span>
+      ${[['', 'Everyone'], ['staff', 'Staff'], ['lead', 'Leads']].map(([k, l]) => `<button class="btn sm ${tpFilter === k ? 'go' : ''}" data-tpfilter="${k}">${l}</button>`).join('')}</div>
+    <div class="tpwrap"><table class="tpgrid"><thead><tr><th scope="col">Name</th>${T.tests.map(t => `<th scope="col" title="${esc(t)}">${esc(short(t))}<small>${passedN(t)} passed</small></th>`).join('')}</tr></thead>
+      <tbody>${people.map(u => `<tr><th scope="row">${esc(u.name)}${u.role !== 'Staff' ? `<small>${esc(u.role)}</small>` : ''}</th>${T.tests.map(t => cell(u, t)).join('')}</tr>`).join('') || `<tr><td colspan="${T.tests.length + 1}" class="empty">Nobody here.</td></tr>`}</tbody></table></div>
+    ${T.unmatched && T.unmatched.length ? `<div class="row"><div class="sub">Results under names that don't match anyone in the app: ${esc(T.unmatched.join(', '))}. Fix the name in the results sheet or in Users to count them.</div></div>` : ''}</div>`;
 }
 const accSummary = t => [t.who === 'Only people picked' ? 'Only: ' + (t.allow.length ? t.allow.map(first).join(', ') : 'nobody yet') : 'Shown to ' + t.who.toLowerCase(), t.need ? 'after ' + t.need : '', t.who !== 'Only people picked' && t.allow.length ? 'also ' + t.allow.map(first).join(', ') : '', t.block.length ? 'not ' + t.block.map(first).join(', ') : ''].filter(Boolean).join(' · ');
 function testAccSheet(){
@@ -1827,6 +1845,8 @@ document.addEventListener('click', async e => {
     act('trainFile', { id: t.id }).then(r => { if (r && r.result && r.result.url){ toast('Filed in Drive'); trainSel = ''; render(); } else { b.disabled = false; b.textContent = 'File checklist'; } }); return; }
   if (d.traindel){ const t = TR().active.find(x => x.id === d.traindel); if (!t || !confirm('Delete ' + t.name + '\'s checklist? This can\'t be undone.')) return;
     data.training.active = TR().active.filter(x => x.id !== t.id); trainSel = ''; render(); act('trainDelete', { id: t.id }); return; }
+  if (d.tpfilter !== undefined){ tpFilter = d.tpfilter; render(); return; }
+  if (d.tptip){ toast(d.tptip); return; }
   if (d.testacc){ sheet = { kind: 'testacc', test: d.testacc }; render(); return; }
   if (d.publish !== undefined){ sheet = { kind: 'publish' }; render(); return; }
   if (d.sendweek !== undefined){ if (!confirm('Email everyone working the week of ' + shortDay(week) + ' their shifts?')) return; b.disabled = true;
