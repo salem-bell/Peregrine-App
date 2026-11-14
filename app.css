@@ -394,3 +394,4 @@ html,body{overscroll-behavior-y:contain}
 .tpgrid tbody th{text-align:left;font-weight:600;position:sticky;left:0;background:var(--card);z-index:1;min-width:120px}
 .tpgrid thead th:first-child{text-align:left;position:sticky;left:0;background:var(--card);z-index:2}
 .tpb{all:unset;cursor:pointer;display:block;width:100%;min-height:24px} .tp.pass{color:var(--ok);font-weight:700;font-size:1rem} .tp.fail{color:var(--warn,#b45309);font-weight:700} .tp.wait{color:var(--muted);font-weight:700} .tp.none{color:var(--line)}
+.tmav{width:24px;height:24px;border-radius:50%;display:inline-grid;place-items:center;background:var(--go-bg);color:var(--go-fg);font-weight:700;font-size:.8rem;flex:none} #ment small{color:var(--muted)}

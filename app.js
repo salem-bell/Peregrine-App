@@ -964,6 +964,7 @@ function fmtMsg(text){
   const key = (data.people || []).map(p => p.id + p.name).join('|');
   if (key !== mentKey){ mentKey = key; const labels = []; (data.people || []).forEach(p => { labels.push({ l: p.name, id: p.id }); if (mentionLabel(p) === p.name) return; labels.push({ l: first(p.name), id: p.id }); });
     labels.sort((a, b) => b.l.length - a.l.length); mentRe = labels.length ? { re: new RegExp('@(' + labels.map(x => escRe(esc(x.l))).join('|') + ')(?![\\w])', 'gi'), labels } : null; }
+  h = h.replace(/(^|[^\w@])@team(?![\w])/gi, (m, pre) => pre + '<span class="ment me">@team</span>');   // @team tags everyone in the chat
   if (!mentRe) return h;
   return h.replace(mentRe.re, (m, n) => { const hit = mentRe.labels.find(x => esc(x.l).toLowerCase() === n.toLowerCase()); return `<span class="ment ${hit && hit.id === data.meId ? 'me' : ''}">${m}</span>`; });
 }
@@ -1907,7 +1908,9 @@ document.addEventListener('input', e => { const t = e.target;
   if (t.dataset && t.dataset.csearch !== undefined){ chat.q = t.value; runSearch(); keepSearch(render); return; }
   if (t.tagName === 'TEXTAREA' && t.closest && t.closest('.composer')){ const box = $('#ment'); if (!box) return;
     const m = t.value.slice(0, t.selectionStart).match(/(?:^|\s)@([\w]*)$/), ppl = m ? audience(curChat()).filter(p => !m[1] || p.name.toLowerCase().split(' ').some(w => w.indexOf(m[1].toLowerCase()) === 0)).slice(0, 6) : [];
-    box.hidden = !ppl.length; box.innerHTML = ppl.map(p => `<button type="button" data-ment="${esc(mentionLabel(p))}">${avatar({ id: p.id, name: p.name }, 24)}${esc(p.name)}</button>`).join(''); } });
+    const team = m && 'team'.indexOf(m[1].toLowerCase()) === 0 && (curChat() || {}).kind !== 'dm';
+    box.hidden = !ppl.length && !team;
+    box.innerHTML = (team ? `<button type="button" data-ment="team"><span class="tmav" aria-hidden="true">@</span><span><b>team</b> <small>– everyone in this chat</small></span></button>` : '') + ppl.map(p => `<button type="button" data-ment="${esc(mentionLabel(p))}">${avatar({ id: p.id, name: p.name }, 24)}${esc(p.name)}</button>`).join(''); } });
 document.addEventListener('pointerdown', e => { if (e.target.closest && e.target.closest('#ment')) e.preventDefault(); });
 document.addEventListener('click', e => { if (Date.now() - noTap < 500 && e.target.closest && e.target.closest('[data-bub]')) return; const b = e.target.closest && e.target.closest('[data-bub]'); if (!b || e.target.closest('button')) return; chat.meta = chat.meta === b.dataset.bub ? '' : b.dataset.bub; const near = isNearBottom(); render(); if (near) scrollChat(); });
 document.addEventListener('input', e => { const t = e.target; if (t.closest && t.closest('.composer') && t.tagName === 'TEXTAREA'){ t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 140) + 'px'; } });

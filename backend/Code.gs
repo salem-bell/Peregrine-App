@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '4.94';
+const VERSION = '4.95';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Morning of', 'Morning and before', 'Off'];
 
@@ -1526,11 +1526,13 @@ function pushChat_(ss, me, users, channel, text, photo) {
   const byId = {}; users.forEach(r => { byId[String(r[6])] = String(r[0]); });
   const named = uid => mentions_(text, byId[uid], users);   // @Name: a mention counts as direct, so it gets through "direct messages only"
   push_(ss, ids.map(uid => { const m = !direct && named(uid);
-    return { uid, kind: 'msg', direct: direct || m, title: m ? who + ' mentioned you in # ' + c.name : direct ? (c.kind === 'group' ? who + ' · ' + c.name : me.name) : '# ' + c.name + ' · ' + who, body: text ? text.slice(0, 200) : '📷 Photo', url: '?go=chat:' + channel, tag: 'chat-' + channel }; }));
+    return { uid, kind: 'msg', direct: direct || m, title: m ? who + (TEAM_TAG_.test(text) ? ' tagged @team in # ' : ' mentioned you in # ') + c.name : direct ? (c.kind === 'group' ? who + ' · ' + c.name : me.name) : '# ' + c.name + ' · ' + who, body: text ? text.slice(0, 200) : '📷 Photo', url: '?go=chat:' + channel, tag: 'chat-' + channel }; }));
 }
 /** True if the text @mentions this person by full name, or by first name when nobody else active shares it. */
+const TEAM_TAG_ = /(^|[^\w@])@team(?![\w])/i;            // @team tags everyone in the chat
 function mentions_(text, name, users) {
   if (!text || !name || text.indexOf('@') < 0) return false;
+  if (TEAM_TAG_.test(String(text))) return true;
   const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), t = String(text), firstN = name.split(' ')[0];
   if (new RegExp('@' + esc(name) + '(?![\\w])', 'i').test(t)) return true;
   const dup = users.filter(r => truthy_(r[3]) && String(r[0]).split(' ')[0].toLowerCase() === firstN.toLowerCase()).length > 1;
@@ -1774,7 +1776,7 @@ function chatPush_(payload, sig) {
   const users = rv_(ss, 'Users').filter(r => String(r[0]).trim()), byId = {}; users.forEach(r => { byId[String(r[6])] = String(r[0]); });
   const direct = p.kind !== 'channel', who = String(p.from && p.from.name || '').split(' ')[0], text = String(p.text || '');
   push_(ss, (p.to || []).filter(uid => byId[uid]).map(uid => { const m = !direct && mentions_(text, byId[uid], users);
-    return { uid, kind: 'msg', direct: direct || m, title: m ? who + ' mentioned you in # ' + p.name : direct ? (p.kind === 'group' ? who + ' · ' + p.name : String(p.from.name)) : '# ' + p.name + ' · ' + who,
+    return { uid, kind: 'msg', direct: direct || m, title: m ? who + (TEAM_TAG_.test(text) ? ' tagged @team in # ' : ' mentioned you in # ') + p.name : direct ? (p.kind === 'group' ? who + ' · ' + p.name : String(p.from.name)) : '# ' + p.name + ' · ' + who,
       body: text ? text.slice(0, 200) : '📷 Photo', url: '?go=chat:' + p.ch, tag: 'chat-' + p.ch }; }));
   return { ok: true };
 }
