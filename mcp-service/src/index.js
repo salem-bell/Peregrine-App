@@ -15,7 +15,7 @@ const LOCATIONS = [
   { key: 'westcliffe', space: 'westcliffe', name: 'Westcliffe', tz: 'America/Denver',
     api: 'https://script.google.com/macros/s/AKfycbzquvYZLp2-oRIXMbMFxbCbuSLqeEixgEzf7jAKgA0SyJvFX34nSKwBtPtkQ7hk7K3vPQ/exec' },
 ];
-const VERSION = '0.1.1';
+const VERSION = '0.1.2';
 const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';');
 
 /* ============================================================
@@ -25,9 +25,31 @@ function apiFor(env, loc) {                       // tests point sign-in at a st
   try { const o = JSON.parse(env.SIGNIN_OVERRIDE || '{}'); if (o[loc.key]) return o[loc.key]; } catch (_) {}
   return loc.api;
 }
-async function sheetSignIn(env, loc, name, code) {
-  const r = await fetch(apiFor(env, loc), { method: 'POST', body: JSON.stringify({ fn: 'signIn', name, code }), redirect: 'follow' });
-  let j = {}; try { j = await r.json(); } catch (_) { throw new Error(loc.name + ': the sheet didn\'t answer – try again in a minute'); }
+/* Last sign-in attempt, for troubleshooting: where it stopped and how long each step took. No names, codes or tokens.
+   Visible at /diag for a day. */
+async function diag(env, d) { try { await env.OAUTH_KV.put('diag:last', JSON.stringify(Object.assign({ at: new Date().toISOString(), version: VERSION }, d)), { expirationTtl: 86400 }); } catch (_) {} }
+/** Apps Script answers a POST with a redirect to a second Google address that serves the result: follow it by hand,
+   with a time limit on each step, so a slow or odd answer shows up as a clear message instead of a hung page. */
+async function sheetCall(env, loc, body, steps) {
+  const t0 = Date.now(), lim = ms => AbortSignal.timeout(ms);
+  let r;
+  try { r = await fetch(apiFor(env, loc), { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'text/plain;charset=utf-8' }, redirect: 'manual', signal: lim(25000) }); }
+  catch (e) { steps.push({ loc: loc.key, step: 'post', ms: Date.now() - t0, err: String(e && e.name || e) }); throw new Error(loc.name + ': the sheet didn\'t answer in time – try again in a minute'); }
+  steps.push({ loc: loc.key, step: 'post', ms: Date.now() - t0, status: r.status, to: r.headers.get('location') ? new URL(r.headers.get('location')).host : '' });
+  for (let hop = 0; hop < 3 && r.status >= 300 && r.status < 400 && r.headers.get('location'); hop++) {
+    const next = r.headers.get('location'), t1 = Date.now();
+    try { r = await fetch(next, { method: 'GET', redirect: 'manual', signal: lim(20000) }); }
+    catch (e) { steps.push({ loc: loc.key, step: 'result', ms: Date.now() - t1, err: String(e && e.name || e) }); throw new Error(loc.name + ': the sheet didn\'t answer in time – try again in a minute'); }
+    steps.push({ loc: loc.key, step: 'result', ms: Date.now() - t1, status: r.status, type: r.headers.get('content-type') || '' });
+  }
+  const text = await r.text();
+  let j = null; try { j = JSON.parse(text); } catch (_) {}
+  if (!j) { steps.push({ loc: loc.key, step: 'parse', status: r.status, start: text.slice(0, 120).replace(/\s+/g, ' ') }); throw new Error(loc.name + ': the sheet sent back something unexpected (' + r.status + ')'); }
+  steps.push({ loc: loc.key, step: 'parse', keys: Object.keys(j), error: j.error || '' });
+  return j;
+}
+async function sheetSignIn(env, loc, name, code, steps) {
+  const j = await sheetCall(env, loc, { fn: 'signIn', name, code }, steps);
   if (j.error || !j.token) throw new Error(loc.name + ': ' + (j.error || 'sign-in failed'));
   if (j.role !== 'Manager') throw new Error(loc.name + ': only managers can connect Claude to the team app');
   const uid = String(j.token).split('.')[1];
@@ -53,7 +75,7 @@ ${error ? `<p class="err">${esc(error)}</p>` : ''}
 ${LOCATIONS.map(l => `<fieldset><legend>${esc(l.name)}</legend><label>Your 4-digit code for ${esc(l.name)}${l.key === 'richardson' ? '' : ' (leave blank to skip)'}</label>
 <input type="password" name="code_${l.key}" inputmode="numeric" pattern="\\d{4}" maxlength="4" autocomplete="off"></fieldset>`).join('')}
 <p><button class="go" name="decision" value="approve">Connect</button><button class="no" name="decision" value="deny" formnovalidate>Cancel</button></p></form>
-<p class="muted">Managers only. Your code is checked by the shop's Google Sheet and isn't stored.</p>`;
+<p class="muted">Press Connect once – checking with the shop's Google Sheet can take up to 20 seconds. Managers only; your code isn't stored.</p>`;
 }
 function allowedRedirect(env, host) {
   const ok = String(env.ALLOWED_REDIRECT_HOSTS || 'claude.ai,claude.com').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
@@ -76,10 +98,12 @@ const defaultHandler = {
   async fetch(req, env) {
     const url = new URL(req.url), oauth = env.OAUTH_PROVIDER;
     if (url.pathname === '/' || url.pathname === '/health') return Response.json({ ok: true, service: 'peregrine-mcp', version: VERSION, mcp: url.origin + '/mcp' });
+    if (url.pathname === '/diag') { const v = await env.OAUTH_KV.get('diag:last'); return new Response(v || '{"stage":"nothing yet"}', { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } }); }
     if (url.pathname !== '/authorize') return new Response('Not found', { status: 404 });
     try {
       if (req.method === 'GET') {
         const request = await oauth.parseAuthRequest(req);
+        await diag(env, { stage: 'page shown' });
         const details = await oauth.describeConsent(request);
         if (!allowedRedirect(env, details.redirectHost)) return page('Not allowed', '<h1>Not allowed</h1><p>This connector only works with Claude.</p>', 403);
         return page('Connect Claude', signInForm(details, await savePending(env, request)));
@@ -89,11 +113,12 @@ const defaultHandler = {
         if (!pending) return expiredPage();
         const request = pending.request;
         if (form.get('decision') !== 'approve') { await env.OAUTH_KV.delete('signin:' + handle); return denied(request); }
-        const name = String(form.get('name') || '').trim(), spaces = {}, errors = [];
-        for (const l of LOCATIONS) {
-          const code = String(form.get('code_' + l.key) || '').trim(); if (!code) continue;
-          try { spaces[l.space] = await sheetSignIn(env, l, name, code); } catch (e) { errors.push(e.message); }
-        }
+        const name = String(form.get('name') || '').trim(), spaces = {}, errors = [], steps = [], t0 = Date.now();
+        const tries = LOCATIONS.filter(l => String(form.get('code_' + l.key) || '').trim());
+        await Promise.all(tries.map(async l => {                         // both shops at once
+          try { spaces[l.space] = await sheetSignIn(env, l, name, String(form.get('code_' + l.key)).trim(), steps); } catch (e) { errors.push(e.message); }
+        }));
+        await diag(env, { stage: errors.length ? 'sign-in failed' : 'signed in', ms: Date.now() - t0, tried: tries.map(l => l.key), errors, steps });
         if (errors.length || !Object.keys(spaces).length) {
           const details = await oauth.describeConsent(request);
           return page('Connect Claude', signInForm(details, handle, errors.join(' · ') || 'Type at least one code.', { name }));

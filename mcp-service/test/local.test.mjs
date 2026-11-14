@@ -17,7 +17,10 @@ const sheet = http.createServer((q, r) => { let b = ''; q.on('data', c => b += c
   if (q.url === '/r' && n === 'salem' && code === '1234') out = { token: 'T.pS.1.sig', name: 'Salem', role: 'Manager' };
   if (q.url === '/r' && n === 'ben' && code === '5555') out = { token: 'T.pB.1.sig', name: 'Ben', role: 'Staff' };
   if (q.url === '/w' && n === 'salem' && code === '4321') out = { token: 'T.wS.1.sig', name: 'Salem', role: 'Manager' };
-  r.setHeader('content-type', 'application/json'); r.end(JSON.stringify(out)); }); }).listen(8797);
+  // like Apps Script: the POST answers with a redirect; the result is served at the second address
+  if (q.method === 'POST') { const id = String(Math.random()).slice(2); echo[id] = out; r.writeHead(302, { location: 'http://localhost:8797/echo?id=' + id }); return r.end(); }
+  const id = new URL(q.url, 'http://x').searchParams.get('id'); r.setHeader('content-type', 'application/json'); r.end(JSON.stringify(echo[id] || { error: 'gone' })); }); }).listen(8797);
+const echo = {};
 const pushes = []; const relay = http.createServer((q, r) => { let b = ''; q.on('data', c => b += c); q.on('end', () => { pushes.push(b); r.end('{"ok":true}'); }); }).listen(8796);
 
 const people = [{ id: 'pS', name: 'Salem Bellah', tier: 2, active: true }, { id: 'pB', name: 'Ben Ortiz', tier: 0, active: true }, { id: 'pA', name: 'Ana Ruiz', tier: 1, active: true }, { id: 'pA2', name: 'Ana Cole', tier: 0, active: true }, { id: 'pX', name: 'Old Timer', tier: 0, active: false }];
@@ -63,6 +66,7 @@ const tool = async (token, name, args) => { const r = await mcp(token, 'tools/ca
 
 try {
   ok((await roster()).ok, 'roster');
+  const d0 = await (await fetch(MCP + '/diag')).json(); ok(d0.stage, 'diag answers');
   ok((await fetch(MCP + '/mcp', { method: 'POST', body: '{}' })).status === 401, 'no token → 401');
 
   // a redirect that isn't Claude's is refused on the sign-in page
@@ -82,6 +86,9 @@ try {
   const deny = await authorize(client, [{ decision: 'deny' }]);
   ok(deny.status === 302 && /error=access_denied/.test(deny.loc), 'cancel → access_denied');
   const T = retry.tok.access_token;
+  const dg = await (await fetch(MCP + '/diag')).json();
+  ok(dg.stage === 'page shown' || dg.stage === 'signed in', 'diag after sign-in: ' + JSON.stringify(dg).slice(0, 300));
+  ok(!JSON.stringify(dg).includes('1234') && !JSON.stringify(dg).includes('T.pS'), 'diag holds no codes or tokens');
 
   const init = await mcp(T, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
   ok(init.result && init.result.protocolVersion === '2025-06-18' && init.result.serverInfo.name === 'peregrine-team', 'initialize');
