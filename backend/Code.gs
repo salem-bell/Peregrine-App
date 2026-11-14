@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '4.95';
+const VERSION = '4.96';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Morning of', 'Morning and before', 'Off'];
 
@@ -37,6 +37,8 @@ const TABS = {
   'Reminder log':  ['Key', 'Name', 'Kind', 'Sent'],
   'Push':          ['User ID', 'Name', 'Endpoint', 'Keys (do not edit)', 'Device', 'Added', 'Last sent'],
   'Prep':          ['ID', 'Item', 'Details', 'For date', 'For', 'For people', 'Added by', 'Added at', 'Done by', 'Done at'],
+  'Sales':         ['Date', 'Net sales', 'Gross sales', 'Discounts', 'Refunds & voids', 'Tax', 'Tips', 'Checks', 'Guests', 'From report', 'Imported', 'Email ID'],
+  'Sales import':  ['Received', 'Subject', 'File', 'Result', 'Report (first 45,000 characters)', 'Email ID'],
 };
 
 const SETTINGS = [
@@ -80,6 +82,7 @@ const SETTINGS = [
   ['Chat service secret',          '',                          'Must match SECRET_PEREGRINE in the team-chat Worker. Don\'t share it.'],
   ['Push public key',              '',                          'Must match VAPID_PUBLIC in the Worker.'],
   ['Delete chat photos after (days)', '60',                     'Photos sent in Messages are deleted from Drive after this many days. The message stays, marked "Photo expired".'],
+  ['Sales report search',          '',                          'The Gmail search that finds this shop\'s daily SkyTab sales report (Lighthouse › Reports › email this report: Daily, Last Day, CSV, sent to the Google account that owns this sheet), e.g. has:attachment newer_than:3d (lighthouse OR skytab). Checked every hour; each email is imported once. Blank = off – keep it blank in a shop whose report isn\'t in this Gmail.'],
   ['Training records folder',      '',                          'The Drive folder where finished trainee checklists are filed as Google Docs (Training in the app).'],
   ['Test results sheet',           'https://docs.google.com/spreadsheets/d/1dl8gi2SkPfYOjBzX0syp2WkWssg7t-rpZChpeZNm5QQ/edit', 'The sheet the tests write results to. The app shows each person their own results.'],
 ];
@@ -99,6 +102,8 @@ function onOpen() {
     .addItem('Payroll: update this pay period\'s timesheet', 'payrollUpdateNow')
     .addItem('Payroll: make the last pay period\'s workbook now', 'payrollMakeLast')
     .addItem('Payroll: make this pay period\'s workbook now (so far)', 'payrollMakeCurrent')
+    .addSeparator()
+    .addItem('Sales: check for the SkyTab email now', 'importSalesNow')
     .addToUi();
 }
 
@@ -123,6 +128,7 @@ function setup() {
   ['Checklist log', 'Reads', 'Audit', 'Messages', 'Chat reads', 'Reminder log', 'Push'].forEach(n => { const s = ss.getSheetByName(n); if (s) { move_(ss, n, ss.getSheets().length); s.setTabColor('#bbbbbb'); } });
   const blank = ss.getSheetByName('Sheet1'); if (blank && blank.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(blank);
   if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'sendShiftReminders')) ScriptApp.newTrigger('sendShiftReminders').timeBased().everyMinutes(15).create();
+  if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'importSales')) ScriptApp.newTrigger('importSales').timeBased().everyHours(1).create();
   ss.setActiveSheet(ss.getSheetByName('Start Here'));
   SpreadsheetApp.getUi().alert('Set up done', 'Next: add your team on the Users tab, then follow Step 3 on the Start Here tab.', SpreadsheetApp.getUi().ButtonSet.OK);
 }
@@ -522,6 +528,7 @@ function state_(ss, me, slim, have) {
   out.period = { kind: /twice|semi/i.test(setting_(ss, 'Pay period')) ? 'semi' : /week/i.test(setting_(ss, 'Pay period')) && !/2|two|bi/i.test(setting_(ss, 'Pay period')) ? 'week' : 'biweek', start: ymd_((rv_(ss, 'Settings').find(x => String(x[0]).trim() === 'Pay period starts on') || [])[1], tz) || '' };
   if (!/^\d{4}-\d\d-\d\d$/.test(out.period.start)) out.period.start = '';
   { const mine = users.find(r => String(r[0]).trim() === me.name); out.myPay = { wage: mine ? Number(mine[10]) || 0 : 0, ot: Number(setting_(ss, 'Overtime after (hours a week)')) || 40, otRate: Number(setting_(ss, 'Overtime rate')) || 1.5 }; }
+  if (isMgr) out.sales = salesFor_(ss, users, today, tz);      // yesterday's sales vs labor (SkyTab daily email), managers only
   if (isMgr) out.pay = { ot: Number(setting_(ss, 'Overtime after (hours a week)')) || 40, otRate: Number(setting_(ss, 'Overtime rate')) || 1.5, extra: Number(setting_(ss, 'Labor cost extra (%)')) || 0 };
   }
   return out;
@@ -2019,3 +2026,143 @@ function secret_(ss, label, cell) {
 }
 /** Opening the sheet (or any run) tidies every secret out of the Settings tab. */
 function moveSecrets_(ss) { SECRET_SETTINGS_.forEach(l => { try { setting_(ss, l); } catch (e) {} }); }
+
+
+/* ============================================================
+   Sales from SkyTab (Shift4) – the daily Lighthouse report email.
+   SkyTab has no self-serve API, so Lighthouse emails a daily CSV to the Google account that owns this sheet; every hour
+   this finds new ones (Settings › Sales report search), keeps a copy on the Sales import tab, and writes one row per
+   business day on the Sales tab. The app shows managers sales next to labor (labor %). Columns are found by name, so
+   a report with extra or reordered columns still imports; anything it can't read is kept on Sales import to fix.
+   ============================================================ */
+const SALES_KEYS_ = [                        // Sales tab column → words that name it in a report (first match wins)
+  ['net',    /^(net\s*sales|net\s*revenue|sales\s*net|total\s*net\s*sales|net\s*total)$/],
+  ['gross',  /^(gross\s*sales|gross\s*revenue|total\s*gross\s*sales|gross\s*total|item\s*sales|gross)$/],
+  ['disc',   /^(discounts?|total\s*discounts?|comps?\s*(&|and)?\s*discounts?|discounts?\s*(&|and)?\s*comps?)$/],
+  ['refund', /^(refunds?|voids?|refunds?\s*(&|and|\/)?\s*voids?|voids?\s*(&|and|\/)?\s*refunds?|returns?)$/],
+  ['tax',    /^(tax|taxes|sales\s*tax|total\s*tax(es)?)$/],
+  ['tips',   /^(tips?|gratuit(y|ies)|tips?\s*(&|and|\/)?\s*gratuit(y|ies)|credit\s*card\s*tips?|total\s*tips?)$/],
+  ['checks', /^(checks?|tickets?|orders?|transactions?|check\s*count|ticket\s*count|order\s*count|#\s*of\s*(checks|tickets|orders)|number\s*of\s*(checks|tickets|orders|transactions))$/],
+  ['guests', /^(guests?|covers?|guest\s*count|cover\s*count|customers?)$/],
+];
+const SALES_COLS_ = ['net', 'gross', 'disc', 'refund', 'tax', 'tips', 'checks', 'guests'];
+function salesLabel_(v) { return String(v || '').toLowerCase().replace(/[:*]+/g, '').replace(/\(.*?\)/g, '').replace(/\s+/g, ' ').trim(); }
+function salesKey_(v) { const l = salesLabel_(v); const k = SALES_KEYS_.find(x => x[1].test(l)); return k ? k[0] : ''; }
+function salesNum_(v) {
+  if (typeof v === 'number') return v;
+  let t = String(v || '').trim(); if (!t) return null;
+  const neg = /^\(.*\)$/.test(t) || /^-/.test(t.replace(/[$\s]/g, ''));
+  t = t.replace(/[^0-9.]/g, ''); if (!t || isNaN(Number(t))) return null;
+  return (neg ? -1 : 1) * Number(t);
+}
+function salesDate_(v, tz) {
+  if (v instanceof Date) return Utilities.formatDate(v, tz, 'yyyy-MM-dd');
+  const t = String(v || '').trim(); let m;
+  if ((m = t.match(/(\d{4})-(\d{1,2})-(\d{1,2})/))) return m[1] + '-' + pad_(m[2]) + '-' + pad_(m[3]);
+  if ((m = t.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/))) return (m[3].length === 2 ? '20' + m[3] : m[3]) + '-' + pad_(m[1]) + '-' + pad_(m[2]);
+  const ms = Date.parse(t); return ms ? Utilities.formatDate(new Date(ms), tz, 'yyyy-MM-dd') : '';
+}
+/** Reads one CSV report into { 'YYYY-MM-DD': {net, gross, …} }. Handles both shapes Lighthouse uses:
+    a table (a header row naming the columns, one row per day or one totals row) and a summary (label in one cell,
+    the amount beside it). `fallbackDay` is used when the report doesn't say which day it covers. */
+function parseSalesCsv_(text, fallbackDay, tz) {
+  let rows; try { rows = Utilities.parseCsv(text); } catch (e) { rows = String(text).split(/\r?\n/).map(l => l.split(',')); }
+  rows = rows.map(r => r.map(c => String(c == null ? '' : c).trim())).filter(r => r.some(Boolean));
+  const days = {};
+  // Which day the report covers, if it says so ("Business Date: 11/13/2026", "Date Range: 11/13/2026 - 11/13/2026", a lone date near the top)
+  let reportDay = '';
+  for (const r of rows.slice(0, 12)) {
+    const line = r.join(' '), dates = (line.match(/\d{4}-\d{1,2}-\d{1,2}|\d{1,2}\/\d{1,2}\/\d{2,4}/g) || []).map(d => salesDate_(d, tz)).filter(Boolean);
+    if (dates.length && (dates.every(d => d === dates[0]) || /date|day|period|range|from/i.test(line))) { reportDay = dates[dates.length - 1] === dates[0] ? dates[0] : ''; if (reportDay) break; }
+  }
+  // 1) Table: the first row that names a net/gross sales column
+  const hi = rows.findIndex(r => r.some(c => /^(net|gross)$/.test(salesKey_(c))) && !r.some(c => salesNum_(c) !== null));   // a header row has names, no amounts
+  if (hi >= 0) {
+    const head = rows[hi], col = {}; head.forEach((c, i) => { const k = salesKey_(c); if (k && !(k in col)) col[k] = i; });
+    const dateCol = head.findIndex(c => /^(business\s*)?(date|day)$/i.test(salesLabel_(c)));
+    const body = rows.slice(hi + 1).filter(r => r.some(c => salesNum_(c) !== null));
+    const total = body.find(r => /^(grand\s*)?totals?$/i.test(salesLabel_(r[0])));
+    const perDay = dateCol >= 0 ? body.filter(r => salesDate_(r[dateCol], tz)) : [];
+    const use = perDay.length ? perDay : [total || body[body.length - 1]].filter(Boolean);
+    use.forEach(r => {
+      const d = perDay.length ? salesDate_(r[dateCol], tz) : (reportDay || fallbackDay), x = days[d] || (days[d] = {});
+      Object.keys(col).forEach(k => { const n = salesNum_(r[col[k]]); if (n !== null) x[k] = (x[k] || 0) + n; });
+    });
+  }
+  // 2) Summary: "Net Sales, $1,234.56" pairs anywhere in the report (fills in whatever the table didn't have)
+  const d = reportDay || fallbackDay, x = days[d] || {};
+  rows.forEach(r => {
+    for (let i = 0; i < r.length - 1; i++) {
+      const k = salesKey_(r[i]); if (!k || k in x) continue;
+      const n = r.slice(i + 1).map(salesNum_).find(v => v !== null); if (n !== null && n !== undefined) { x[k] = n; break; }
+    }
+  });
+  if (Object.keys(x).length) days[d] = x;
+  Object.keys(days).forEach(k => { if (days[k].net == null && days[k].gross == null) delete days[k]; });   // a day needs at least a sales figure
+  return days;
+}
+function importSales() { try { return importSales_(SpreadsheetApp.getActive()); } catch (e) { console.warn('sales import: ' + e); } }
+function importSalesNow() {
+  const ss = SpreadsheetApp.getActive(), ui = SpreadsheetApp.getUi();
+  buildSettings_(ss); buildTab_(ss, 'Sales'); buildTab_(ss, 'Sales import');
+  if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'importSales')) ScriptApp.newTrigger('importSales').timeBased().everyHours(1).create();
+  const r = importSales_(ss);
+  ui.alert('Sales', r.found ? 'Found ' + r.found + ' new report email' + (r.found > 1 ? 's' : '') + '. ' + r.lines.join(' ') : 'No new SkyTab report emails. Checked Gmail for: ' + r.query + '\n\nIf the report is set up in Lighthouse, check it goes to ' + Session.getEffectiveUser().getEmail() + ' as a CSV.', ui.ButtonSet.OK);
+}
+function importSales_(ss) {
+  const query = setting_(ss, 'Sales report search'); if (!query) return { found: 0, lines: [], query: '(off)' };
+  const tz = ss.getSpreadsheetTimeZone();
+  buildTab_(ss, 'Sales'); buildTab_(ss, 'Sales import');
+  const log = ss.getSheetByName('Sales import'), sales = ss.getSheetByName('Sales');
+  const seen = {}; vals_(log).forEach(r => { seen[String(r[5])] = 1; });
+  const out = { found: 0, lines: [], query }, logRows = [], got = {};
+  GmailApp.search(query, 0, 20).forEach(th => th.getMessages().forEach(m => {
+    const id = m.getId(); if (seen[id]) return;
+    const files = m.getAttachments().filter(a => /\.csv$/i.test(a.getName()) || /csv|comma-separated/i.test(a.getContentType()));
+    const subject = m.getSubject(), when = m.getDate(), fallback = addDays_(Utilities.formatDate(when, tz, 'yyyy-MM-dd'), -1);   // "Reporting day: Last day" = the day before it was sent
+    if (!files.length) { logRows.push([when, subject, '', 'No CSV attached – set the report\'s export type to CSV in Lighthouse', '', id]); seen[id] = 1; return; }
+    out.found++;
+    files.forEach(f => {
+      const text = f.getDataAsString(); let days = {}, err = '';
+      try { days = parseSalesCsv_(text, fallback, tz); } catch (e) { err = String(e.message || e); }
+      const keys = Object.keys(days).sort();
+      keys.forEach(d => { got[d] = Object.assign(got[d] || {}, days[d], { from: subject + ' · ' + f.getName(), id }); });
+      const res = err ? 'Couldn\'t read it: ' + err : keys.length ? 'Imported ' + keys.map(d => d + (days[d].net != null ? ' (net $' + days[d].net.toFixed(2) + ')' : ' (gross $' + days[d].gross.toFixed(2) + ')')).join(', ')
+        : 'No net or gross sales found – kept the report here so the import can be adjusted';
+      out.lines.push(f.getName() + ': ' + res + '.');
+      logRows.push([when, subject, f.getName(), res, text.slice(0, 45000), id]);
+    });
+    seen[id] = 1;
+  }));
+  if (logRows.length) log.getRange(log.getLastRow() + 1, 1, logRows.length, logRows[0].length).setValues(logRows);
+  const dates = Object.keys(got);
+  if (dates.length) {
+    const v = vals_(sales), at = {}; v.forEach((r, i) => { const d = salesDate_(r[0], tz); if (d) at[d] = i + 2; });
+    dates.sort().forEach(d => {
+      const x = got[d], row = [d].concat(SALES_COLS_.map(k => x[k] == null ? '' : Math.round(x[k] * 100) / 100), x.from, new Date(), x.id);
+      if (at[d]) sales.getRange(at[d], 1, 1, row.length).setValues([row]);
+      else { sales.appendRow(row); at[d] = sales.getLastRow(); }
+    });
+    sales.getRange(2, 1, Math.max(1, sales.getLastRow() - 1), 1).setNumberFormat('@');
+    dirty_(['Sales']);
+  }
+  return out;
+}
+/** Sales for the last 35 days with labor cost for the same days (hours × wage + Labor cost extra), for managers. */
+function salesFor_(ss, users, today, tz) {
+  const rows = rv_(ss, 'Sales'), from = addDays_(today, -35), days = {};
+  rows.forEach(r => { const d = salesDate_(r[0], tz); if (!d || d < from || d >= today) return;
+    const x = { date: d }; SALES_COLS_.forEach((k, i) => { const n = salesNum_(r[i + 1]); if (n !== null) x[k] = n; }); days[d] = x; });
+  const list = Object.keys(days).sort().map(d => days[d]);
+  if (!list.length) return { days: [], search: !!setting_(ss, 'Sales report search') };
+  const wage = {}; users.forEach(r => { wage[String(r[0]).trim()] = Number(r[10]) || 0; });
+  const extra = 1 + (Number(setting_(ss, 'Labor cost extra (%)')) || 0) / 100, labor = {}, hours = {};
+  rv_(ss, 'Time clock').forEach(r => {
+    if (!r[1] || !r[3] || !r[4]) return;
+    const d = ymd_(r[2] || r[3], tz); if (!days[d]) return;
+    const h = Math.max(0, toMs_(r[4]) - toMs_(r[3])) / 36e5; if (h > 16) return;
+    hours[d] = (hours[d] || 0) + h; labor[d] = (labor[d] || 0) + h * (wage[String(r[1]).trim()] || 0) * extra;
+  });
+  list.forEach(x => { x.labor = Math.round((labor[x.date] || 0) * 100) / 100; x.hours = Math.round((hours[x.date] || 0) * 10) / 10; });
+  return { days: list, search: true };
+}

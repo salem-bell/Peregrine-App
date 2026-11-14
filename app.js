@@ -552,6 +552,25 @@ function laborCard(){
     ${rowBtn(`data-tsday="${T()}"`, '<div class="txt"><b>Labor by day</b><div class="sub">Yesterday, tomorrow, any week</div></div><span>›</span>')}</div>
   <p class="sub">Estimate: hours × wage${k > 1 ? ' + ' + Math.round((k - 1) * 100) + '% extra' : ''}, no overtime. Payroll decides.${miss ? ` ${M ? 'No wage set for ' + F.missing.map(first).map(esc).join(', ') + '.' : miss + (miss > 1 ? ' people have' : ' person has') + ' no wage set, so the total is low.'}` : ''}</p>`;
 }
+/** Sales vs labor (managers): yesterday's SkyTab numbers from the daily Lighthouse email, with labor cost for the same day. */
+function salesCard(){
+  const S = data.sales; if (!S || !mgr()) return '';
+  const days = S.days || [];
+  if (!days.length) return S.search ? `<h2>Sales</h2><div class="card"><div class="empty">No SkyTab sales yet. Once the daily report email from Lighthouse arrives (it's checked every hour), yesterday's sales and labor % show here.</div></div>` : '';
+  const pct = x => x.net > 0 && x.labor ? Math.round(x.labor / x.net * 1000) / 10 + '%' : '–';
+  const last = days[days.length - 1], wk = days.filter(x => x.date > plus(last.date, -7)), prev = days.find(x => x.date === plus(last.date, -7));
+  const sum = (l, k) => l.reduce((n, x) => n + (Number(x[k]) || 0), 0), wn = sum(wk, 'net'), wl = sum(wk, 'labor');
+  const avg = last.checks ? last.net / last.checks : 0;
+  const vs = prev && prev.net ? Math.round((last.net - prev.net) / prev.net * 100) : null;
+  return `<h2>Sales</h2><div class="card laborcard">
+    <div class="row lc-top"><div class="lc-stat"><b>${money(last.net || last.gross || 0)}</b><span class="sub">${esc(dayName(last.date))} net</span></div>
+      <div class="lc-stat"><b>${pct(last)}</b><span class="sub">labor (${money(last.labor || 0)})</span></div>
+      <div class="lc-stat"><b>${last.checks ? money(avg, true) : '–'}</b><span class="sub">${last.checks ? last.checks + ' checks' : 'avg check'}</span></div></div>
+    ${vs !== null ? `<div class="row"><div class="txt"><b>vs. last ${pd(last.date).toLocaleDateString([], { weekday: 'long' })}</b><div class="sub">${money(prev.net)} net · ${pct(prev)} labor</div></div><span class="pill${vs < 0 ? ' warn' : ''}">${vs > 0 ? '+' : ''}${vs}%</span></div>` : ''}
+    <div class="row"><div class="txt"><b>Last ${wk.length} day${wk.length > 1 ? 's' : ''}</b><div class="sub">${money(wn)} net · ${money(wl)} labor · ${wn > 0 ? Math.round(wl / wn * 1000) / 10 + '%' : '–'} labor${sum(wk, 'tips') ? ' · ' + money(sum(wk, 'tips')) + ' tips' : ''}</div></div></div>
+    <div class="row"><div class="txt"><div class="sub">${days.slice(-7).reverse().map(x => `${esc(shortDay(x.date))}: ${money(x.net || 0)} · ${pct(x)}`).join('<br>')}</div></div></div></div>
+  <p class="sub">From the SkyTab daily report (comes in each morning). Labor = clocked hours × wage${data.pay && data.pay.extra ? ' + ' + data.pay.extra + '%' : ''}.</p>`;
+}
 function tickLabor(){       // keep the running numbers moving between refreshes, without redrawing the page
   const F = data && data.floor; if (!F || tab !== 'today') return;
   const now = Date.now(), el = document.querySelector('[data-labor]');
@@ -586,7 +605,7 @@ function viewToday(){
   const pushHint = d.push && d.push.ready && !pushOn_() && load('pt-nopush') !== '1' && (pushNeedsHome() || (pushOK() && Notification.permission !== 'denied'))
     ? `<div class="hint"><b>Get notifications on this ${deviceKind()}.</b> ${pushNeedsHome() ? 'On iPhone, add the app to your Home Screen first, then turn them on.' : 'New messages, schedule changes and prep for your shift.'}
       <div class="btns" style="margin-top:8px">${pushNeedsHome() ? '<button class="btn sm go" data-more="push">Show me how</button>' : '<button class="btn sm go" data-pushon>Turn on</button>'}<button class="btn sm" data-nopush>Not now</button></div></div>` : '';
-  return `<h1>${hi}, ${esc(first(d.me.name))}</h1>${pubHint}${pushHint}${remindHint}${clockCard()}${laborCard()}${prepCard}
+  return `<h1>${hi}, ${esc(first(d.me.name))}</h1>${pubHint}${pushHint}${remindHint}${clockCard()}${laborCard()}${salesCard()}${prepCard}
     ${unread.length ? `<div class="card">${unread.slice(0, 3).map(annRow).join('')}</div>` : ''}
     ${chatN ? `<div class="card">${rowBtn('data-tab="chat"', `<div class="txt"><b>${chatN} unread message${chatN > 1 ? 's' : ''}</b></div><span>›</span>`)}</div>` : ''}
     <h2>Working today</h2><div class="card">${today.length ? today.map(s => `<div class="row ${s.name === d.me.name ? 'mine' : ''}"><div class="txt"><b>${esc(s.name)}</b><div class="sub">${t12(s.start)}–${t12(s.end)}${s.position ? ' · ' + esc(s.position) : ''}</div></div>${mgr() ? clockState(s) : ''}</div>`).join('') : '<div class="empty">Nobody scheduled today.</div>'}</div>
