@@ -15,7 +15,7 @@ const LOCATIONS = [
   { key: 'westcliffe', space: 'westcliffe', name: 'Westcliffe', tz: 'America/Denver',
     api: 'https://script.google.com/macros/s/AKfycbzquvYZLp2-oRIXMbMFxbCbuSLqeEixgEzf7jAKgA0SyJvFX34nSKwBtPtkQ7hk7K3vPQ/exec' },
 ];
-const VERSION = '0.1.2';
+const VERSION = '0.1.3';
 const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';');
 
 /* ============================================================
@@ -58,7 +58,7 @@ async function sheetSignIn(env, loc, name, code, steps) {
 }
 function page(title, body, status = 200, headers) {
   const h = headers || new Headers();
-  h.set('content-type', 'text/html; charset=utf-8'); h.set('x-frame-options', 'DENY'); h.set('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'");
+  h.set('content-type', 'text/html; charset=utf-8'); h.set('x-frame-options', 'DENY'); h.set('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://claude.ai https://*.claude.ai https://claude.com https://*.claude.com; frame-ancestors 'none'");
   return new Response(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title>
 <style>body{font:16px/1.45 -apple-system,system-ui,sans-serif;background:#f6f3ee;color:#222;margin:0;padding:24px}main{max-width:420px;margin:0 auto;background:#fff;border-radius:14px;padding:22px;box-shadow:0 1px 6px rgba(0,0,0,.08)}
 h1{font-size:20px;margin:0 0 6px}p{margin:8px 0}.muted{color:#666;font-size:14px}.err{background:#fde8e8;color:#8a1c1c;padding:10px;border-radius:8px}fieldset{border:1px solid #e3ddd3;border-radius:10px;margin:14px 0;padding:10px 12px}
