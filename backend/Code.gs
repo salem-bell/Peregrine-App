@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '4.92';
+const VERSION = '4.93';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Morning of', 'Morning and before', 'Off'];
 
@@ -422,7 +422,7 @@ function state_(ss, me, slim, have) {
   if (isMgr && rv_(ss, 'Users').some(r => String(r[0]).trim() && (!r[6] || !/^\d{4}$/.test(String(r[2]))))) { fixUsers_(ss, false); dirty_('Users'); }
   const users = rv_(ss, 'Users').filter(r => String(r[0]).trim());
   const active = users.filter(r => truthy_(r[3])).map(r => String(r[0]));
-  const out = { ok: true, version: VERSION, today, space: space_(ss), updated: new Date().toISOString(), edge: dataLive_(ss) ? setting_(ss, 'Data service address').replace(/\/+$/, '') : '', name: setting_(ss, 'Shop name') || 'Team', me: { name: me.name, role: me.role, id: me.id, email: String(users.find(r => String(r[6]) === me.id)[5] || ''), reminders: remindMode_(ss, users.find(r => String(r[6]) === me.id)), remind: (P => ({ night: P.night, morning: P.morning, before: P.before }))(pushPrefs_(users.find(r => String(r[6]) === me.id))), cal: calKey_(users.find(r => String(r[6]) === me.id)) },
+  const out = { ok: true, version: VERSION, today, space: space_(ss), updated: new Date().toISOString(), edge: dataLive_(ss) ? setting_(ss, 'Data service address').replace(/\/+$/, '') : '', name: setting_(ss, 'Shop name') || 'Team', me: { name: me.name, role: me.role, id: me.id, email: String(users.find(r => String(r[6]) === me.id)[5] || ''), reminders: remindMode_(ss, users.find(r => String(r[6]) === me.id)), remind: (P => ({ night: P.night, morning: P.morning, before: P.before }))(pushPrefs_(users.find(r => String(r[6]) === me.id))), pins: pushPrefs_(users.find(r => String(r[6]) === me.id)).pins, cal: calKey_(users.find(r => String(r[6]) === me.id)) },
     reminders: { on: !/^off$/i.test(setting_(ss, 'Shift reminder emails')), by: remindBy_(ss), night: setting_(ss, 'Night-before reminder at') || '19:00', hours: Number(setting_(ss, 'Hours-before reminder')) || 2 }, team: active,
     people: users.filter(r => truthy_(r[3]) && r[6]).map(r => ({ id: String(r[6]), name: String(r[0]), role: role_(r[1]), onSchedule: onSched_(r), order: Number(r[12]) || 0 })) };
   out.active = activeMap_(ss, users, me);
@@ -1026,6 +1026,14 @@ function act_(ss, me, p, touched) {
       sh.getRange(i + 2, 14).setValue(prefsCell_(P));
       return;
     }
+    case 'pinChat': {                                 // pin a conversation to the top of your Messages list (up to 10)
+      const sh = tab('Users'), v = vals_(sh), i = v.findIndex(r => String(r[6]) === me.id); if (i < 0) return;
+      const id = String(p.id || ''); if (!/^[\w-]{1,80}$/.test(id)) throw new Error('Which chat?');
+      const P = pushPrefs_(v[i]); P.pins = P.pins.filter(x => x !== id);
+      if (p.on === '1') { if (P.pins.length >= 10) throw new Error('You can pin up to 10 chats'); P.pins.unshift(id); }
+      sh.getRange(i + 2, 14).setValue(prefsCell_(P));
+      return { pins: P.pins };
+    }
     case 'pushTest': {
       SpreadsheetApp.flush();
       return push_(ss, [{ uid: me.id, kind: 'test', title: 'Notifications are on', body: 'This is how Peregrine Team messages will show up.', url: '?go=more:push', tag: 'test' }]);
@@ -1440,16 +1448,17 @@ function sendShiftReminders() {
 function remindBy_(ss) { const v = setting_(ss, 'Shift reminders by'); return /^e?mail/i.test(v) ? 'email' : /push/i.test(v) && /mail/i.test(v) ? (/\bor\b|if/i.test(v) ? 'pushmail' : 'both') : 'push'; }
 /* ----- push notifications: the Sheet decides who gets what; the Cloudflare Worker does the sending ----- */
 function pushPrefs_(r) {
-  const P = { msg: 'all', schedule: true, prep: true, remind: true, news: true, active: true, night: '', before: 0, morning: '' };
+  const P = { msg: 'all', schedule: true, prep: true, remind: true, news: true, active: true, night: '', before: 0, morning: '', pins: [] };
   String(r && r[13] || '').split(';').forEach(kv => { const [k, v] = kv.split('=');
     if (k === 'msg' && /^(all|direct|off)$/.test(v)) P.msg = v;
     else if ((k === 'night' || k === 'morning') && /^\d\d:\d\d$/.test(v)) P[k] = v;              // this person's own reminder times
     else if (k === 'before' && Number(v) > 0) P.before = Math.min(720, Number(v));             // minutes before a shift
+    else if (k === 'pins' && v) P.pins = String(v).split(',').filter(x => /^[\w-]{1,80}$/.test(x)).slice(0, 10);   // chats pinned to the top
     else if (k in P && typeof P[k] === 'boolean') P[k] = v === '1'; });
   return P;
 }
 /** The Notifications column, written back with everything in it (so saving one part never drops another). */
-function prefsCell_(P) { return 'msg=' + P.msg + ';' + ['schedule', 'prep', 'remind', 'news', 'active'].map(k => k + '=' + (P[k] ? 1 : 0)).join(';') + (P.night ? ';night=' + P.night : '') + (P.morning ? ';morning=' + P.morning : '') + (P.before ? ';before=' + P.before : ''); }
+function prefsCell_(P) { return 'msg=' + P.msg + ';' + ['schedule', 'prep', 'remind', 'news', 'active'].map(k => k + '=' + (P[k] ? 1 : 0)).join(';') + (P.night ? ';night=' + P.night : '') + (P.morning ? ';morning=' + P.morning : '') + (P.before ? ';before=' + P.before : '') + (P.pins && P.pins.length ? ';pins=' + P.pins.join(',') : ''); }
 /** When this person is reminded: their own choices, else the shop's (Settings). */
 function remindTimes_(ss, u, tz) {
   const P = pushPrefs_(u), shopNight = /^\d{1,2}:\d{2}$/.test(setting_(ss, 'Night-before reminder at')) ? hhmm_(setting_(ss, 'Night-before reminder at'), tz) : '19:00';

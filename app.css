@@ -382,3 +382,6 @@ html,body{overscroll-behavior-y:contain}
 .trow{align-items:flex-start;gap:12px} .tchk{all:unset;cursor:pointer;flex:none;width:26px;height:26px;border-radius:7px;border:2px solid var(--line);display:grid;place-items:center;font-weight:700;color:#fff;margin-top:1px}
 .trow.on .tchk{background:var(--teal);border-color:var(--teal)} .tby{color:var(--teal)} .trow .lnk{flex:none;align-self:center}
 [data-trainother][hidden]{display:none!important}
+/* pinned chats */
+.cpin{font-size:.72rem;margin-left:4px;flex:none;opacity:.85}
+.chatbar .pinbtn{flex:none;font-size:1.05rem;filter:grayscale(1);opacity:.45} .chatbar .pinbtn.on{filter:none;opacity:1}

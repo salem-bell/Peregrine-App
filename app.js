@@ -970,10 +970,11 @@ function fmtMsg(text){
 const SVG_EDIT = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>';
 function viewChat(){
   if (chat.open) return viewConversation();
-  const ch = (data.channels || []).slice().sort((a, b) => String((b.last || {}).at || '').localeCompare(String((a.last || {}).at || '')) || (a.kind === 'channel' ? -1 : 1));
+  const pins = myPins(), pinAt = c => pins.indexOf(c.id);
+  const ch = (data.channels || []).slice().sort((a, b) => (pinAt(a) < 0) - (pinAt(b) < 0) || (pinAt(a) >= 0 && pinAt(b) >= 0 ? pinAt(a) - pinAt(b) : 0) || String((b.last || {}).at || '').localeCompare(String((a.last || {}).at || '')) || (a.kind === 'channel' ? -1 : 1));
   const row = c => { const l = c.last, mine = l && first(l.from) === first(data.me.name) && l.from === data.me.name;
     const pre = !l ? (c.kind === 'group' ? esc(c.members.join(', ')) : 'No messages yet') : (mine ? 'You: ' : c.kind === 'dm' ? '' : esc(first(l.from)) + ': ') + esc(l.text);
-    return `<button class="crow ${c.unread ? 'unread' : ''}" data-openchat="${esc(c.id)}">${avatar(c)}<span class="cbody"><span class="ctop"><b>${esc(c.name)}</b><span class="cwhen">${l ? shortWhen(l.at) : ''}</span></span><span class="cbot"><span class="cpre">${pre}</span>${c.unread ? `<span class="cn">${c.unread > 99 ? '99+' : c.unread}</span>` : ''}</span></span></button>`; };
+    return `<button class="crow ${c.unread ? 'unread' : ''}" data-openchat="${esc(c.id)}">${avatar(c)}<span class="cbody"><span class="ctop"><b>${esc(c.name)}</b>${pinAt(c) >= 0 ? '<span class="cpin" aria-label="Pinned">📌</span>' : ''}<span class="cwhen">${l ? shortWhen(l.at) : ''}</span></span><span class="cbot"><span class="cpre">${pre}</span>${c.unread ? `<span class="cn">${c.unread > 99 ? '99+' : c.unread}</span>` : ''}</span></span></button>`; };
   const q = chat.q || '', searching = v3() && q.trim().length >= 2;
   const hl = t => { const h = esc(t), i = h.toLowerCase().indexOf(esc(q.trim()).toLowerCase()); return i < 0 ? h : h.slice(0, i) + '<mark>' + h.slice(i, i + esc(q.trim()).length) + '</mark>' + h.slice(i + esc(q.trim()).length); };
   const res = r => `<button class="crow" data-openfind="${esc(r.channel)}|${esc(r.id)}">${avatar({ id: r.channel, name: r.name, kind: r.kind })}<span class="cbody"><span class="ctop"><b>${esc(r.kind === 'dm' ? r.name : r.name)}</b><span class="cwhen">${shortWhen(r.at)}</span></span><span class="cpre wrap"><span class="sub">${esc(first(r.from))}:</span> ${hl(r.text)}</span></span></button>`;
@@ -984,6 +985,7 @@ function viewChat(){
     ${v3() ? `<div class="csearch"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><input type="search" data-csearch placeholder="Search messages" value="${esc(q)}" aria-label="Search messages" autocomplete="off">${q ? '<button class="cx" data-clearsearch aria-label="Clear search">×</button>' : ''}</div>` : ''}
     <div class="clist">${body}</div>`;
 }
+const myPins = () => (data && data.me && Array.isArray(data.me.pins)) ? data.me.pins : [];
 function convName(){ const c = (data.channels || []).find(x => x.id === chat.open); if (c) return c.name; const other = chat.open.split('-').slice(1).find(x => x !== data.meId), p = (data.people || []).find(x => x.id === other); return p ? p.name : chat.dmName || 'Message'; }
 function convSub(c){ if (!c) return ''; if (c.kind === 'channel') return c.who === 'Everyone' ? '' : c.who; if (c.kind === 'group') { const on = (c.memberIds || []).filter(isActive).map(id => first(((data.people || []).find(p => p.id === id) || {}).name)); return c.members.map(first).join(', ') + (on.length ? ' · ' + on.join(', ') + ' active now' : ''); } return activeLabel(otherId(c)); }
 function viewConversation(){
@@ -1015,6 +1017,7 @@ function viewConversation(){
   }).join('');
   return `<div class="convo"><div class="chatbar"><button class="iconbtn back" data-closechat aria-label="Back"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
       <div class="who">${avatar(c, 32)}<div class="wtxt"><b>${esc(convName())}</b>${convSub(c) ? `<span>${esc(convSub(c))}</span>` : ''}</div></div>
+      ${chat.open ? `<button class="iconbtn pinbtn ${myPins().indexOf(chat.open) >= 0 ? 'on' : ''}" data-pinchat="${esc(chat.open)}" aria-pressed="${myPins().indexOf(chat.open) >= 0}" aria-label="${myPins().indexOf(chat.open) >= 0 ? 'Unpin chat' : 'Pin chat to the top'}" title="${myPins().indexOf(chat.open) >= 0 ? 'Unpin' : 'Pin to the top'}">📌</button>` : ''}
       ${canEditChat() ? '<button class="lnk edit" data-editchat>Edit</button>' : '<span class="edit"></span>'}</div>
     <div class="msgs" id="msgs">${body || `<div class="hello">${avatar(c, 64)}<b>${esc(convName())}</b><span>No messages yet. Say hello 👋</span></div>`}</div>
     <div class="mentbox" id="ment" hidden></div>
@@ -1794,6 +1797,10 @@ document.addEventListener('click', async e => {
   if (d.read){ const a = data.announcements.find(x => x.id === d.read); if (a) a.read = true; render(); act('read', { id: d.read }); return; }
   if (d.unann){ if (!confirm('Remove this announcement for everyone?')) return; data.announcements = data.announcements.filter(x => x.id !== d.unann); render(); act('unannounce', { id: d.unann }); return; }
   if (d.decide){ const note = d.ok === '1' ? '' : (prompt('Reason (optional) – they will see it') || ''); act('decide', { id: d.decide, approve: d.ok, note }).then(r => { if (r) toast(d.ok === '1' ? 'Approved' : 'Denied'); }); return; }
+  if (d.pinchat){ const id = d.pinchat, on = myPins().indexOf(id) < 0;
+    if (on && myPins().length >= 10){ toast('You can pin up to 10 chats'); return; }
+    data.me.pins = on ? [id].concat(myPins()) : myPins().filter(x => x !== id); render();
+    act('pinChat', { id, on: on ? '1' : '0' }).then(r => { if (r) toast(on ? 'Pinned to the top of Messages' : 'Unpinned'); }); return; }
   if (d.cancelreq){ const q = (data.requests || []).find(x => x.id === d.cancelreq); if (!q) return;
     if (q.status === 'Approved' && !confirm('Cancel ' + (q.from === data.me.name ? 'your' : q.from + '\'s') + ' approved time off (' + reqWhen(q) + ')?')) return;
     q.status = 'Cancelled'; render(); act('cancelRequest', { id: q.id }).then(r => { if (r) toast(q.from === data.me.name ? 'Cancelled' : 'Removed'); }); return; }
