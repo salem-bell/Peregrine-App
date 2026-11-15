@@ -2133,12 +2133,13 @@ function importSales_(ss) {
   const seen = {}; vals_(log).forEach(r => { seen[String(r[5])] = 1; });
   const out = { found: 0, lines: [], query: query || '(off – reports come from the Peregrine inbox relay)' }, logRows = [], got = {};
   // Reports the Peregrine inbox relay dropped in (Sales import rows with a report but no Result yet)
-  vals_(log).forEach((r, i) => {
-    if (String(r[3]).trim() || !String(r[4]).trim()) return;
+  const pend = vals_(log).map((r, i) => ({ r, i })).filter(x => !String(x.r[3]).trim() && String(x.r[4]).trim());
+  pend.sort((a, b) => (toMs_(a.r[0]) || 0) - (toMs_(b.r[0]) || 0) || a.i - b.i);   // oldest first, so the latest report for a day wins
+  pend.forEach(({ r, i }) => {
     const when = r[0] instanceof Date ? r[0] : new Date(toMs_(r[0]) || Date.now()), fallback = addDays_(Utilities.formatDate(when, tz, 'yyyy-MM-dd'), -1);
     let days = {}, err = ''; try { days = parseSalesCsv_(String(r[4]), fallback, tz); } catch (e) { err = String(e.message || e); }
     const keys = Object.keys(days).sort(), from = String(r[1] || 'Peregrine inbox') + ' · ' + String(r[2] || '');
-    keys.forEach(d => { got[d] = Object.assign(got[d] || {}, days[d], { from, id: String(r[5] || '') }); });
+    keys.forEach(d => { got[d] = Object.assign({}, days[d], { from, id: String(r[5] || '') }); });   // a newer report replaces, never merges
     const res = err ? 'Couldn\'t read it: ' + err : keys.length ? 'Imported ' + keys.map(d => d + (days[d].net != null ? ' (net $' + days[d].net.toFixed(2) + ')' : ' (gross $' + days[d].gross.toFixed(2) + ')')).join(', ')
       : 'No net or gross sales found – kept the report here so the import can be adjusted';
     log.getRange(i + 2, 4).setValue(res); out.found++; out.lines.push(String(r[2] || 'Report') + ': ' + res + '.');
@@ -2153,7 +2154,7 @@ function importSales_(ss) {
       const text = f.getDataAsString(); let days = {}, err = '';
       try { days = parseSalesCsv_(text, fallback, tz); } catch (e) { err = String(e.message || e); }
       const keys = Object.keys(days).sort();
-      keys.forEach(d => { got[d] = Object.assign(got[d] || {}, days[d], { from: subject + ' · ' + f.getName(), id }); });
+      keys.forEach(d => { if (!got[d] || !got[d].at || got[d].at <= when.getTime()) got[d] = Object.assign({}, days[d], { from: subject + ' · ' + f.getName(), id, at: when.getTime() }); });
       const res = err ? 'Couldn\'t read it: ' + err : keys.length ? 'Imported ' + keys.map(d => d + (days[d].net != null ? ' (net $' + days[d].net.toFixed(2) + ')' : ' (gross $' + days[d].gross.toFixed(2) + ')')).join(', ')
         : 'No net or gross sales found – kept the report here so the import can be adjusted';
       out.lines.push(f.getName() + ': ' + res + '.');
