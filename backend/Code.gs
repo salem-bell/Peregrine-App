@@ -82,7 +82,7 @@ const SETTINGS = [
   ['Chat service secret',          '',                          'Must match SECRET_PEREGRINE in the team-chat Worker. Don\'t share it.'],
   ['Push public key',              '',                          'Must match VAPID_PUBLIC in the Worker.'],
   ['Delete chat photos after (days)', '60',                     'Photos sent in Messages are deleted from Drive after this many days. The message stays, marked "Photo expired".'],
-  ['Sales report search',          '',                          'The Gmail search that finds this shop\'s daily SkyTab sales report (Lighthouse › Reports › email this report: Daily, Last Day, CSV, sent to the Google account that owns this sheet), e.g. has:attachment newer_than:3d (lighthouse OR skytab). Checked every hour; each email is imported once. Blank = off – keep it blank in a shop whose report isn\'t in this Gmail.'],
+  ['Sales report search',          '',                          'The Gmail search that finds this shop\'s daily SkyTab sales report (Lighthouse › Reports › email this report: Daily, Last Day, CSV, sent to the Google account that owns this sheet), e.g. has:attachment newer_than:3d (lighthouse OR skytab). Checked every 10 minutes; each email is imported once. Blank = off – keep it blank in a shop whose report isn\'t in this Gmail.'],
   ['Training records folder',      '',                          'The Drive folder where finished trainee checklists are filed as Google Docs (Training in the app).'],
   ['Test results sheet',           'https://docs.google.com/spreadsheets/d/1dl8gi2SkPfYOjBzX0syp2WkWssg7t-rpZChpeZNm5QQ/edit', 'The sheet the tests write results to. The app shows each person their own results.'],
 ];
@@ -128,7 +128,7 @@ function setup() {
   ['Checklist log', 'Reads', 'Audit', 'Messages', 'Chat reads', 'Reminder log', 'Push'].forEach(n => { const s = ss.getSheetByName(n); if (s) { move_(ss, n, ss.getSheets().length); s.setTabColor('#bbbbbb'); } });
   const blank = ss.getSheetByName('Sheet1'); if (blank && blank.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(blank);
   if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'sendShiftReminders')) ScriptApp.newTrigger('sendShiftReminders').timeBased().everyMinutes(15).create();
-  if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'importSales')) ScriptApp.newTrigger('importSales').timeBased().everyHours(1).create();
+  salesTrigger_();
   ss.setActiveSheet(ss.getSheetByName('Start Here'));
   SpreadsheetApp.getUi().alert('Set up done', 'Next: add your team on the Users tab, then follow Step 3 on the Start Here tab.', SpreadsheetApp.getUi().ButtonSet.OK);
 }
@@ -2030,7 +2030,7 @@ function moveSecrets_(ss) { SECRET_SETTINGS_.forEach(l => { try { setting_(ss, l
 
 /* ============================================================
    Sales from SkyTab (Shift4) – the daily Lighthouse report email.
-   SkyTab has no self-serve API, so Lighthouse emails a daily CSV to the Google account that owns this sheet; every hour
+   SkyTab has no self-serve API, so Lighthouse emails a daily CSV to the Google account that owns this sheet; every 10 minutes
    this finds new ones (Settings › Sales report search), keeps a copy on the Sales import tab, and writes one row per
    business day on the Sales tab. The app shows managers sales next to labor (labor %). Columns are found by name, so
    a report with extra or reordered columns still imports; anything it can't read is kept on Sales import to fix.
@@ -2083,7 +2083,15 @@ function parseSalesCsv_(text, fallbackDay, tz) {
     const body = rows.slice(hi + 1).filter(r => r.some(c => salesNum_(c) !== null));
     const total = body.find(r => /^(grand\s*)?totals?$/i.test(salesLabel_(r[0])));
     const perDay = dateCol >= 0 ? body.filter(r => salesDate_(r[dateCol], tz)) : [];
-    const use = perDay.length ? perDay : [total || body[body.length - 1]].filter(Boolean);
+    // Item-level report (a row per item, "Name Total" subtotal rows, no grand total): add up the item rows
+    const sub = r => r.some(c => /\btotals?$/i.test(salesLabel_(c)));
+    const items = !perDay.length && !total && head.some(c => /item|ticket|product|menu/i.test(c)) ? body.filter(r => !sub(r)) : [];
+    if (items.length) {
+      const d = reportDay || fallbackDay, x = days[d] || (days[d] = {});
+      Object.keys(col).filter(k => k !== 'checks' && k !== 'guests').forEach(k => { x[k] = items.reduce((a, r) => a + (salesNum_(r[col[k]]) || 0), 0); });
+      const t = head.findIndex(c => /ticket|check|order/i.test(c)); if (t >= 0) x.checks = new Set(items.map(r => r[t]).filter(Boolean)).size;
+    }
+    const use = items.length ? [] : perDay.length ? perDay : [total || body[body.length - 1]].filter(Boolean);
     use.forEach(r => {
       const d = perDay.length ? salesDate_(r[dateCol], tz) : (reportDay || fallbackDay), x = days[d] || (days[d] = {});
       Object.keys(col).forEach(k => { const n = salesNum_(r[col[k]]); if (n !== null) x[k] = (x[k] || 0) + n; });
@@ -2101,13 +2109,21 @@ function parseSalesCsv_(text, fallbackDay, tz) {
   Object.keys(days).forEach(k => { if (days[k].net == null && days[k].gross == null) delete days[k]; });   // a day needs at least a sales figure
   return days;
 }
+/** One importSales trigger, every 10 minutes (replaces the older hourly one). */
+function salesTrigger_() {
+  const t = ScriptApp.getProjectTriggers().filter(x => x.getHandlerFunction() === 'importSales');
+  if (t.length === 1 && PropertiesService.getScriptProperties().getProperty('SALES_EVERY') === '10') return;
+  t.forEach(x => ScriptApp.deleteTrigger(x));
+  ScriptApp.newTrigger('importSales').timeBased().everyMinutes(10).create();
+  PropertiesService.getScriptProperties().setProperty('SALES_EVERY', '10');
+}
 function importSales() { try { return importSales_(SpreadsheetApp.getActive()); } catch (e) { console.warn('sales import: ' + e); } }
 function importSalesNow() {
   const ss = SpreadsheetApp.getActive(), ui = SpreadsheetApp.getUi();
   buildSettings_(ss); buildTab_(ss, 'Sales'); buildTab_(ss, 'Sales import');
-  if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'importSales')) ScriptApp.newTrigger('importSales').timeBased().everyHours(1).create();
+  salesTrigger_();
   const r = importSales_(ss);
-  ui.alert('Sales', r.found ? 'Found ' + r.found + ' new report' + (r.found > 1 ? 's' : '') + '. ' + r.lines.join(' ') : 'No new SkyTab reports yet. The Peregrine inbox relay drops them on the Sales import tab within the hour after the email arrives' + (setting_(ss, 'Sales report search') ? '; this sheet also checks its own Gmail for: ' + r.query : '') + '.', ui.ButtonSet.OK);
+  ui.alert('Sales', r.found ? 'Found ' + r.found + ' new report' + (r.found > 1 ? 's' : '') + '. ' + r.lines.join(' ') : 'No new SkyTab reports yet. The Peregrine inbox relay drops them on the Sales import tab within 10 minutes of the email arriving' + (setting_(ss, 'Sales report search') ? '; this sheet also checks its own Gmail for: ' + r.query : '') + '.', ui.ButtonSet.OK);
 }
 function importSales_(ss) {
   const query = setting_(ss, 'Sales report search');
