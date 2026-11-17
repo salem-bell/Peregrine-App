@@ -1064,7 +1064,7 @@ function viewConversation(){
     const lastR = !next || nextSep || next.fromId !== m.fromId || gap(m, next) > 5;
     const pic = m.photo ? picTag(m) : m.expired ? '<div class="msg exp"><i>Photo expired</i></div>' : '';
     const real = m.id !== 'tmp', acks = m.acks || [];
-    const meta = chat.meta === m.id ? `<div class="meta ${mine ? 'me' : ''}">${timeOf(m.at)}${v3() && real ? ` · <button class="lnk" data-reply="${esc(m.id)}">Reply</button>` : ''}${m.text ? ` · <button class="lnk" data-copymsg="${esc(m.id)}">Copy</button>` : ''}${v3() && real && !mine ? ` · <button class="lnk" data-mack="${esc(m.id)}">${m.ackMine ? 'Remove 👍' : '👍'}</button>` : ''}${mgr() && real ? ` · <button class="lnk" data-delmsg="${esc(m.id)}">Delete</button>` : ''}</div>` : '';
+    const meta = chat.meta === m.id && !chat.sel ? `<div class="meta ${mine ? 'me' : ''}">${timeOf(m.at)}${v3() && real ? ` · <button class="lnk" data-reply="${esc(m.id)}">Reply</button>` : ''}${m.text ? ` · <button class="lnk" data-copymsg="${esc(m.id)}">Copy</button>` : ''}${v3() && real && !mine ? ` · <button class="lnk" data-mack="${esc(m.id)}">${m.ackMine ? 'Remove 👍' : '👍'}</button>` : ''}${mgr() && real ? ` · <button class="lnk" data-delmsg="${esc(m.id)}">Delete</button> · <button class="lnk" data-selmsg="${esc(m.id)}">Select</button>` : ''}</div>` : '';
     const quote = m.reply ? `<button type="button" class="quote" data-jump="${esc(m.reply.id)}"><b>${esc(m.reply.from ? (m.reply.from === data.me.name ? 'You' : first(m.reply.from)) : '')}</b><span>${m.reply.photo && !m.reply.text ? '📷 Photo' : esc(m.reply.text)}</span></button>` : '';
     const ackPill = acks.length ? `<div class="ackrow ${mine ? 'me' : ''}"><button class="ackp ${m.ackMine ? 'mine' : ''}" data-acks="${esc(m.id)}" aria-label="👍 from ${esc(acks.join(', '))}"><i class="thumb">👍</i>${acks.length > 1 ? `<span>${acks.length}</span>` : ''}</button></div>` : '';
     // Under your newest message: Sending… → Sent → Delivered → Seen
@@ -1077,10 +1077,10 @@ function viewConversation(){
     const seen = kind ? `<div class="mstat st-${kind}">${STAT_IC[kind]}<span>${label}</span></div>` : '';
     return (sep ? `<div class="daysep"><b>${dayName(ymdOf(new Date(m.at)))}</b> ${timeOf(m.at)}</div>` : '')
       + (multi && !mine && firstR ? `<div class="from">${esc(first(m.from))}</div>` : '')
-      + `<div class="mrow ${mine ? 'me' : ''} ${lastR ? 'last' : ''}">`
+      + `<div class="mrow ${mine ? 'me' : ''} ${lastR ? 'last' : ''} ${chat.sel && chat.sel.indexOf(m.id) >= 0 ? 'sel' : ''}" ${chat.sel && real ? `data-selrow="${esc(m.id)}"` : ''}>${chat.sel ? `<span class="mchk" aria-hidden="true">${chat.sel.indexOf(m.id) >= 0 ? '✓' : ''}</span>` : ''}`
       + `<div class="bub ${mine ? 'me' : ''} ${firstR || m.reply ? 'first' : ''} ${lastR || acks.length ? 'last' : ''} ${m.photo && !m.reply ? 'photo' : ''} ${!real ? 'tmp' : ''} ${chat.flash === m.id ? 'flash' : ''}" data-bub="${esc(m.id)}" data-mine="${mine ? 1 : 0}">${quote}${pic}${m.text ? `<div class="msg">${fmtMsg(m.text)}</div>` : ''}</div><span class="swipeic" aria-hidden="true">${SVG_REPLY}</span></div>` + ackPill + meta + seen;
   }).join('');
-  return `<div class="convo"><div class="chatbar"><button class="iconbtn back" data-closechat aria-label="Back"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
+  return `<div class="convo ${chat.sel ? 'selecting' : ''}"><div class="chatbar"><button class="iconbtn back" data-closechat aria-label="Back"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
       <div class="who">${avatar(c, 32)}<div class="wtxt"><b>${esc(convName())}</b>${convSub(c) ? `<span>${esc(convSub(c))}</span>` : ''}</div></div>
       ${chat.open ? `<button class="iconbtn pinbtn ${myPins().indexOf(chat.open) >= 0 ? 'on' : ''}" data-pinchat="${esc(chat.open)}" aria-pressed="${myPins().indexOf(chat.open) >= 0}" aria-label="${myPins().indexOf(chat.open) >= 0 ? 'Unpin chat' : 'Pin chat to the top'}" title="${myPins().indexOf(chat.open) >= 0 ? 'Unpin' : 'Pin to the top'}">📌</button>` : ''}
       ${canEditChat() ? '<button class="lnk edit" data-editchat>Edit</button>' : '<span class="edit"></span>'}</div>
@@ -1088,7 +1088,7 @@ function viewConversation(){
     <div class="mentbox" id="ment" hidden></div>
     ${chat.reply ? `<div class="replybar"><span class="ri">${SVG_REPLY}</span><div><b>Replying to ${esc(chat.reply.from === data.me.name ? 'yourself' : first(chat.reply.from))}</b><span>${esc(chat.reply.text || '📷 Photo')}</span></div><button type="button" class="cx" data-unreply aria-label="Cancel reply">×</button></div>` : ''}
     ${chat.photo ? `<div class="pv"><img src="${chat.photo}" alt="Photo to send"><button type="button" class="pvx" data-unphoto aria-label="Remove photo">×</button></div>` : ''}
-    <form class="composer" data-form="send">${Number(data.version) >= 2.7 ? `<label class="picbtn" title="Add a photo" aria-label="Add a photo"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><input type="file" accept="image/*" data-photo hidden onchange="pickPhoto(this)"></label>` : ''}<textarea name="text" rows="1" maxlength="2000" placeholder="${chat.photo ? 'Add a caption' : 'Message'}" aria-label="Message">${esc(chat.compose)}</textarea><button class="send" aria-label="Send" ${chat.sending ? 'disabled' : ''}><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="M5.5 11.5L12 5l6.5 6.5"/></svg></button></form></div>`;
+    ${chat.sel ? `<div class="selbar"><button type="button" class="lnk" data-selcancel>Cancel</button><span class="sr">${chat.sel.length} selected</span><button type="button" class="btn warn" data-seldel ${chat.sel.length ? '' : 'disabled'}>${chat.sel.length ? 'Delete ' + chat.sel.length : 'Tap messages'}</button></div>` : `<form class="composer" data-form="send">${Number(data.version) >= 2.7 ? `<label class="picbtn" title="Add a photo" aria-label="Add a photo"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><input type="file" accept="image/*" data-photo hidden onchange="pickPhoto(this)"></label>` : ''}<textarea name="text" rows="1" maxlength="2000" placeholder="${chat.photo ? 'Add a caption' : 'Message'}" aria-label="Message">${esc(chat.compose)}</textarea><button class="send" aria-label="Send" ${chat.sending ? 'disabled' : ''}><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="M5.5 11.5L12 5l6.5 6.5"/></svg></button></form>`}</div>`;
 }
 function curChat(){ return (data.channels || []).find(x => x.id === chat.open); }
 function canEditChat(){ const c = curChat(); return !!c && Number(data.version) >= 2.9 && (c.kind === 'group' || (c.kind === 'channel' && lead())); }
@@ -1119,7 +1119,16 @@ async function openChat(id, name, text, photo, opt){
   } catch (e) { const m = String(e.message || e); if (/^signin/.test(m)) return signOut(m.replace(/^signin:\s*/, '')); if (text !== undefined) { chat.compose = text; setDraft(id, text); if (photo) chat.photo = photo; if (opt && opt.replyTo && opt.reply) chat.reply = opt.reply; chat.msgs = (chat.msgs || []).filter(x => x.id !== 'tmp'); toast('Not sent: ' + m); render(); } }
   clearTimeout(chat.timer); chat.timer = setTimeout(() => { if (chat.open === id && tab === 'chat' && !document.hidden) openChat(id); }, 7000);
 }
-function stopChat(){ const ta = $('.composer textarea'); if (chat.open && ta) setDraft(chat.open, ta.value); chat.compose = ''; if (LIVE && chat.open) LIVE.send({ t: 'close' }); clearTimeout(chat.timer); chat.open = ''; chat.reply = null; chat.meta = ''; chat.flash = ''; }
+/** Deletes several messages at once (managers): removed on screen straight away, then on the server; anything that fails comes back. */
+async function delMsgs(ids){
+  const ch = chat.open; chat.msgs = (chat.msgs || []).filter(m => ids.indexOf(m.id) < 0); chat.sel = null; render();
+  const res = await Promise.allSettled(ids.map(id => LIVE ? LIVE.ask({ t: 'del', id }) : act('deleteMessage', { id })));
+  const bad = res.filter(r => r.status === 'rejected');
+  if (bad.length) toast(`${bad.length} of ${ids.length} couldn't be deleted: ${String((bad[0].reason || {}).message || bad[0].reason)}`);
+  else toast(ids.length === 1 ? 'Message deleted' : `${ids.length} messages deleted`);
+  if ((bad.length || !LIVE) && chat.open === ch) openChat(ch);
+}
+function stopChat(){ chat.sel = null; const ta = $('.composer textarea'); if (chat.open && ta) setDraft(chat.open, ta.value); chat.compose = ''; if (LIVE && chat.open) LIVE.send({ t: 'close' }); clearTimeout(chat.timer); chat.open = ''; chat.reply = null; chat.meta = ''; chat.flash = ''; }
 function jumpTo(id){ const el = document.querySelector(`[data-bub="${CSS.escape(id)}"]`);
   if (!el){ if (chat.open) openChat(chat.open, null, undefined, undefined, { find: id }); return; }
   chat.flash = id; el.classList.add('flash'); el.scrollIntoView({ block: 'center', behavior: 'smooth' }); setTimeout(() => { if (chat.flash === id) chat.flash = ''; el.classList.remove('flash'); }, 1600); }
@@ -1970,6 +1979,10 @@ document.addEventListener('click', async e => {
   if (d.pushpref){ const P = data.push.prefs = data.push.prefs || {}; const v = d.v; if (d.pushpref === 'msg') P.msg = v; else P[d.pushpref] = v === '1'; render(); act('pushPrefs', { [d.pushpref]: v }); return; }
   if (d.pic){ const m = (chat.msgs || []).find(x => x.id === d.pic), src = (m && m.local) || picCache[d.pic]; if (src) zoomPic(src); else loadPic(d.pic); return; }
   if (d.unphoto !== undefined){ const t = $('.composer textarea'); if (t) chat.compose = t.value; chat.photo = ''; render(); return; }
+  if (d.selmsg){ const ta = $('.composer textarea'); if (ta) chat.compose = ta.value; chat.sel = [d.selmsg]; chat.meta = ''; chat.reply = null; render(); return; }
+  if (d.selcancel !== undefined){ chat.sel = null; render(); return; }
+  if (d.seldel !== undefined){ const ids = (chat.sel || []).slice(); if (!ids.length) return;
+    if (!confirm(ids.length === 1 ? 'Delete this message? It can\'t be undone.' : `Delete these ${ids.length} messages? It can't be undone.`)) return; delMsgs(ids); return; }
   if (d.delmsg){ if (!confirm('Delete this message?')) return; chat.msgs = chat.msgs.filter(m => m.id !== d.delmsg); render(); if (LIVE){ LIVE.ask({ t: 'del', id: d.delmsg }).catch(e => { toast(e.message); openChat(chat.open); }); return; } await act('deleteMessage', { id: d.delmsg }); openChat(chat.open); return; }
   if (d.newcode){ if (!confirm('Give ' + d.name + ' a new code? Their old code stops working and they are signed out everywhere.')) return; showCode[d.newcode] = true; act('newCode', { id: d.newcode }).then(r => { if (r) toast('New code made – tell ' + first(d.name)); }); return; }
   if (d.active){ if (d.to === '0' && !confirm('Turn off ' + d.name + '? They are signed out right away and cannot sign in.')) return; act('setActive', { id: d.active, active: d.to }); return; }
@@ -1993,7 +2006,7 @@ document.addEventListener('input', e => {
 });
 document.addEventListener('change', e => { if (e.target.name === 'day' && e.target.closest('form[data-form=avail],form[data-form=availedit]')){ const f = e.target.closest('form'); f.querySelector('[data-onlydate]').hidden = e.target.value !== 'date'; } });
 let tch = null, noTap = 0;
-document.addEventListener('touchstart', e => { const b = e.target.closest && e.target.closest('[data-bub]'); if (!b || !v3() || b.dataset.bub === 'tmp' || e.touches.length > 1) { tch = null; return; }
+document.addEventListener('touchstart', e => { const b = e.target.closest && e.target.closest('[data-bub]'); if (!b || chat.sel || !v3() || b.dataset.bub === 'tmp' || e.touches.length > 1) { tch = null; return; }
   const t = e.touches[0]; tch = { b, row: b.closest('.mrow'), x: t.clientX, y: t.clientY, dx: 0, h: false };
   if (b.dataset.mine !== '1') tch.lp = setTimeout(() => { if (tch && !tch.h){ noTap = Date.now(); const id = b.dataset.bub; tch = null; toggleAck(id); } }, 450); }, { passive: true });
 document.addEventListener('touchmove', e => { if (!tch) return; const t = e.touches[0], dx = t.clientX - tch.x, dy = t.clientY - tch.y;
@@ -2013,7 +2026,9 @@ document.addEventListener('input', e => { const t = e.target;
     box.hidden = !ppl.length && !team;
     box.innerHTML = (team ? `<button type="button" data-ment="team"><span class="tmav" aria-hidden="true">@</span><span><b>team</b> <small>– everyone in this chat</small></span></button>` : '') + ppl.map(p => `<button type="button" data-ment="${esc(mentionLabel(p))}">${avatar({ id: p.id, name: p.name }, 24)}${esc(p.name)}</button>`).join(''); } });
 document.addEventListener('pointerdown', e => { if (e.target.closest && e.target.closest('#ment')) e.preventDefault(); });
-document.addEventListener('click', e => { if (Date.now() - noTap < 500 && e.target.closest && e.target.closest('[data-bub]')) return; const b = e.target.closest && e.target.closest('[data-bub]'); if (!b || e.target.closest('button, a')) return; chat.meta = chat.meta === b.dataset.bub ? '' : b.dataset.bub; const near = isNearBottom(); render(); if (near) scrollChat(); });
+document.addEventListener('click', e => { if (!chat.sel || !chat.open) return; const r = e.target.closest && e.target.closest('[data-selrow]'); if (!r) return;
+  e.preventDefault(); e.stopPropagation(); const id = r.dataset.selrow, i = chat.sel.indexOf(id); if (i >= 0) chat.sel.splice(i, 1); else chat.sel.push(id); render(); }, true);
+document.addEventListener('click', e => { if (chat.sel) return; if (Date.now() - noTap < 500 && e.target.closest && e.target.closest('[data-bub]')) return; const b = e.target.closest && e.target.closest('[data-bub]'); if (!b || e.target.closest('button, a')) return; chat.meta = chat.meta === b.dataset.bub ? '' : b.dataset.bub; const near = isNearBottom(); render(); if (near) scrollChat(); });
 document.addEventListener('input', e => { const t = e.target; if (t.closest && t.closest('.composer') && t.tagName === 'TEXTAREA'){ setDraft(chat.open, t.value); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 140) + 'px'; } });
 document.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && e.target.closest && e.target.closest('.composer') && !isIOS()){ e.preventDefault(); e.target.closest('form').requestSubmit(); } });
 
