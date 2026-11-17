@@ -29,10 +29,19 @@ async function readTicket(env, space, t) {
   return p;
 }
 
+/** Sends a stored photo or PDF back (R2 when it's switched on, otherwise the space's own database). */
+async function serveAttachment(env, stub, space, { key, file }, cc) {
+  const cache = { 'cache-control': cc, ...CORS };
+  if (file) cache['content-disposition'] = 'inline; filename="' + String(file).replace(/[^\w .()-]/g, '_') + '"; filename*=UTF-8\'\'' + encodeURIComponent(file);
+  if (!env.PHOTOS) { const p = await stub.fetch(new Request('https://do/photoget?key=' + encodeURIComponent(key), { headers: { 'x-space': space } })); return new Response(p.body, { status: p.status, headers: { 'content-type': p.headers.get('content-type') || 'application/json', ...(p.ok ? cache : CORS) } }); }
+  const obj = await env.PHOTOS.get(key);
+  if (!obj) return json({ error: 'That file has expired' }, 404);
+  return new Response(obj.body, { headers: { 'content-type': obj.httpMetadata && obj.httpMetadata.contentType || 'image/jpeg', ...cache } });
+}
 export default {
   async fetch(req, env) {
     if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
-    const url = new URL(req.url), m = url.pathname.match(/^\/s\/(family|peregrine|westcliffe)\/(ws|roster|system|photo|dlv)(?:\/([\w.-]+))?$/);
+    const url = new URL(req.url), m = url.pathname.match(/^\/s\/(family|peregrine|westcliffe)\/(ws|roster|system|photo|dlv|file)(?:\/([\w.-]+))?$/);
     if (url.pathname === '/' || url.pathname === '/health') return json({ ok: true, service: 'team-chat' });
     if (!m) return json({ error: 'not found' }, 404);
     const [, space, what, arg] = m, secret = env[SPACES[space]];
@@ -44,6 +53,14 @@ export default {
       const want = await hmac(secret, body), got = req.headers.get('x-sig') || '';
       if (!same(want, got)) { console.log(JSON.stringify({ refused: what, space, reason: got ? 'signature mismatch (check the sheet\'s Chat service secret)' : 'no signature' })); return json({ error: 'bad signature' }, 401); }
       return stub.fetch(new Request('https://do/' + what, { method: 'POST', body, headers: { 'x-space': space } }));
+    }
+    // a PDF link handed out to someone who can see it: just that one file, for 6 hours, no sign-in needed (so it opens in any viewer)
+    if (what === 'file' && arg) {
+      const e = Number(url.searchParams.get('e')) || 0;
+      if (!(e > Date.now() / 1000) || !same(await hmac(secret, 'file.' + space + '.' + arg + '.' + e), String(url.searchParams.get('s') || ''))) return json({ error: 'That link has expired – open the file from the chat again' }, 403);
+      const r = await stub.fetch(new Request('https://do/filekey?id=' + encodeURIComponent(arg), { headers: { 'x-space': space } }));
+      if (!r.ok) return r;
+      return serveAttachment(env, stub, space, await r.json(), 'private, max-age=21600');
     }
     const who = await readTicket(env, space, url.searchParams.get('t'));
     if (!who) { const t = String(url.searchParams.get('t') || ''); console.log(JSON.stringify({ refused: what, space, ticketLen: t.length, parts: t.split('.').length })); return json({ error: 'expired' }, 401); }
@@ -58,8 +75,10 @@ export default {
     }
     if (what === 'photo' && req.method === 'POST') {           // upload first, then send the message with the returned key
       const type = req.headers.get('content-type') || '';
-      if (!/^image\/(jpeg|png|webp)$/.test(type)) return json({ error: 'That photo couldn\'t be read – try another' }, 400);
-      const bytes = await req.arrayBuffer(); if (bytes.byteLength > (env.PHOTOS ? 5 : 1.9) * 1024 * 1024) return json({ error: 'That photo is too big' }, 413);
+      const pdf = type === 'application/pdf';                     // PDFs ride the same route as photos (up to 10 MB)
+      if (!pdf && !/^image\/(jpeg|png|webp)$/.test(type)) return json({ error: 'That photo couldn\'t be read – try another' }, 400);
+      const bytes = await req.arrayBuffer(); if (bytes.byteLength > (pdf ? 10 : env.PHOTOS ? 5 : 1.9) * 1024 * 1024) return json({ error: pdf ? 'That PDF is too big – 10 MB at most' : 'That photo is too big' }, 413);
+      if (pdf && new TextDecoder().decode(bytes.slice(0, 5)) !== '%PDF-') return json({ error: 'That file isn\'t a PDF' }, 400);
       const key = space + '/' + who.u + '/' + crypto.randomUUID().replace(/-/g, '').slice(0, 20);
       if (env.PHOTOS) await env.PHOTOS.put(key, bytes, { httpMetadata: { contentType: type } });     // R2 when it's switched on
       else { const r = await stub.fetch(new Request('https://do/photoput', { method: 'POST', body: bytes, headers: { ...hdr, 'x-key': key, 'content-type': type } })); if (!r.ok) return r; }
@@ -68,17 +87,19 @@ export default {
     if (what === 'photo' && arg) {                              // a message's photo, only for people who can see that conversation
       const r = await stub.fetch(new Request('https://do/photo?id=' + encodeURIComponent(arg), { headers: hdr }));
       if (!r.ok) return r;
-      const { key } = await r.json(), cache = { 'cache-control': 'private, max-age=31536000, immutable', ...CORS };
-      if (!env.PHOTOS) { const p = await stub.fetch(new Request('https://do/photoget?key=' + encodeURIComponent(key), { headers: hdr })); return new Response(p.body, { status: p.status, headers: { 'content-type': p.headers.get('content-type') || 'application/json', ...(p.ok ? cache : CORS) } }); }
-      const obj = await env.PHOTOS.get(key);
-      if (!obj) return json({ error: 'That photo has expired' }, 404);
-      return new Response(obj.body, { headers: { 'content-type': obj.httpMetadata && obj.httpMetadata.contentType || 'image/jpeg', ...cache } });
+      const att = await r.json();
+      if (url.searchParams.get('link')) {                        // a 6-hour link to just this file (PDFs open in the phone's own viewer)
+        const e = Math.floor(Date.now() / 1000) + 21600, s = await hmac(secret, 'file.' + space + '.' + arg + '.' + e);
+        return json({ ok: true, exp: e, url: url.origin + '/s/' + space + '/file/' + encodeURIComponent(arg) + '?e=' + e + '&s=' + s });
+      }
+      return serveAttachment(env, stub, space, att, 'private, max-age=31536000, immutable');
     }
     return json({ error: 'not found' }, 404);
   }
 };
 
 const MAX_HISTORY = 150;
+const PART = 1572864;                                        // 1.5 MB: SQLite rows top out at 2 MB
 export class Space {
   constructor(ctx, env) {
     this.ctx = ctx; this.env = env; this.sql = ctx.storage.sql;
@@ -91,6 +112,7 @@ export class Space {
       CREATE TABLE IF NOT EXISTS reads (uid TEXT, ch TEXT, at INTEGER, PRIMARY KEY (uid, ch));
       CREATE TABLE IF NOT EXISTS dlv (uid TEXT, ch TEXT, at INTEGER, PRIMARY KEY (uid, ch));
       CREATE TABLE IF NOT EXISTS photos (key TEXT PRIMARY KEY, type TEXT, data BLOB, at INTEGER);`);
+    if (!this.one("SELECT 1 AS x FROM pragma_table_info('messages') WHERE name = 'file'")) this.sql.exec('ALTER TABLE messages ADD COLUMN file TEXT');   // PDFs: the file's name
   }
   /* ---------- small helpers ---------- */
   q(sql, ...a) { return [...this.sql.exec(sql, ...a)]; }
@@ -120,7 +142,7 @@ export class Space {
   channelsFor(me) {
     const out = [], names = {}; this.q('SELECT id, name FROM people').forEach(p => { names[p.id] = p.name; });
     const unread = {}; this.q(`SELECT m.ch AS ch, COUNT(*) AS n FROM messages m LEFT JOIN reads r ON r.uid = ? AND r.ch = m.ch WHERE m.uid != ? AND m.at > COALESCE(r.at, 0) GROUP BY m.ch`, me.id, me.id).forEach(r => { unread[r.ch] = r.n; });
-    const last = ch => { const m = this.one('SELECT name, text, photo, at FROM messages WHERE ch = ? ORDER BY at DESC LIMIT 1', ch); return m ? { from: m.name, text: String(m.text || '').slice(0, 80) || (m.photo && m.photo !== 'expired' ? '📷 Photo' : ''), at: new Date(m.at).toISOString() } : null; };
+    const last = ch => { const m = this.one('SELECT name, text, photo, file, at FROM messages WHERE ch = ? ORDER BY at DESC LIMIT 1', ch); return m ? { from: m.name, text: String(m.text || '').slice(0, 80) || (m.file ? '📄 ' + m.file : m.photo && m.photo !== 'expired' ? '📷 Photo' : ''), at: new Date(m.at).toISOString() } : null; };
     this.q('SELECT * FROM channels ORDER BY created').forEach(c => {
       if (!this.canSee(me, c.id)) return;
       const ids = String(c.members || '').split(',').filter(Boolean);
@@ -135,8 +157,8 @@ export class Space {
   shape(m, names) {
     const acks = this.q('SELECT uid FROM acks WHERE mid = ?', m.id).map(r => r.uid).filter(u => names[u]);
     let reply = null;
-    if (m.reply) { const o = this.one('SELECT id, name, text, photo FROM messages WHERE id = ?', m.reply); reply = o ? { id: o.id, from: o.name, text: String(o.text || '').slice(0, 90), photo: o.photo && o.photo !== 'expired' ? 1 : 0 } : { id: m.reply, from: '', text: 'Older message', photo: 0 }; }
-    return { id: m.id, fromId: m.uid, from: m.name, at: new Date(m.at).toISOString(), text: m.text || '', photo: m.photo && m.photo !== 'expired' ? 1 : 0, expired: m.photo === 'expired' ? 1 : 0, reply, acks: acks.map(u => names[u]), ackIds: acks };
+    if (m.reply) { const o = this.one('SELECT id, name, text, photo, file FROM messages WHERE id = ?', m.reply); reply = o ? { id: o.id, from: o.name, text: String(o.text || '').slice(0, 90) || (o.file ? '📄 ' + o.file : ''), photo: o.photo && o.photo !== 'expired' && !o.file ? 1 : 0 } : { id: m.reply, from: '', text: 'Older message', photo: 0 }; }
+    return { id: m.id, fromId: m.uid, from: m.name, at: new Date(m.at).toISOString(), text: m.text || '', photo: m.photo && m.photo !== 'expired' && !m.file ? 1 : 0, ...(m.file ? { file: m.file } : {}), expired: m.photo === 'expired' ? 1 : 0, reply, acks: acks.map(u => names[u]), ackIds: acks };
   }
   names() { const n = {}; this.q('SELECT id, name FROM people').forEach(p => { n[p.id] = p.name; }); return n; }
   history(me, ch, find) {
@@ -170,13 +192,18 @@ export class Space {
     const url = new URL(req.url);
     if (url.pathname === '/roster') return this.roster(await req.json());
     if (url.pathname === '/system') return this.system(await req.json());
+    if (url.pathname === '/filekey') {                          // only reached after the Worker checked a signed file link
+      const m = this.one('SELECT photo, file FROM messages WHERE id = ?', url.searchParams.get('id'));
+      if (!m || !m.photo || m.photo === 'expired') return json({ error: 'That file is gone or has expired' }, 404);
+      return json({ key: m.photo, file: m.file || '' });
+    }
     const who = JSON.parse(req.headers.get('x-who') || '{}');
     if (url.pathname === '/photo') {
-      const me = this.me(who), m = this.one('SELECT ch, photo FROM messages WHERE id = ?', url.searchParams.get('id'));
+      const me = this.me(who), m = this.one('SELECT ch, photo, file FROM messages WHERE id = ?', url.searchParams.get('id'));
       if (!m) return json({ error: 'That message is gone' }, 404);
       if (!this.canSee(me, m.ch)) return json({ error: 'You can\'t see that conversation' }, 403);
       if (!m.photo || m.photo === 'expired') return json({ error: 'That photo has expired' }, 404);
-      return json({ key: m.photo });
+      return json({ key: m.photo, file: m.file || '' });
     }
     if (url.pathname === '/dlv') {
       const { ch } = await req.json(), me = this.me(who);
@@ -185,12 +212,17 @@ export class Space {
     }
     if (url.pathname === '/photoput') {                         // photos kept in this database (when R2 isn't switched on)
       const key = req.headers.get('x-key') || ''; if (key.indexOf(this.space() + '/' + who.u + '/') !== 0) return json({ error: 'bad photo key' }, 400);
-      this.sql.exec('INSERT OR REPLACE INTO photos (key, type, data, at) VALUES (?, ?, ?, ?)', key, req.headers.get('content-type') || 'image/jpeg', await req.arrayBuffer(), Date.now());
+      const buf = await req.arrayBuffer(), type = req.headers.get('content-type') || 'image/jpeg', at = Date.now();
+      for (let i = 0, o = 0; o < buf.byteLength || i === 0; i++, o += PART)    // big files (PDFs) are kept in 1.5 MB pieces: key, key~1, key~2…
+        this.sql.exec('INSERT OR REPLACE INTO photos (key, type, data, at) VALUES (?, ?, ?, ?)', i ? key + '~' + i : key, type, buf.slice(o, o + PART), at);
       return json({ ok: true });
     }
     if (url.pathname === '/photoget') {
-      const p = this.one('SELECT type, data FROM photos WHERE key = ?', url.searchParams.get('key') || '');
-      return p ? new Response(p.data, { headers: { 'content-type': p.type } }) : json({ error: 'That photo has expired' }, 404);
+      const k = url.searchParams.get('key') || '', p = this.one('SELECT type, data FROM photos WHERE key = ?', k);
+      if (!p) return json({ error: 'That photo has expired' }, 404);
+      const more = this.q('SELECT key, data FROM photos WHERE key > ? AND key < ?', k + '~', k + '~~').sort((a, b) => Number(a.key.split('~').pop()) - Number(b.key.split('~').pop()));
+      if (!more.length) return new Response(p.data, { headers: { 'content-type': p.type } });
+      return new Response(new Blob([p.data, ...more.map(x => x.data)]), { headers: { 'content-type': p.type } });
     }
     if (url.pathname === '/api') {                              // the Peregrine connector (peregrine-mcp Worker, via its Durable Object binding – not reachable from the internet)
       const msg = await req.json().catch(() => ({})), me = this.me(who);
@@ -252,15 +284,16 @@ export class Space {
         const text = String(msg.text || '').replace(/\u0000/g, '').trim().slice(0, 2000);
         const photo = msg.photo && String(msg.photo).indexOf(this.space() + '/' + me.id + '/') === 0 ? String(msg.photo) : '';
         if (!text && !photo) return;
+        const file = photo && msg.file ? String(msg.file).split(/[\\/]/).pop().replace(/[\u0000-\u001f]/g, '').trim().slice(0, 120) || 'Document.pdf' : '';
         const replyTo = msg.reply && this.one('SELECT 1 FROM messages WHERE id = ? AND ch = ?', String(msg.reply), ch) ? String(msg.reply) : '';
         const id = 'm' + crypto.randomUUID().replace(/-/g, '').slice(0, 12), at = Date.now();
-        this.sql.exec('INSERT INTO messages (id, ch, uid, name, at, text, photo, reply) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, ch, me.id, me.name, at, text, photo, replyTo);
+        this.sql.exec('INSERT INTO messages (id, ch, uid, name, at, text, photo, reply, file) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', id, ch, me.id, me.name, at, text, photo, replyTo, file || null);
         this.markRead(me, ch);
         const m = this.shape(this.one('SELECT * FROM messages WHERE id = ?', id), this.names());
         reply({ t: 'sent', tmp: msg.tmp, ch, m });
         const got = new Set(); this.fanout(ch, (them, ta) => { if (ta.sid === a.sid) return null; if (them.id !== me.id) got.add(them.id); return { t: 'msg', ch, m }; });
         this.delivered(ch, [...got]);
-        this.ctx.waitUntil(this.relayPush(me, ch, text, !!photo));
+        this.ctx.waitUntil(this.relayPush(me, ch, text || (file ? '📄 ' + file : ''), !!photo && !file));
         return;
       }
       case 'ack': {
@@ -355,8 +388,8 @@ export class Space {
     const old = this.q("SELECT id, photo FROM messages WHERE photo != '' AND photo != 'expired' AND at < ? LIMIT 500", cut);
     for (const m of old) { try { await this.dropPhoto(m.photo); } catch (_) {} this.sql.exec("UPDATE messages SET photo = 'expired' WHERE id = ?", m.id); }
     // photos uploaded but never sent (closed the app mid-send): gone after a day
-    if (!this.env.PHOTOS) this.sql.exec('DELETE FROM photos WHERE at < ? AND key NOT IN (SELECT photo FROM messages)', Date.now() - 864e5);
+    if (!this.env.PHOTOS) this.sql.exec("DELETE FROM photos WHERE at < ? AND substr(key, 1, instr(key || '~', '~') - 1) NOT IN (SELECT photo FROM messages)", Date.now() - 864e5);
     this.ctx.storage.setAlarm(Date.now() + 3600e3);
   }
-  async dropPhoto(key) { if (this.env.PHOTOS) await this.env.PHOTOS.delete(key); else this.sql.exec('DELETE FROM photos WHERE key = ?', key); }
+  async dropPhoto(key) { if (this.env.PHOTOS) await this.env.PHOTOS.delete(key); else this.sql.exec('DELETE FROM photos WHERE key = ? OR (key > ? AND key < ?)', key, key + '~', key + '~~'); }
 }

@@ -79,6 +79,28 @@ try {
   S.send({ t: 'send', ch: dm, text: '', photo: up.key, tmp: 'p' }); const pm = await S.wait(m => m.t === 'sent' && m.tmp === 'p'); ok(pm.m.photo === 1, 'photo message');
   const bp = await fetch(BASE + '/s/family/photo/' + pm.m.id + '?t=' + encodeURIComponent(ticket('pB', 'Ben', 1))); ok(bp.ok && Buffer.from(await bp.arrayBuffer()).equals(jpg), 'Ben can load the photo');
   const tp = await fetch(BASE + '/s/family/photo/' + pm.m.id + '?t=' + encodeURIComponent(ticket('pT', 'Tobias', 1))); ok(tp.status === 403, 'Tobias cannot load a photo from a DM he is not in');
+  // PDFs: 4 MB file stored in pieces, named, served back whole; non-PDFs refused; deleting removes every piece
+  const pdf = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.alloc(4 * 1024 * 1024, 7)]);
+  ok((await fetch(BASE + '/s/family/photo?t=' + encodeURIComponent(ticket('pS', 'Salem', 2)), { method: 'POST', body: Buffer.from('hello'), headers: { 'content-type': 'application/pdf' } })).status === 400, 'fake PDF refused');
+  ok((await fetch(BASE + '/s/family/photo?t=' + encodeURIComponent(ticket('pS', 'Salem', 2)), { method: 'POST', body: Buffer.alloc(11 * 1024 * 1024), headers: { 'content-type': 'application/pdf' } })).status === 413, 'PDF over 10 MB refused');
+  const pu = await (await fetch(BASE + '/s/family/photo?t=' + encodeURIComponent(ticket('pS', 'Salem', 2)), { method: 'POST', body: pdf, headers: { 'content-type': 'application/pdf' } })).json();
+  ok(pu.ok && pu.key, 'PDF upload');
+  pushes.length = 0;
+  S.send({ t: 'send', ch: dm, text: '', photo: pu.key, file: '../Recipe Book v3.pdf', tmp: 'f' }); const fm = await S.wait(m => m.t === 'sent' && m.tmp === 'f');
+  ok(fm.m.file === 'Recipe Book v3.pdf' && fm.m.photo === 0, 'PDF message carries its name, not a photo: ' + JSON.stringify(fm.m));
+  const fb = await fetch(BASE + '/s/family/photo/' + fm.m.id + '?t=' + encodeURIComponent(ticket('pB', 'Ben', 1)));
+  ok(fb.ok && fb.headers.get('content-type') === 'application/pdf' && /Recipe Book v3\.pdf/.test(fb.headers.get('content-disposition') || '') && Buffer.from(await fb.arrayBuffer()).equals(pdf), 'Ben gets the whole PDF back, named');
+  ok((await fetch(BASE + '/s/family/photo/' + fm.m.id + '?t=' + encodeURIComponent(ticket('pT', 'Tobias', 1)))).status === 403, 'Tobias cannot open a PDF from a DM he is not in');
+  await sleep(300); ok(pushes.some(x => /📄 Recipe Book v3\.pdf/.test(JSON.stringify(x))), 'push says which PDF');
+  const lk = await (await fetch(BASE + '/s/family/photo/' + fm.m.id + '?link=1&t=' + encodeURIComponent(ticket('pB', 'Ben', 1)))).json();
+  ok(lk.ok && /\/s\/family\/file\//.test(lk.url), 'Ben gets a file link');
+  const lf = await fetch(lk.url); ok(lf.ok && Buffer.from(await lf.arrayBuffer()).equals(pdf), 'file link opens the PDF without signing in');
+  ok((await fetch(lk.url.replace(/s=[^&]+/, 's=bad'))).status === 403, 'tampered link refused');
+  ok((await fetch(lk.url.replace(/e=\d+/, 'e=' + (Number(lk.exp) + 99)))).status === 403, 'link with a changed expiry refused');
+  ok((await fetch(BASE + '/s/family/photo/' + fm.m.id + '?link=1&t=' + encodeURIComponent(ticket('pT', 'Tobias', 1)))).status === 403, 'Tobias gets no link');
+  S.send({ t: 'del', id: fm.m.id }); await sleep(300);
+  ok((await fetch(lk.url)).status === 404, 'link stops working once the PDF is deleted');
+  ok((await fetch(BASE + '/s/family/photo/' + fm.m.id + '?t=' + encodeURIComponent(ticket('pS', 'Salem', 2)))).status === 404, 'deleted PDF is gone');
   B.send({ t: 'send', ch: 'general', text: 'stolen', photo: up.key, tmp: 'st' }); const st = await B.wait(m => m.t === 'sent' && m.tmp === 'st'); ok(st.m.photo === 0, 'cannot attach someone else\'s upload');
   // roster change applies at once: Tobias switched off
   await roster({ people: people.map(p => p.id === 'pT' ? Object.assign({}, p, { active: 0 }) : p) });

@@ -71,8 +71,8 @@ function LiveChat(o){   // o: { url, space, ticket: () => Promise<{ticket, exp}>
     return new Promise((yes, no) => { pend[rid] = { yes, no, to: setTimeout(() => { if (pend[rid]) { delete pend[rid]; no(new Error('No answer from the chat – check your connection')); } }, ms || 15000) }; raw(Object.assign({ rid }, x)); });
   }
   /** Photos: uploaded first, then sent as part of the message. */
-  async function upload(dataUrl){
-    const blob = await (await fetch(dataUrl)).blob(), t = await getPass();
+  async function upload(src){
+    const blob = src instanceof Blob ? src : await (await fetch(src)).blob(), t = await getPass();
     const r = await fetch(base() + '/s/' + o.space + '/photo?t=' + encodeURIComponent(t), { method: 'POST', body: blob, headers: { 'content-type': blob.type || 'image/jpeg' } });
     const j = await r.json().catch(() => ({})); if (!r.ok || !j.key) { if (r.status === 401) pass = null; throw new Error(j.error || 'The photo didn\'t upload'); }
     return j.key;
@@ -83,6 +83,12 @@ function LiveChat(o){   // o: { url, space, ticket: () => Promise<{ticket, exp}>
     const b = await r.blob();
     return await new Promise((yes, no) => { const f = new FileReader(); f.onload = () => yes(f.result); f.onerror = () => no(new Error('Couldn\'t read the photo')); f.readAsDataURL(b); });
   }
+  /** PDFs: a 6-hour link to just that file, so it opens in the phone's own viewer. */
+  async function link(id){
+    const t = await getPass(), r = await fetch(base() + '/s/' + o.space + '/photo/' + encodeURIComponent(id) + '?link=1&t=' + encodeURIComponent(t));
+    const j = await r.json().catch(() => ({})); if (!r.ok || !j.url) { if (r.status === 401) pass = null; throw new Error(j.error || 'Couldn\'t open the file'); }
+    return j;
+  }
   function stop(){ try { caches.delete(NS + 'chat-pass'); } catch (_) {} stopped = true; clearTimeout(wait); clearTimeout(idle); clearInterval(ping); if (ws) try { ws.close(1000); } catch (_) {} ws = null; up = false; }
   document.addEventListener('visibilitychange', () => {
     if (stopped) return;
@@ -92,7 +98,7 @@ function LiveChat(o){   // o: { url, space, ticket: () => Promise<{ticket, exp}>
   });
   window.addEventListener('online', () => { if (!stopped) { tries = 0; connect(); } });
   connect();
-  return { send, ask, upload, photo, stop, get up(){ return up; } };
+  return { send, ask, upload, photo, link, stop, get up(){ return up; } };
 }
 
 /* Requests out right now. A phone that sleeps mid-request (locked screen, app switched away) can leave a fetch hanging
@@ -1062,7 +1068,7 @@ function viewConversation(){
     const firstR = sep || prev.fromId !== m.fromId || gap(prev, m) > 5;
     const nextSep = next && (ymdOf(new Date(next.at)) !== ymdOf(new Date(m.at)) || gap(m, next) > 60);
     const lastR = !next || nextSep || next.fromId !== m.fromId || gap(m, next) > 5;
-    const pic = m.photo ? picTag(m) : m.expired ? '<div class="msg exp"><i>Photo expired</i></div>' : '';
+    const pic = m.file ? fileTag(m) : m.photo ? picTag(m) : m.expired ? '<div class="msg exp"><i>Photo expired</i></div>' : '';
     const real = m.id !== 'tmp', acks = m.acks || [];
     const meta = chat.meta === m.id && !chat.sel ? `<div class="meta ${mine ? 'me' : ''}">${timeOf(m.at)}${v3() && real ? ` · <button class="lnk" data-reply="${esc(m.id)}">Reply</button>` : ''}${m.text ? ` · <button class="lnk" data-copymsg="${esc(m.id)}">Copy</button>` : ''}${v3() && real && !mine ? ` · <button class="lnk" data-mack="${esc(m.id)}">${m.ackMine ? 'Remove 👍' : '👍'}</button>` : ''}${mgr() && real ? ` · <button class="lnk" data-delmsg="${esc(m.id)}">Delete</button> · <button class="lnk" data-selmsg="${esc(m.id)}">Select</button>` : ''}</div>` : '';
     const quote = m.reply ? `<button type="button" class="quote" data-jump="${esc(m.reply.id)}"><b>${esc(m.reply.from ? (m.reply.from === data.me.name ? 'You' : first(m.reply.from)) : '')}</b><span>${m.reply.photo && !m.reply.text ? '📷 Photo' : esc(m.reply.text)}</span></button>` : '';
@@ -1087,8 +1093,9 @@ function viewConversation(){
     <div class="msgs" id="msgs">${body || `<div class="hello">${avatar(c, 64)}<b>${esc(convName())}</b><span>No messages yet. Say hello 👋</span></div>`}</div>
     <div class="mentbox" id="ment" hidden></div>
     ${chat.reply ? `<div class="replybar"><span class="ri">${SVG_REPLY}</span><div><b>Replying to ${esc(chat.reply.from === data.me.name ? 'yourself' : first(chat.reply.from))}</b><span>${esc(chat.reply.text || '📷 Photo')}</span></div><button type="button" class="cx" data-unreply aria-label="Cancel reply">×</button></div>` : ''}
+    ${chat.file ? `<div class="pv pvf">${SVG_DOC}<span><b>${esc(chat.file.name)}</b><small>PDF · ${fileSize(chat.file.blob.size)}</small></span><button type="button" class="pvx" data-unphoto aria-label="Remove PDF">×</button></div>` : ''}
     ${chat.photo ? `<div class="pv"><img src="${chat.photo}" alt="Photo to send"><button type="button" class="pvx" data-unphoto aria-label="Remove photo">×</button></div>` : ''}
-    ${chat.sel ? `<div class="selbar"><button type="button" class="lnk" data-selcancel>Cancel</button><span class="sr">${chat.sel.length} selected</span><button type="button" class="btn warn" data-seldel ${chat.sel.length ? '' : 'disabled'}>${chat.sel.length ? 'Delete ' + chat.sel.length : 'Tap messages'}</button></div>` : `<form class="composer" data-form="send">${Number(data.version) >= 2.7 ? `<label class="picbtn" title="Add a photo" aria-label="Add a photo"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><input type="file" accept="image/*" data-photo hidden onchange="pickPhoto(this)"></label>` : ''}<textarea name="text" rows="1" maxlength="2000" placeholder="${chat.photo ? 'Add a caption' : 'Message'}" aria-label="Message">${esc(chat.compose)}</textarea><button class="send" aria-label="Send" ${chat.sending ? 'disabled' : ''}><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="M5.5 11.5L12 5l6.5 6.5"/></svg></button></form>`}</div>`;
+    ${chat.sel ? `<div class="selbar"><button type="button" class="lnk" data-selcancel>Cancel</button><span class="sr">${chat.sel.length} selected</span><button type="button" class="btn warn" data-seldel ${chat.sel.length ? '' : 'disabled'}>${chat.sel.length ? 'Delete ' + chat.sel.length : 'Tap messages'}</button></div>` : `<form class="composer" data-form="send">${Number(data.version) >= 2.7 ? `<label class="picbtn" title="${LIVE ? 'Add a photo or PDF' : 'Add a photo'}" aria-label="${LIVE ? 'Add a photo or PDF' : 'Add a photo'}"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><input type="file" accept="${LIVE ? 'image/*,application/pdf,.pdf' : 'image/*'}" data-photo hidden onchange="pickPhoto(this)"></label>` : ''}<textarea name="text" rows="1" maxlength="2000" placeholder="${chat.photo || chat.file ? 'Add a caption' : 'Message'}" aria-label="Message">${esc(chat.compose)}</textarea><button class="send" aria-label="Send" ${chat.sending ? 'disabled' : ''}><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="M5.5 11.5L12 5l6.5 6.5"/></svg></button></form>`}</div>`;
 }
 function curChat(){ return (data.channels || []).find(x => x.id === chat.open); }
 function canEditChat(){ const c = curChat(); return !!c && Number(data.version) >= 2.9 && (c.kind === 'group' || (c.kind === 'channel' && lead())); }
@@ -1106,7 +1113,7 @@ function drafts(){ try { return JSON.parse(load('pt-drafts') || '{}') || {}; } c
 function setDraft(id, t){ if (!id || id === 'tmp') return; const d = drafts(); t = String(t || '');
   if (t.trim()) d[id] = t.slice(0, 2000); else delete d[id]; save('pt-drafts', Object.keys(d).length ? JSON.stringify(d) : null); }
 async function openChat(id, name, text, photo, opt){
-  if (text === undefined && id !== chat.open){ chat.compose = drafts()[id] || ''; chat.photo = ''; chat.reply = null; }
+  if (text === undefined && id !== chat.open){ chat.compose = drafts()[id] || ''; chat.photo = ''; chat.file = null; chat.reply = null; }
   chat.open = id; chat.dmName = name || chat.dmName; if (text === undefined && chat.loaded !== id) { chat.msgs = []; chat.seen = []; chat.dlv = []; }
   render(); scrollChat();
   if (LIVE) return liveOpen(id, text, photo, opt);
@@ -1142,7 +1149,7 @@ async function copyText(t){
   try { const a = document.createElement('textarea'); a.value = t; a.setAttribute('readonly', ''); a.style.cssText = 'position:fixed;top:0;left:0;opacity:0'; document.body.appendChild(a); a.select(); a.setSelectionRange(0, t.length); const ok = document.execCommand('copy'); a.remove(); return ok; } catch (_) { return false; }
 }
 function startReply(id){ const m = (chat.msgs || []).find(x => x.id === id); if (!m) return;
-  chat.reply = { id: m.id, from: m.from, text: m.text ? m.text.slice(0, 90) : '' }; chat.meta = ''; render(); const t = $('.composer textarea'); if (t) t.focus(); }
+  chat.reply = { id: m.id, from: m.from, text: m.text ? m.text.slice(0, 90) : m.file ? '📄 ' + m.file : '' }; chat.meta = ''; render(); const t = $('.composer textarea'); if (t) t.focus(); }
 let searchT = 0, searchN = 0;
 function keepSearch(fn){ const a = document.activeElement, keep = a && a.dataset && a.dataset.csearch !== undefined, pos = keep ? a.selectionStart : 0; fn(); if (keep){ const el = $('[data-csearch]'); if (el){ el.focus(); try { el.setSelectionRange(pos, pos); } catch (_) {} } } }
 function runSearch(){ const q = (chat.q || '').trim(); clearTimeout(searchT); chat.results = null; if (q.length < 2) return;
@@ -1187,8 +1194,8 @@ async function liveOpen(id, text, photo, opt){
   opt = opt || {};
   try {
     if (text !== undefined){
-      const key = photo ? await LIVE.upload(photo) : '';
-      const r = await LIVE.ask({ t: 'send', ch: id, text: text || '', photo: key, reply: opt.replyTo || '', tmp: 'tmp' }), m = liveMsg(r.m);
+      const key = photo ? await LIVE.upload(photo) : opt.file ? await LIVE.upload(opt.file.blob) : '';
+      const r = await LIVE.ask(Object.assign({ t: 'send', ch: id, text: text || '', photo: key, reply: opt.replyTo || '', tmp: 'tmp' }, opt.file ? { file: opt.file.name } : {}), opt.file ? 60000 : undefined), m = liveMsg(r.m);
       if (photo){ picCache[m.id] = photo; idbPut(m.id, photo); }
       const c = (liveList || []).find(x => x.id === id); if (c){ c.last = lastOf(m); liveList.sort(byLast); } else LIVE.send({ t: 'list' });
       if (chat.open !== id) return;
@@ -1203,7 +1210,7 @@ async function liveOpen(id, text, photo, opt){
     const near = isNearBottom(); render(); if (opt.find) jumpTo(opt.find); else if (near) scrollChat();
   } catch (e) {
     const m = String(e && e.message || e).replace(/^(Error|Exception):\s*/, '');
-    if (text !== undefined){ chat.compose = text || ''; setDraft(id, text); if (photo) chat.photo = photo; if (opt.reply) chat.reply = opt.reply; const i = (chat.msgs || []).findIndex(x => x.id === 'tmp'); if (i >= 0) chat.msgs.splice(i, 1); toast('Not sent: ' + m); render(); }
+    if (text !== undefined){ chat.compose = text || ''; setDraft(id, text); if (photo) chat.photo = photo; if (opt.file) chat.file = opt.file; if (opt.reply) chat.reply = opt.reply; const i = (chat.msgs || []).findIndex(x => x.id === 'tmp'); if (i >= 0) chat.msgs.splice(i, 1); toast('Not sent: ' + m); render(); }
     else if (chat.loaded !== id) toast(m);
   }
 }
@@ -1215,6 +1222,32 @@ let picQueue = [], picActive = 0;
 const idb = (() => { let p = null; return () => p || (p = new Promise((res, rej) => { const q = indexedDB.open('pt-photos', 1); q.onupgradeneeded = () => q.result.createObjectStore('p'); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); })); })();
 async function idbGet(k){ try { const db = await idb(); return await new Promise(res => { const q = db.transaction('p').objectStore('p').get(k); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); }); } catch (_) { return null; } }
 async function idbPut(k, v){ try { const db = await idb(); db.transaction('p', 'readwrite').objectStore('p').put(v, k); } catch (_) {} }
+/* ---------- chat PDFs: sent through the live chat, opened with a short-lived link in the phone's own viewer ---------- */
+const fileLinks = {};
+const fileSize = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+const SVG_DOC = '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/></svg>';
+function fileTag(m){
+  const name = esc(m.file), real = m.id !== 'tmp';
+  if (m.expired) return `<div class="fcard exp">${SVG_DOC}<span><b>${name}</b><small>File expired</small></span></div>`;
+  const l = fileLinks[m.id], fresh = l && l.exp * 1000 - Date.now() > 10 * 60000;
+  if (real && LIVE && !fresh) loadLink(m.id);
+  const sub = !real ? (m.size ? fileSize(m.size) + ' · ' : '') + 'Sending…' : 'PDF · Tap to open';
+  return `<a class="fcard" ${fresh ? `href="${esc(l.url)}" target="_blank" rel="noopener"` : 'href="#" role="button"'} data-file="${esc(m.id)}">${SVG_DOC}<span><b>${name}</b><small>${sub}</small></span></a>`;
+}
+function loadLink(id){
+  if (fileLinks[id] && fileLinks[id].busy) return Promise.resolve(fileLinks[id].busy);
+  const p = LIVE.link(id).then(j => { fileLinks[id] = j; document.querySelectorAll(`[data-file="${CSS.escape(id)}"]`).forEach(a => { a.href = j.url; a.target = '_blank'; a.rel = 'noopener'; a.removeAttribute('role'); }); return j; })
+    .catch(e => { delete fileLinks[id]; throw e; });
+  fileLinks[id] = Object.assign(fileLinks[id] || {}, { busy: p }); return p;
+}
+function openFile(e, a){
+  const id = a.dataset.file, l = fileLinks[id];
+  if (l && l.url && l.exp * 1000 - Date.now() > 60000) return;            // a normal link: the phone opens it
+  e.preventDefault(); if (!LIVE || id === 'tmp') return;
+  const w = window.open('', '_blank');                                     // opened during the tap so it isn't blocked, then pointed at the file
+  loadLink(id).then(j => { if (w) w.location.href = j.url; else toast('Ready – tap the file again to open it'); })
+    .catch(err => { if (w) w.close(); toast(/expired|gone/i.test(String(err.message)) ? 'That file has expired' : err.message); });
+}
 function picTag(m){
   const src = m.local || picCache[m.id];
   if (!src && m.id !== 'tmp') loadPic(m.id);
@@ -1257,7 +1290,13 @@ async function pickPhoto(inp){
   if (!inp || !inp.files || !inp.files[0]) return;
   const file = inp.files[0]; inp.value = '';
   const t = $('.composer textarea'); if (t) chat.compose = t.value;
-  try { chat.photo = await shrinkPhoto(file); render(); const t2 = $('.composer textarea'); if (t2) t2.focus(); scrollChat(); } catch (err) { toast(err.message); }
+  if (file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '')){
+    if (!LIVE){ toast('PDFs need the live chat – try again in a moment'); return; }
+    if (file.size > 10 * 1048576){ toast('That PDF is too big – 10 MB at most'); return; }
+    chat.file = { name: file.name || 'Document.pdf', blob: file.type === 'application/pdf' ? file : new Blob([file], { type: 'application/pdf' }) }; chat.photo = '';
+    render(); const t2 = $('.composer textarea'); if (t2) t2.focus(); scrollChat(); return;
+  }
+  try { chat.file = null; chat.photo = await shrinkPhoto(file); render(); const t2 = $('.composer textarea'); if (t2) t2.focus(); scrollChat(); } catch (err) { toast(err.message); }
 }
 window.pickPhoto = pickPhoto;
 const isNearBottom = () => { const m = $('#msgs'); return !m || m.scrollHeight - m.scrollTop - m.clientHeight < 80; };
@@ -1840,6 +1879,7 @@ function getPos(){
   if (!data.geo || !navigator.geolocation) return Promise.resolve({});
   return new Promise(res => navigator.geolocation.getCurrentPosition(p => res({ lat: p.coords.latitude, lng: p.coords.longitude }), () => res({}), { timeout: 7000, maximumAge: 60000, enableHighAccuracy: true }));
 }
+document.addEventListener('click', e => { const a = e.target.closest && e.target.closest('a[data-file]'); if (a && !chat.sel) openFile(e, a); });
 document.addEventListener('click', async e => {
   const b = e.target.closest('button, a[data-x]');
   if (!b){ const td = e.target.closest && e.target.closest('td[data-cell]'); if (td && lead()){ const [who, date] = td.dataset.cell.split('|'); sheet = { kind: 'shift', date, name: who, start: (data.presets[0] || {}).start, end: (data.presets[0] || {}).end }; render(); } return; }
@@ -1978,7 +2018,7 @@ document.addEventListener('click', async e => {
   if (d.pushtest !== undefined){ const r = await act('pushTest'); const x = r && r.result; if (x) toast(x.sent ? 'Sent – it should arrive in a few seconds' : x.off ? 'Push isn\'t set up in the sheet yet' : 'Nothing was sent – try turning notifications off and on'); return; }
   if (d.pushpref){ const P = data.push.prefs = data.push.prefs || {}; const v = d.v; if (d.pushpref === 'msg') P.msg = v; else P[d.pushpref] = v === '1'; render(); act('pushPrefs', { [d.pushpref]: v }); return; }
   if (d.pic){ const m = (chat.msgs || []).find(x => x.id === d.pic), src = (m && m.local) || picCache[d.pic]; if (src) zoomPic(src); else loadPic(d.pic); return; }
-  if (d.unphoto !== undefined){ const t = $('.composer textarea'); if (t) chat.compose = t.value; chat.photo = ''; render(); return; }
+  if (d.unphoto !== undefined){ const t = $('.composer textarea'); if (t) chat.compose = t.value; chat.photo = ''; chat.file = null; render(); return; }
   if (d.selmsg){ const ta = $('.composer textarea'); if (ta) chat.compose = ta.value; chat.sel = [d.selmsg]; chat.meta = ''; chat.reply = null; render(); return; }
   if (d.selcancel !== undefined){ chat.sel = null; render(); return; }
   if (d.seldel !== undefined){ const ids = (chat.sel || []).slice(); if (!ids.length) return;
@@ -2055,10 +2095,10 @@ document.addEventListener('submit', async e => {
     catch (err) { btn.disabled = false; btn.textContent = 'Sign in'; toast(String(err.message || err) === 'timeout' ? 'The server took too long – try again' : String(err.message || err)); }
     return;
   }
-  if (kind === 'send'){ const text = f.elements.namedItem('text').value.trim(), photo = chat.photo || ''; if (!text && !photo) return;
+  if (kind === 'send'){ const text = f.elements.namedItem('text').value.trim(), photo = chat.photo || '', file = chat.file || null; if (!text && !photo && !file) return;
     const reply = chat.reply; chat.reply = null; $('#ment') && ($('#ment').hidden = true);
-    setDraft(chat.open, ''); chat.compose = ''; chat.photo = ''; chat.msgs = (chat.msgs || []).concat({ id: 'tmp', fromId: chat.me || data.meId, from: data.me.name, at: new Date().toISOString(), text, photo: photo ? 1 : 0, local: photo, reply: reply ? { id: reply.id, from: reply.from, text: reply.text } : null }); render(); scrollChat();
-    const t = $('.composer textarea'); if (t){ t.value = ''; t.focus(); t.style.height = ''; } openChat(chat.open, null, text, photo || undefined, reply ? { replyTo: reply.id, reply } : undefined); return; }
+    setDraft(chat.open, ''); chat.compose = ''; chat.photo = ''; chat.file = null; chat.msgs = (chat.msgs || []).concat({ id: 'tmp', fromId: chat.me || data.meId, from: data.me.name, at: new Date().toISOString(), text, photo: photo ? 1 : 0, local: photo, file: file ? file.name : undefined, size: file ? file.blob.size : 0, reply: reply ? { id: reply.id, from: reply.from, text: reply.text } : null }); render(); scrollChat();
+    const t = $('.composer textarea'); if (t){ t.value = ''; t.focus(); t.style.height = ''; } openChat(chat.open, null, text, photo || undefined, reply || file ? Object.assign(reply ? { replyTo: reply.id, reply } : {}, file ? { file } : {}) : undefined); return; }
   if (kind === 'shift'){ if (!v('name')){ toast('Pick who is working'); return; } const p = { id: sheet && sheet.id || '', name: v('name'), date: v('date'), start: v('start'), end: v('end'), position: v('position'), notes: v('notes') };
     if (p.end <= p.start){ toast('The end has to be after the start'); return; }
     const ex = p.id && (data.shifts || []).find(x => x.id === p.id);
