@@ -1527,6 +1527,11 @@ const opensIn = u => /\/spreadsheets\//.test(u) ? '<div class="sub">Opens in Goo
 let trainSel = '';
 const TR = () => data.training || { items: [], active: [], filed: [] };
 const trDone = t => TR().items.filter(it => t.done && t.done[it.skill]).length;
+// Level I test result (filled in from the online test results; a score typed in by hand wins)
+const trTest = (t, short) => { const r = t.test; if (t.score !== '' && t.score != null) return `<span class="pill ${Number(t.score) >= 12 ? 'ok' : 'warn'}">Test ${Number(t.score) >= 12 ? 'passed' : 'not passed'} ${esc(t.score)}/15</span>${short ? '' : '<span class="sub"> typed in by hand</span>'}`; if (!r) return '';
+  const sc = r.score !== '' ? ' ' + esc(r.score) + (r.outOf ? '/' + esc(r.outOf) : '') : '';
+  const pill = r.s === 'pass' ? `<span class="pill ok">Test passed${sc}</span>` : r.s === 'wait' ? '<span class="pill mute">Test being scored</span>' : `<span class="pill warn">Test not passed${sc}</span>`;
+  return short ? pill : pill + `<span class="sub"> ${r.at ? shortDay(ymdOf(new Date(r.at))) : ''}${r.tries > 1 ? ' · ' + r.tries + ' tries' : ''}</span>`; };
 const trBar = t => { const n = TR().items.length, d = trDone(t); return `<div class="progress"><i style="width:${n ? Math.round(d / n * 100) : 0}%"></i></div><div class="sub" style="margin-top:4px">${d} of ${n} skills</div>`; };
 function viewTraining(){
   const T = TR(), t = trainSel && T.active.find(x => x.id === trainSel);
@@ -1535,7 +1540,7 @@ function viewTraining(){
   const leadLinks = (data.links || []).filter(l => l.tier !== 'Everyone');
   return `${back()}<h1>Training</h1>
     <div class="btns" style="margin-bottom:10px"><button class="btn go" data-trainnew>Start a trainee checklist</button></div>
-    <h2>In training</h2><div class="card">${T.active.map(x => rowBtn(`data-trainopen="${esc(x.id)}"`, `<div class="txt"><b>${esc(x.name)}</b><div class="sub">${x.trainer ? 'Trainer: ' + esc(first(x.trainer)) + ' · ' : ''}${x.started ? 'Started ' + shortDay(x.started) : ''}</div>${trBar(x)}</div><span>›</span>`)).join('') || '<div class="empty">Nobody in training. Start a checklist when a new barista begins.</div>'}</div>
+    <h2>In training</h2><div class="card">${T.active.map(x => rowBtn(`data-trainopen="${esc(x.id)}"`, `<div class="txt"><b>${esc(x.name)}</b><div class="sub">${x.trainer ? 'Trainer: ' + esc(first(x.trainer)) + ' · ' : ''}${x.started ? 'Started ' + shortDay(x.started) : ''}</div>${trBar(x)}${trTest(x, true) ? `<div style="margin-top:6px">${trTest(x, true)}</div>` : ''}</div><span>›</span>`)).join('') || '<div class="empty">Nobody in training. Start a checklist when a new barista begins.</div>'}</div>
     ${T.filed.length ? `<h2>Filed</h2><div class="card">${T.filed.map(x => `<a class="row" href="${esc(x.filed)}" target="_blank" rel="noopener" style="text-decoration:none"><div class="txt"><b>${esc(x.name)}</b><div class="sub">Filed${x.filedAt ? ' ' + shortDay(ymdOf(new Date(x.filedAt))) : ''}${x.filedBy ? ' by ' + esc(first(x.filedBy)) : ''} · opens in Google Docs</div></div><span>↗</span></a>`).join('')}</div>` : ''}
     ${leadLinks.length ? `<h2>Lead resources</h2><div class="card">${leadLinks.map(l => l.file && !/\/spreadsheets\//.test(l.url) ? rowBtn(`data-pdf="${esc(l.id)}"`, `<div class="txt"><b>${esc(l.name)}</b><div class="sub">${l.tier === 'Managers' ? 'Managers · ' : ''}Opens in the app</div></div><span>›</span>`) : `<a class="row" href="${esc(l.url)}" target="_blank" rel="noopener" style="text-decoration:none"><div class="txt"><b>${esc(l.name)}</b>${opensIn(l.url)}</div><span>↗</span></a>`).join('')}</div>` : ''}
     <p class="sub">Only leads and managers see Training. The skills come from the Training items tab in the sheet.${T.folder ? '' : ' Add a folder in Settings › Training records folder so managers can file finished checklists.'}</p>`;
@@ -1551,10 +1556,11 @@ function viewTrainee(t){
     <div class="card"><div class="row"><div class="txt"><div class="sub">Primary trainer: <b>${esc(t.trainer || '—')}</b> · Started ${t.started ? shortDay(t.started) : '—'}</div>${trBar(t)}</div></div></div>
     ${secs.map(sec => `<h2>${esc(sec)}</h2><div class="card">${T.items.filter(x => x.section === sec).map(row).join('')}</div>`).join('')}
     <h2>Level I sign-off</h2>
+    <div class="card"><div class="row"><div class="txt"><b>Level I test</b><div style="margin-top:4px">${trTest(t) || '<span class="sub">Not taken yet. Results from the online test show up here on their own.</span>'}</div></div></div></div>
     <form class="card stack" data-form="trainedit" style="padding:14px">
       <label class="f">Primary trainer<select name="trainer">${[...new Set([t.trainer].concat((data.people || []).filter(u => u.role !== 'Staff').map(u => u.name)))].filter(Boolean).map(nm => `<option ${nm === t.trainer ? 'selected' : ''}>${esc(nm)}</option>`).join('')}</select></label>
       <label class="f">Start date<input type="date" name="started" value="${esc(t.started || '')}"></label>
-      <label class="f">Level I test score (12 of 15 to pass)<input type="number" name="score" min="0" max="15" inputmode="numeric" value="${esc(t.score)}" placeholder="—"></label>
+      <label class="f">${t.test ? 'Test score typed in by hand (only to replace the online result)' : 'Level I test score, if taken on paper (12 of 15 to pass)'}<input type="number" name="score" min="0" max="15" inputmode="numeric" value="${esc(t.score)}" placeholder="—"></label>
       <label class="f">Anything to keep an eye on<textarea name="watch" rows="3" maxlength="1000">${esc(t.watch)}</textarea></label>
       <button class="btn go">Save</button></form>
     ${mgr() ? `<div class="card"><div class="row"><div class="txt"><b>File in Drive</b><div class="sub">${d < n ? (n - d) + ' skill' + (n - d > 1 ? 's' : '') + ' not checked off yet. ' : 'Every skill is checked off. '}Filing saves this checklist as a Google Doc in your HR folder and takes it off this list.</div></div></div>

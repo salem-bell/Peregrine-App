@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '4.98';
+const VERSION = '4.99';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Morning of', 'Morning and before', 'Off'];
 
@@ -1219,7 +1219,34 @@ function training_(ss, tz, fresh) {
   const all = rv('Trainees').filter(r => r[0] && String(r[1]).trim()).map(r => ({ id: String(r[0]), name: String(r[1]).trim(), trainer: String(r[2] || ''), started: ymd_(r[3], tz), status: String(r[4] || 'In training'),
     score: String(r[5] === '' || r[5] == null ? '' : r[5]), watch: String(r[6] || ''), filed: String(r[7] || ''), filedAt: toIso_(r[8]), filedBy: String(r[9] || ''), done: {} }));
   rv('Training log').forEach(r => { const t = all.find(x => x.id === String(r[0])); if (t && !t.filed && String(r[1]).trim()) t.done[String(r[1]).trim()] = { by: String(r[2] || ''), at: toIso_(r[3]), note: String(r[4] || '') }; });
+  const L1 = level1Results_(ss); all.forEach(t => { if (!t.filed) { const r = level1For_(L1, t.name); if (r) t.test = r; } });
   return { items, active: all.filter(t => !t.filed), filed: all.filter(t => t.filed).slice(-12).reverse(), folder: !!setting_(ss, 'Training records folder') };
+}
+/** Level I test results by person, from the test results sheet (the Tests row with ?level=1, or named "Level I"). Cached 2 minutes. */
+function level1Results_(ss) {
+  const c = CacheService.getScriptCache(), hit = c.get('L1RES'); if (hit) { try { return JSON.parse(hit); } catch (_) {} }
+  const out = {}, norm = n => String(n || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  try {
+    const id = driveId_(setting_(ss, 'Test results sheet')), rows = vals_(ss.getSheetByName('Tests')).filter(r => String(r[0]).trim());
+    const t = rows.find(r => /[?&]level=1\b/.test(String(r[1]))) || rows.find(r => /level\s*(i|1)\b/i.test(String(r[0])));
+    const sh = id && t ? SpreadsheetApp.openById(id).getSheetByName(String(t[2] || '').trim() || String(t[0]).trim()) : null;
+    if (sh) vals_(sh).forEach(x => {
+      if (String(x[0]) === 'Submitted' || !String(x[1]).trim()) return;          // header rows (including later ones after a question update)
+      const k = norm(x[1]), res = String(x[4] || '').trim(), pass = /^pass$/i.test(res), wait = !res || /scor/i.test(String(x[2])) || /needs scoring/i.test(res);
+      const cur = out[k], at = toIso_(x[0]) || '', score = String(x[2] == null ? '' : x[2]), outOf = String(x[3] == null ? '' : x[3]), tries = (cur ? cur.tries : 0) + 1;
+      if (cur && cur.s === 'pass') { cur.tries = tries; return; }                  // a pass sticks; later tries just count
+      out[k] = pass ? { s: 'pass', at, score, outOf, tries } : { s: wait ? 'wait' : 'fail', at, score: wait ? '' : score, outOf: wait ? '' : outOf, tries };
+    });
+  } catch (e) { console.log('Level I results: ' + e.message); }
+  try { c.put('L1RES', JSON.stringify(out), 120); } catch (_) {}
+  return out;
+}
+/** A trainee's result: same full name, or the same first name when only one person in the results has it. */
+function level1For_(L1, name) {
+  const k = String(name || '').trim().toLowerCase().replace(/\s+/g, ' '); if (!k) return null;
+  if (L1[k]) return L1[k];
+  const f = k.split(' ')[0], hits = Object.keys(L1).filter(n => n.split(' ')[0] === f && (n.indexOf(' ') < 0 || k.indexOf(' ') < 0));
+  return hits.length === 1 ? L1[hits[0]] : null;
 }
 /** A finished checklist as a Google Doc in Settings › Training records folder. */
 function trainDoc_(ss, id, me, tz) {
@@ -1241,7 +1268,9 @@ function trainDoc_(ss, id, me, tz) {
   const doneN = T.items.filter(x => t.done[x.skill]).length;
   b.appendParagraph('Level I sign-off').setHeading(H.HEADING2);
   b.appendParagraph('Skills checked off: ' + doneN + ' of ' + T.items.length);
-  b.appendParagraph('Level I test score: ' + (t.score !== '' ? t.score : '____') + ' / 15 (12 to pass)');
+  const tr = t.test, auto = tr && tr.s !== 'wait' && tr.score !== '';
+  b.appendParagraph('Level I test score: ' + (t.score !== '' ? t.score + ' / 15' : auto ? tr.score + ' / ' + (tr.outOf || 15) : '____ / 15') + ' (12 to pass)'
+    + (auto && t.score === '' ? ' – ' + (tr.s === 'pass' ? 'passed' : 'not passed yet') + (tr.at ? ' on ' + when(tr.at) : '') + (tr.tries > 1 ? ', ' + tr.tries + ' tries' : '') + ', from the online test' : ''));
   b.appendParagraph('Trainer: I\'ve worked with this barista and I\'m comfortable with them on regular shifts, overlapped at open, close and drawer until Level II.');
   b.appendParagraph('Anything to keep an eye on: ' + (t.watch || '—'));
   ['Trainee', 'Trainer', 'Manager'].forEach(w => b.appendParagraph(w + ' signature: ______________________   Date: ____________'));
