@@ -291,7 +291,7 @@ document.addEventListener('touchend', () => {
   else ptrDone();
 }, { passive: true });
 function saving(){ const el = $('#saving'); if (el) el.hidden = !pending; }
-function signOut(msg){ lastWriteAt = 0; save('pt-lastwrite', null); stopChat(); liveEnd(); TOKEN = ''; data = null; save('pt-token', null); save('pt-cache', null); render(); if (msg) toast(msg.charAt(0).toUpperCase() + msg.slice(1)); }
+function signOut(msg){ lastWriteAt = 0; save('pt-lastwrite', null); stopChat(); liveEnd(); TOKEN = ''; data = null; save('pt-token', null); save('pt-cache', null); save('pt-drafts', null); render(); if (msg) toast(msg.charAt(0).toUpperCase() + msg.slice(1)); }
 
 /* ---------- formatting ---------- */
 const pad = n => String(n).padStart(2, '0');
@@ -515,7 +515,7 @@ function viewJoined(){
 function mustRead(){ return (data.announcements || []).filter(a => a.mustAck && !a.read); }
 function viewMustRead(a, left){
   return `<div class="gate"><div class="gate-in"><img class="mark" src="brand/bird-gold.png" alt=""><p class="sub" style="margin:0 0 6px">${left > 1 ? `1 of ${left} · ` : ''}Please read before you continue</p>
-    <h1 style="margin-bottom:8px">${esc(a.title)}</h1><div class="msg" style="font-size:1.05rem">${esc(a.message)}</div>
+    <h1 style="margin-bottom:8px">${esc(a.title)}</h1><div class="msg" style="font-size:1.05rem">${linkify(esc(a.message))}</div>
     <p class="sub">From ${esc(a.from)} · ${ago(a.posted)}</p><button class="btn go" data-ack="${esc(a.id)}" style="width:100%;margin-top:14px">I've read this</button></div></div>`;
 }
 
@@ -1009,8 +1009,21 @@ function audience(c){
   return ppl.filter(p => c.who === 'Managers' ? p.role === 'Manager' : /lead/i.test(c.who) ? p.role !== 'Staff' : true);
 }
 let mentRe = null, mentKey = '';
+// Web addresses in messages and announcements become tappable links (only http/https or www.; text is escaped first)
+const URL_RE = /((?:https?:\/\/|www\.)[^\s<]+)/i;
+function linkParts(h){ const out = []; h.split(new RegExp(URL_RE.source, 'gi')).forEach((x, i) => { if (!(i % 2)) { if (x) out.push({ t: x }); return; }
+    const tail = (x.match(/(?:[.,!?;:)\]}]|&#39;|&quot;)+$/) || [''])[0], u = tail ? x.slice(0, -tail.length) : x;
+    if (!/\w\.\w|\/\/\w/.test(u)) { out.push({ t: x }); return; }
+    out.push({ u }); if (tail) out.push({ t: tail }); });
+  return out; }
+const linkTag = u => `<a class="mlink" href="${/^www\./i.test(u) ? 'https://' + u : u}" target="_blank" rel="noopener noreferrer">${u}</a>`;
+const linkify = h => linkParts(h).map(p => p.u ? linkTag(p.u) : p.t).join('');
 function fmtMsg(text){
-  let h = esc(text); if (h.indexOf('@') < 0) return h;
+  const h = esc(text); if (!URL_RE.test(h)) return fmtMent(h);
+  return linkParts(h).map(p => p.u ? linkTag(p.u) : fmtMent(p.t)).join('');
+}
+function fmtMent(h){
+  if (h.indexOf('@') < 0) return h;
   const key = (data.people || []).map(p => p.id + p.name).join('|');
   if (key !== mentKey){ mentKey = key; const labels = []; (data.people || []).forEach(p => { labels.push({ l: p.name, id: p.id }); if (mentionLabel(p) === p.name) return; labels.push({ l: first(p.name), id: p.id }); });
     labels.sort((a, b) => b.l.length - a.l.length); mentRe = labels.length ? { re: new RegExp('@(' + labels.map(x => escRe(esc(x.l))).join('|') + ')(?![\\w])', 'gi'), labels } : null; }
@@ -1024,7 +1037,8 @@ function viewChat(){
   const pins = myPins(), pinAt = c => pins.indexOf(c.id);
   const ch = (data.channels || []).slice().sort((a, b) => (pinAt(a) < 0) - (pinAt(b) < 0) || (pinAt(a) >= 0 && pinAt(b) >= 0 ? pinAt(a) - pinAt(b) : 0) || String((b.last || {}).at || '').localeCompare(String((a.last || {}).at || '')) || (a.kind === 'channel' ? -1 : 1));
   const row = c => { const l = c.last, mine = l && first(l.from) === first(data.me.name) && l.from === data.me.name;
-    const pre = !l ? (c.kind === 'group' ? esc(c.members.join(', ')) : 'No messages yet') : (mine ? 'You: ' : c.kind === 'dm' ? '' : esc(first(l.from)) + ': ') + esc(l.text);
+    let pre = !l ? (c.kind === 'group' ? esc(c.members.join(', ')) : 'No messages yet') : (mine ? 'You: ' : c.kind === 'dm' ? '' : esc(first(l.from)) + ': ') + esc(l.text);
+    const dr = drafts()[c.id]; if (dr) pre = `<span class="cdraft">Draft:</span> ${esc(dr)}`;
     return `<button class="crow ${c.unread ? 'unread' : ''}" data-openchat="${esc(c.id)}">${avatar(c)}<span class="cbody"><span class="ctop"><b>${esc(c.name)}</b>${pinAt(c) >= 0 ? '<span class="cpin" aria-label="Pinned">📌</span>' : ''}<span class="cwhen">${l ? shortWhen(l.at) : ''}</span></span><span class="cbot"><span class="cpre">${pre}</span>${c.unread ? `<span class="cn">${c.unread > 99 ? '99+' : c.unread}</span>` : ''}</span></span></button>`; };
   const q = chat.q || '', searching = v3() && q.trim().length >= 2;
   const hl = t => { const h = esc(t), i = h.toLowerCase().indexOf(esc(q.trim()).toLowerCase()); return i < 0 ? h : h.slice(0, i) + '<mark>' + h.slice(i, i + esc(q.trim()).length) + '</mark>' + h.slice(i + esc(q.trim()).length); };
@@ -1087,7 +1101,12 @@ function editChatSheet(){
         : `<label class="f">Who sees it<select name="who">${['Everyone', 'Leads and managers', 'Managers'].map(o => `<option ${o === c.who ? 'selected' : ''}>${o}</option>`).join('')}</select></label>`}
       <button class="btn go">Save</button></form></div></div>`;
 }
+// Unsent messages are kept per conversation on this phone until sent or cleared
+function drafts(){ try { return JSON.parse(load('pt-drafts') || '{}') || {}; } catch (_) { return {}; } }
+function setDraft(id, t){ if (!id || id === 'tmp') return; const d = drafts(); t = String(t || '');
+  if (t.trim()) d[id] = t.slice(0, 2000); else delete d[id]; save('pt-drafts', Object.keys(d).length ? JSON.stringify(d) : null); }
 async function openChat(id, name, text, photo, opt){
+  if (text === undefined && id !== chat.open){ chat.compose = drafts()[id] || ''; chat.photo = ''; chat.reply = null; }
   chat.open = id; chat.dmName = name || chat.dmName; if (text === undefined && chat.loaded !== id) { chat.msgs = []; chat.seen = []; chat.dlv = []; }
   render(); scrollChat();
   if (LIVE) return liveOpen(id, text, photo, opt);
@@ -1097,10 +1116,10 @@ async function openChat(id, name, text, photo, opt){
     if (chat.open !== id) return;
     chat.msgs = r.messages; chat.seen = r.seen || []; chat.me = r.me; chat.loaded = id; data.channels = r.channels; if (r.active) data.active = r.active; save('pt-cache', JSON.stringify(data));
     const near = isNearBottom(); render(); if (opt && opt.find) jumpTo(opt.find); else if (near || text !== undefined) scrollChat();
-  } catch (e) { const m = String(e.message || e); if (/^signin/.test(m)) return signOut(m.replace(/^signin:\s*/, '')); if (text !== undefined) { chat.compose = text; if (photo) chat.photo = photo; if (opt && opt.replyTo && opt.reply) chat.reply = opt.reply; chat.msgs = (chat.msgs || []).filter(x => x.id !== 'tmp'); toast('Not sent: ' + m); render(); } }
+  } catch (e) { const m = String(e.message || e); if (/^signin/.test(m)) return signOut(m.replace(/^signin:\s*/, '')); if (text !== undefined) { chat.compose = text; setDraft(id, text); if (photo) chat.photo = photo; if (opt && opt.replyTo && opt.reply) chat.reply = opt.reply; chat.msgs = (chat.msgs || []).filter(x => x.id !== 'tmp'); toast('Not sent: ' + m); render(); } }
   clearTimeout(chat.timer); chat.timer = setTimeout(() => { if (chat.open === id && tab === 'chat' && !document.hidden) openChat(id); }, 7000);
 }
-function stopChat(){ if (LIVE && chat.open) LIVE.send({ t: 'close' }); clearTimeout(chat.timer); chat.open = ''; chat.reply = null; chat.meta = ''; chat.flash = ''; }
+function stopChat(){ const ta = $('.composer textarea'); if (chat.open && ta) setDraft(chat.open, ta.value); chat.compose = ''; if (LIVE && chat.open) LIVE.send({ t: 'close' }); clearTimeout(chat.timer); chat.open = ''; chat.reply = null; chat.meta = ''; chat.flash = ''; }
 function jumpTo(id){ const el = document.querySelector(`[data-bub="${CSS.escape(id)}"]`);
   if (!el){ if (chat.open) openChat(chat.open, null, undefined, undefined, { find: id }); return; }
   chat.flash = id; el.classList.add('flash'); el.scrollIntoView({ block: 'center', behavior: 'smooth' }); setTimeout(() => { if (chat.flash === id) chat.flash = ''; el.classList.remove('flash'); }, 1600); }
@@ -1175,7 +1194,7 @@ async function liveOpen(id, text, photo, opt){
     const near = isNearBottom(); render(); if (opt.find) jumpTo(opt.find); else if (near) scrollChat();
   } catch (e) {
     const m = String(e && e.message || e).replace(/^(Error|Exception):\s*/, '');
-    if (text !== undefined){ chat.compose = text || ''; if (photo) chat.photo = photo; if (opt.reply) chat.reply = opt.reply; const i = (chat.msgs || []).findIndex(x => x.id === 'tmp'); if (i >= 0) chat.msgs.splice(i, 1); toast('Not sent: ' + m); render(); }
+    if (text !== undefined){ chat.compose = text || ''; setDraft(id, text); if (photo) chat.photo = photo; if (opt.reply) chat.reply = opt.reply; const i = (chat.msgs || []).findIndex(x => x.id === 'tmp'); if (i >= 0) chat.msgs.splice(i, 1); toast('Not sent: ' + m); render(); }
     else if (chat.loaded !== id) toast(m);
   }
 }
@@ -1369,7 +1388,7 @@ document.addEventListener('change', e => { const f = e.target.closest && e.targe
 /* ----- announcements ----- */
 function annRow(a){
   return `<div class="row" style="display:block"><div style="display:flex;gap:8px;align-items:baseline"><b style="flex:1">${a.pinned ? '📌 ' : ''}${esc(a.title)}</b><span class="sub">${ago(a.posted)}</span></div>
-    ${a.message ? `<div class="msg">${esc(a.message)}</div>` : ''}<div class="sub">From ${esc(a.from)}${a.mustAck ? ' · must acknowledge' : ''}</div>
+    ${a.message ? `<div class="msg">${linkify(esc(a.message))}</div>` : ''}<div class="sub">From ${esc(a.from)}${a.mustAck ? ' · must acknowledge' : ''}</div>
     <div class="btns" style="margin-top:8px">${a.read ? '<span class="pill ok">Seen</span>' : `<button class="btn sm go" data-read="${esc(a.id)}">Got it</button>`}
       ${lead() && a.notRead ? `<span class="sub" style="align-self:center">${a.notRead.length ? 'Not seen: ' + a.notRead.map(esc).join(', ') : 'Everyone has seen it'}</span>` : ''}
       ${lead() ? `<button class="btn sm" data-unann="${esc(a.id)}">Remove</button>` : ''}</div></div>`;
@@ -1994,8 +2013,8 @@ document.addEventListener('input', e => { const t = e.target;
     box.hidden = !ppl.length && !team;
     box.innerHTML = (team ? `<button type="button" data-ment="team"><span class="tmav" aria-hidden="true">@</span><span><b>team</b> <small>– everyone in this chat</small></span></button>` : '') + ppl.map(p => `<button type="button" data-ment="${esc(mentionLabel(p))}">${avatar({ id: p.id, name: p.name }, 24)}${esc(p.name)}</button>`).join(''); } });
 document.addEventListener('pointerdown', e => { if (e.target.closest && e.target.closest('#ment')) e.preventDefault(); });
-document.addEventListener('click', e => { if (Date.now() - noTap < 500 && e.target.closest && e.target.closest('[data-bub]')) return; const b = e.target.closest && e.target.closest('[data-bub]'); if (!b || e.target.closest('button')) return; chat.meta = chat.meta === b.dataset.bub ? '' : b.dataset.bub; const near = isNearBottom(); render(); if (near) scrollChat(); });
-document.addEventListener('input', e => { const t = e.target; if (t.closest && t.closest('.composer') && t.tagName === 'TEXTAREA'){ t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 140) + 'px'; } });
+document.addEventListener('click', e => { if (Date.now() - noTap < 500 && e.target.closest && e.target.closest('[data-bub]')) return; const b = e.target.closest && e.target.closest('[data-bub]'); if (!b || e.target.closest('button, a')) return; chat.meta = chat.meta === b.dataset.bub ? '' : b.dataset.bub; const near = isNearBottom(); render(); if (near) scrollChat(); });
+document.addEventListener('input', e => { const t = e.target; if (t.closest && t.closest('.composer') && t.tagName === 'TEXTAREA'){ setDraft(chat.open, t.value); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 140) + 'px'; } });
 document.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && e.target.closest && e.target.closest('.composer') && !isIOS()){ e.preventDefault(); e.target.closest('form').requestSubmit(); } });
 
 document.addEventListener('submit', async e => {
@@ -2023,7 +2042,7 @@ document.addEventListener('submit', async e => {
   }
   if (kind === 'send'){ const text = f.elements.namedItem('text').value.trim(), photo = chat.photo || ''; if (!text && !photo) return;
     const reply = chat.reply; chat.reply = null; $('#ment') && ($('#ment').hidden = true);
-    chat.compose = ''; chat.photo = ''; chat.msgs = (chat.msgs || []).concat({ id: 'tmp', fromId: chat.me || data.meId, from: data.me.name, at: new Date().toISOString(), text, photo: photo ? 1 : 0, local: photo, reply: reply ? { id: reply.id, from: reply.from, text: reply.text } : null }); render(); scrollChat();
+    setDraft(chat.open, ''); chat.compose = ''; chat.photo = ''; chat.msgs = (chat.msgs || []).concat({ id: 'tmp', fromId: chat.me || data.meId, from: data.me.name, at: new Date().toISOString(), text, photo: photo ? 1 : 0, local: photo, reply: reply ? { id: reply.id, from: reply.from, text: reply.text } : null }); render(); scrollChat();
     const t = $('.composer textarea'); if (t){ t.value = ''; t.focus(); t.style.height = ''; } openChat(chat.open, null, text, photo || undefined, reply ? { replyTo: reply.id, reply } : undefined); return; }
   if (kind === 'shift'){ if (!v('name')){ toast('Pick who is working'); return; } const p = { id: sheet && sheet.id || '', name: v('name'), date: v('date'), start: v('start'), end: v('end'), position: v('position'), notes: v('notes') };
     if (p.end <= p.start){ toast('The end has to be after the start'); return; }

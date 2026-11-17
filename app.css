@@ -345,6 +345,7 @@ mark{background:rgba(210,146,41,.32);color:inherit;border-radius:3px;padding:0 1
 .bub.me .quote{border-left-color:var(--go-fg);background:rgba(255,255,255,.16)}
 .quote b{display:block;font-weight:600} .quote span{display:block;opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bub.photo .quote{margin:6px}
+.mlink{color:var(--accent);text-decoration:underline;text-underline-offset:2px;word-break:break-all} .bub.me .mlink{color:inherit} .cdraft{color:#c0392b;font-weight:600}
 .ment{font-weight:600;color:var(--accent)} .bub.me .ment{color:inherit;text-decoration:underline;text-underline-offset:2px}
 .ment.me{background:rgba(210,146,41,.28);border-radius:4px;padding:0 2px;color:inherit}
 .ackrow{display:flex;margin:-9px 0 6px 10px;position:relative;z-index:1} .ackrow.me{justify-content:flex-end;margin:-9px 10px 6px 0}
