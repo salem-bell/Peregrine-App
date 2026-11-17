@@ -395,3 +395,36 @@ html,body{overscroll-behavior-y:contain}
 .tpgrid thead th:first-child{text-align:left;position:sticky;left:0;background:var(--card);z-index:2}
 .tpb{all:unset;cursor:pointer;display:block;width:100%;min-height:24px} .tp.pass{color:var(--ok);font-weight:700;font-size:1rem} .tp.fail{color:var(--warn,#b45309);font-weight:700} .tp.wait{color:var(--muted);font-weight:700} .tp.none{color:var(--line)}
 .tmav{width:24px;height:24px;border-radius:50%;display:inline-grid;place-items:center;background:var(--go-bg);color:var(--go-fg);font-weight:700;font-size:.8rem;flex:none} #ment small{color:var(--muted)}
+/* phone tab bar: nothing can push the page sideways, and the bar's colour runs past its bottom edge,
+   so no strip of page shows beside or under it (iOS rubber-banding and the keyboard used to reveal one) */
+html,body{overflow-x:clip}
+.tabs::after{content:'';position:absolute;left:-2px;right:-2px;top:100%;height:200px;background:var(--card)}
+.tabs{left:0;right:0;width:100%;box-sizing:border-box}
+@media (min-width:1000px){ .tabs::after{display:none} .tabs{width:220px} }
+/* availability pop-up: radio segments and side-by-side time lists */
+.seg .segopt{flex:1;text-align:center;cursor:pointer;padding:9px 8px;border-radius:8px;font:400 .8rem/1 var(--head);letter-spacing:.1em;text-transform:uppercase;white-space:nowrap;color:var(--muted);position:relative}
+.seg .segopt input{position:absolute;opacity:0;pointer-events:none}
+.seg .segopt:has(input:checked){background:var(--card);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.14)}
+.seg .segopt:has(input:focus-visible){outline:2px solid var(--accent)}
+.tppick{display:grid;grid-template-columns:1fr 1fr;gap:10px} .tppick[hidden]{display:none!important}
+.tphead{font:400 .72rem/1 var(--head);letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:0 2px 6px}
+.tplist{max-height:240px;overflow-y:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--line);border-radius:10px;background:var(--card);padding:4px;overscroll-behavior:contain}
+.tpopt{all:unset;box-sizing:border-box;display:block;width:100%;padding:10px 12px;border-radius:8px;cursor:pointer;font-size:.95rem}
+.tpopt:hover{background:var(--soft)} .tpopt.on{background:var(--go-bg);color:var(--go-fg);font-weight:600} .tpopt[disabled]{opacity:.3;cursor:default;background:none}
+.tpopt:focus-visible{outline:2px solid var(--accent)}
+/* my shifts calendar */
+.cal{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:8px;margin-bottom:12px}
+.cal-h,.cal-g{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px}
+.cal-h span{text-align:center;font:400 .66rem/1 var(--head);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:4px 0 6px}
+.cal-d{all:unset;box-sizing:border-box;min-height:58px;border-radius:9px;padding:4px 3px;display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer;background:var(--soft);overflow:hidden}
+.cal-d.pad{background:none;cursor:default}
+.cal-d.past{opacity:.5} .cal-d.has{background:var(--accent-soft)} .cal-d.today{box-shadow:inset 0 0 0 2px var(--accent)} .cal-d.sel{box-shadow:inset 0 0 0 2px var(--ink)}
+.cal-d:focus-visible{outline:2px solid var(--accent)}
+.cal-n{font-size:.8rem;font-weight:600}
+.cal-s{font-size:.6rem;line-height:1.15;font-weight:600;color:var(--accent);white-space:nowrap}
+.cal-off{font-size:.6rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+@media (min-width:700px){ .cal-d{min-height:78px} .cal-s{font-size:.72rem} .cal-n{font-size:.9rem} }
+[data-onlydate][hidden]{display:none!important}
+.seg .segopt{display:flex;align-items:center;justify-content:center;gap:6px;margin:0;line-height:1.2;min-height:36px;box-sizing:border-box}
+.cal-s{display:flex;flex-direction:column;align-items:center;line-height:1.1} .cal-e{font-weight:500}
+@media (min-width:700px){ .cal-s{flex-direction:row} }

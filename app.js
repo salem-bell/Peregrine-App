@@ -733,7 +733,37 @@ function viewLists(){
 let schedView = load('pt-sview') || 'build';
 /** What the team actually sees of a shift (leads and managers get drafts too). */
 function pubView(s){ if (s.status === 'draft') return null; if (s.status === 'changed' && s.was) return Object.assign({}, s, s.was, { status: '' }); return s; }
+let myCal = load('pt-mycal') === '1', calMonth = '', calDay = '';
 function viewMyShifts(){
+  const seg = `<div class="seg" style="max-width:320px;margin:0 0 12px"><button data-mycal="0" aria-pressed="${!myCal}">List</button><button data-mycal="1" aria-pressed="${myCal}">Calendar</button></div>`;
+  return seg + (myCal ? viewMyCalendar() : viewMyList());
+}
+/* A month calendar of your own shifts: each day shows your shift times (and approved time off); tap a day for who you're working with. */
+function viewMyCalendar(){
+  const vis = (data.shifts || []).map(pubView).filter(Boolean), mineAll = vis.filter(s => s.name === data.me.name), today = T();
+  if (!calMonth) calMonth = today.slice(0, 7) + '-01';
+  const m0 = calMonth, y = +m0.slice(0, 4), mo = +m0.slice(5, 7), days = new Date(y, mo, 0).getDate(), lead0 = (new Date(y, mo - 1, 1).getDay() + 6) % 7;
+  const lo = today.slice(0, 7) + '-01'; const minM = plus(lo, -40).slice(0, 7) + '-01', maxM = plus(lo, 70).slice(0, 7) + '-01';
+  const short = t => { const [h, m] = t.split(':').map(Number), ap = h < 12 ? 'a' : 'p', hh = h % 12 || 12; return hh + (m ? ':' + pad(m) : '') + ap; };
+  let cells = ''; for (let i = 0; i < lead0; i++) cells += '<div class="cal-d pad"></div>';
+  for (let d = 1; d <= days; d++){ const ds = m0.slice(0, 8) + pad(d), sh = mineAll.filter(s => s.date === ds).sort((a, b) => mins(a.start) - mins(b.start)), off = approvedOff(data.me.name, ds);
+    cells += `<button class="cal-d ${ds === today ? 'today' : ''} ${ds < today ? 'past' : ''} ${sh.length ? 'has' : ''} ${ds === calDay ? 'sel' : ''}" data-calday="${ds}" aria-label="${esc(dayName(ds) + ', ' + shortDay(ds) + (sh.length ? ': ' + sh.map(s => t12(s.start) + ' to ' + t12(s.end)).join(', ') : off ? ': time off' : ': no shift'))}">
+      <span class="cal-n">${d}</span>${sh.map(s => `<span class="cal-s">${short(s.start)}<span class="cal-e">–${short(s.end)}</span></span>`).join('')}${off && !sh.length ? '<span class="cal-off">Off</span>' : ''}</button>`; }
+  const monthHrs = mineAll.filter(s => s.date.slice(0, 7) === m0.slice(0, 7)).reduce((n, s) => n + mins(s.end) - mins(s.start), 0);
+  const sel = calDay && calDay.slice(0, 7) === m0.slice(0, 7) ? calDay : '';
+  const selShifts = sel ? mineAll.filter(s => s.date === sel) : [];
+  const crew = s => vis.filter(o => o !== s && o.name !== s.name && o.date === s.date && mins(o.start) < mins(s.end) && mins(o.end) > mins(s.start));
+  const detail = sel ? `<div class="card"><div class="row" style="display:block"><b style="font:400 1.05rem/1.2 var(--head);letter-spacing:.06em;text-transform:uppercase">${dayName(sel)}</b> <span class="sub">${shortDay(sel)}</span>
+      ${selShifts.length ? selShifts.map(s => { const c = crew(s); return `<div class="big2" style="margin-top:6px">${t12(s.start)} – ${t12(s.end)} <span class="sub">${hrs(mins(s.end) - mins(s.start))}${s.position ? ' · ' + esc(s.position) : ''}</span></div>${s.notes ? `<div class="sub">${esc(s.notes)}</div>` : ''}
+        <div class="crew">${c.length ? '<span class="sub">Working with</span> ' + c.map(o => `<span class="pill mute">${esc(first(o.name))} ${t12(o.start)}–${t12(o.end)}</span>`).join(' ') : '<span class="sub">No one else on yet</span>'}</div>`; }).join('')
+        : `<div class="sub" style="margin-top:6px">${approvedOff(data.me.name, sel) ? 'Time off.' : 'No shift.'}</div>`}</div></div>` : '<p class="sub" style="margin:4px">Tap a day to see who you\'re working with.</p>';
+  return `<div class="mywrap"><div class="weeknav"><button class="btn sm" data-calstep="-1" ${m0 <= minM ? 'disabled' : ''} aria-label="Earlier month">‹</button><div><b>${new Date(y, mo - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</b><div class="sub">${monthHrs ? hrs(monthHrs) + ' scheduled' : 'Nothing scheduled yet'}</div></div><button class="btn sm" data-calstep="1" ${m0 >= maxM ? 'disabled' : ''} aria-label="Later month">›</button></div>
+    <div class="cal"><div class="cal-h">${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(x => `<span>${x}</span>`).join('')}</div><div class="cal-g">${cells}</div></div>
+    ${detail}
+    <p class="sub" style="margin:8px 4px">Shows your published shifts and approved time off.</p>
+    <div class="btns" style="margin-top:14px"><button class="btn" data-more="requests">Time off & swaps</button><button class="btn" data-more="avail">My availability</button><button class="btn" data-more="reminders">Reminders & calendar</button></div></div>`;
+}
+function viewMyList(){
   const vis = (data.shifts || []).map(pubView).filter(Boolean), now = new Date();
   const mine = vis.filter(s => s.name === data.me.name && (s.date > T() || (s.date === T() && mins(s.end) > now.getHours() * 60 + now.getMinutes())));
   const past = vis.filter(s => s.name === data.me.name && s.date < T() && s.date >= plus(T(), -7));
@@ -855,15 +885,16 @@ function shiftSheet(){
 /* ----- availability ----- */
 function viewAvail(){
   const all = data.availability || [], mineL = all.filter(a => a.name === data.me.name);
-  const row = a => `<div class="row"><div class="txt"><b>${/^\d{4}-/.test(a.day) ? dayName(a.day) : 'Every ' + ({ Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday', Sat: 'Saturday', Sun: 'Sunday' })[a.day]}</b><div class="sub">${a.from ? t12(a.from) + '–' + t12(a.to) : 'All day'}${a.note ? ' · ' + esc(a.note) : ''}</div></div>${a.name === data.me.name || mgr() ? `<button class="btn sm" data-editavail="${esc(a.id)}">Edit</button><button class="btn sm" data-delavail="${esc(a.id)}">Delete</button>` : ''}</div>`;
+  const row = a => `<div class="row"><div class="txt"><b>${/^\d{4}-/.test(a.day) ? dayName(a.day) : 'Every ' + ({ Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday', Sat: 'Saturday', Sun: 'Sunday' })[a.day]}</b><div class="sub">${a.from ? t12(a.from) + '–' + t12(a.to) : 'All day'}${a.note ? ' · ' + esc(a.note) : ''}</div></div>${a.name === data.me.name || mgr() ? (String(a.id).startsWith('tmp') ? '<span class="sub">Saving…</span>' : `<button class="btn sm" data-editavail="${esc(a.id)}">Edit</button><button class="btn sm" data-delavail="${esc(a.id)}">Delete</button>`) : ''}</div>`;
   const others = mgr() ? [...new Set(all.filter(a => a.name !== data.me.name).map(a => a.name))].sort() : [];
   return `${back()}<h1>Availability</h1><p class="sub">Times you <b>can't</b> work. Managers see these when building the schedule. For one-off days off, send a time-off request instead.</p>
     <div class="card">${mineL.map(row).join('') || '<div class="empty">You haven\'t added any.</div>'}</div>
+    <div class="btns" style="margin:4px 0 14px"><button class="btn go" data-addavail>Add a time you can't work</button></div><!--
     <h2>Add a time you can't work</h2><div class="card"><form class="stack" data-form="avail">
       <label class="f">When<select name="day">${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(x => `<option value="${x}">Every ${({ Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday', Sat: 'Saturday', Sun: 'Sunday' })[x]}</option>`).join('')}<option value="date">One date…</option></select></label>
       <label class="f" data-onlydate hidden>Date<input name="date" type="date" min="${T()}"></label>
       <div class="two"><label class="f">From (blank = all day)<input name="from" type="time"></label><label class="f">To<input name="to" type="time"></label></div>
-      <label class="f">Note (optional)<input name="note" maxlength="200" placeholder="e.g. Class"></label><button class="btn go">Add</button></form></div>
+      <label class="f">Note (optional)<input name="note" maxlength="200" placeholder="e.g. Class"></label><button class="btn go">Add</button></form></div>-->
     ${others.length ? `<h2>The team</h2>${others.map(n => `<div class="card"><div class="sec">${esc(n)}</div>${all.filter(a => a.name === n).map(row).join('')}</div>`).join('')}` : ''}`;
 }
 
@@ -1373,18 +1404,40 @@ function reqEditSheet(){
       ${q.status === 'Approved' && mine && !mgr() ? '<p class="sub" style="margin:0">This is approved. Changing it sends it back to a manager to approve again.</p>' : ''}
       <button class="btn go">Save changes</button></form></div></div>`;
 }
+const DAYS_ = { Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday', Sat: 'Saturday', Sun: 'Sunday' };
+/** Times for the availability picker: every half hour, 5am–11:30pm, plus whatever is already saved. */
+function availTimes(extra){ const out = []; for (let m = 5 * 60; m <= 23 * 60 + 30; m += 30) out.push(pad(Math.floor(m / 60)) + ':' + pad(m % 60));
+  extra.filter(Boolean).forEach(t => { if (out.indexOf(t) < 0) out.push(t); }); return out.sort(); }
+/* Adding and editing a time you can't work happen in one pop-up: day, all day or the times, a note, and Save – no
+   separate time pickers to open and close (the phone's own time wheel made people leave the pop-up to set the end time). */
 function availEditSheet(){
-  const a = (data.availability || []).find(x => x.id === sheet.id); if (!a) return '';
-  const isDate = /^\d{4}-/.test(a.day), days = { Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday', Sat: 'Saturday', Sun: 'Sunday' };
-  return `<div class="sheet" role="dialog" aria-label="Edit availability"><div class="sheet-in"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="margin:0">Edit time you can't work</h1><button class="btn sm" data-closesheet>Close</button></div>
+  const isNew = !sheet.id, a = isNew ? { name: data.me.name, day: sheet.day || 'Mon', from: '', to: '', note: '' } : (data.availability || []).find(x => x.id === sheet.id); if (!a) return '';
+  const isDate = /^\d{4}-/.test(a.day), from = hm24(a.from), to = hm24(a.to), part = !!(from || to), times = availTimes([from, to]);
+  const col = (k, cur) => `<div class="tpcol"><div class="tphead">${k === 'from' ? 'Starts' : 'Ends'}</div><div class="tplist" data-tplist="${k}" role="listbox" aria-label="${k === 'from' ? 'Start time' : 'End time'}">${times.map(t => `<button type="button" class="tpopt ${t === cur ? 'on' : ''}" data-tpick="${k}|${t}" role="option" aria-selected="${t === cur}">${t12(t)}</button>`).join('')}</div></div>`;
+  return `<div class="sheet" role="dialog" aria-label="${isNew ? 'Add' : 'Edit'} a time you can't work"><div class="sheet-in"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="margin:0">${isNew ? 'Add a time you can\'t work' : 'Edit time you can\'t work'}</h1><button class="btn sm" data-closesheet>Close</button></div>
     ${a.name !== data.me.name ? `<p class="sub" style="margin:0">${esc(a.name)}</p>` : ''}
     <form class="stack" data-form="availedit" style="padding:0">
-      <label class="f">When<select name="day">${Object.keys(days).map(x => `<option value="${x}" ${a.day === x ? 'selected' : ''}>Every ${days[x]}</option>`).join('')}<option value="date" ${isDate ? 'selected' : ''}>One date…</option></select></label>
-      <label class="f" data-onlydate ${isDate ? '' : 'hidden'}>Date<input name="date" type="date" value="${isDate ? esc(a.day) : ''}"></label>
-      <div class="two"><label class="f">From (blank = all day)<input name="from" type="time" value="${esc(a.from || '')}"></label><label class="f">To<input name="to" type="time" value="${esc(a.to || '')}"></label></div>
-      <label class="f">Note (optional)<input name="note" maxlength="200" value="${esc(a.note || '')}"></label>
-      <button class="btn go">Save changes</button></form></div></div>`;
+      <label class="f">When<select name="day">${Object.keys(DAYS_).map(x => `<option value="${x}" ${a.day === x ? 'selected' : ''}>Every ${DAYS_[x]}</option>`).join('')}<option value="date" ${isDate ? 'selected' : ''}>One date…</option></select></label>
+      <label class="f" data-onlydate ${isDate ? '' : 'hidden'}>Date<input name="date" type="date" ${isNew ? `min="${T()}"` : ''} value="${isDate ? esc(a.day) : ''}"></label>
+      <div class="seg" role="radiogroup" aria-label="How long"><label class="segopt"><input type="radio" name="span" value="all" ${part ? '' : 'checked'}> All day</label><label class="segopt"><input type="radio" name="span" value="part" ${part ? 'checked' : ''}> Part of the day</label></div>
+      <div class="tppick" data-tppick ${part ? '' : 'hidden'}>${col('from', from)}${col('to', to)}</div>
+      <input type="hidden" name="from" value="${esc(from)}"><input type="hidden" name="to" value="${esc(to)}">
+      <div class="sub" data-tpsum aria-live="polite"></div>
+      <label class="f">Note (optional)<input name="note" maxlength="200" value="${esc(a.note || '')}" placeholder="e.g. Class"></label>
+      <button class="btn go">${isNew ? 'Add' : 'Save changes'}</button></form></div></div>`;
 }
+/** Keep the time lists, the summary line and the end times in step with what's picked. */
+function syncAvailPick(f){
+  if (!f) return; const part = (f.querySelector('input[name=span]:checked') || {}).value === 'part', from = f.elements.namedItem('from').value, to = f.elements.namedItem('to').value;
+  const pick = f.querySelector('[data-tppick]'); if (pick) pick.hidden = !part;
+  f.querySelectorAll('[data-tpick]').forEach(b => { const [k, t] = b.dataset.tpick.split('|'), on = (k === 'from' ? from : to) === t;
+    b.classList.toggle('on', on); b.setAttribute('aria-selected', on); b.disabled = k === 'to' && !!from && t <= from; });
+  const sum = f.querySelector('[data-tpsum]'); if (sum) sum.textContent = !part ? "You can't work any time that day." : from && to ? "Can't work " + t12(from) + ' – ' + t12(to) + '.' : from ? 'Now pick when it ends.' : 'Pick when it starts and when it ends.';
+}
+function scrollAvailPick(f){ if (!f) return; f.querySelectorAll('.tplist').forEach(l => { const on = l.querySelector('.tpopt.on') || l.querySelector('.tpopt:not([disabled])'); if (on) l.scrollTop = Math.max(0, on.offsetTop - l.offsetTop - 60); }); }
+document.addEventListener('change', e => { const f = e.target.closest && e.target.closest('form[data-form=availedit]'); if (!f || e.target.name !== 'span') return;
+  if (e.target.value === 'all'){ f.elements.namedItem('from').value = ''; f.elements.namedItem('to').value = ''; }
+  syncAvailPick(f); if (e.target.value === 'part') scrollAvailPick(f); });
 function viewRequests(){
   const all = (data.requests || []).filter(q => q.status !== 'Cancelled'), pend = mgr() ? all.filter(q => q.status === 'Pending' && q.from !== data.me.name) : [];
   const mine = all.filter(q => q.from === data.me.name), others = mgr() ? all.filter(q => q.status !== 'Pending' && q.from !== data.me.name) : [];
@@ -1711,6 +1764,7 @@ function restoreForms(snap){
 }
 document.addEventListener('input', e => { const f = e.target.form; if (f && f.dataset.form) DIRTY_FORMS.add(formKey(f)); }, true);
 document.addEventListener('change', e => { const f = e.target.form; if (f && f.dataset.form && e.isTrusted) DIRTY_FORMS.add(formKey(f)); }, true);
+document.addEventListener('focusout', e => { if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) setTimeout(() => { if (!/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName || '')) window.scrollTo(window.scrollX, window.scrollY); }, 60); });
 function render(){
   syncBadge();
   if (rowDrag){ rowDrag.later = true; return; }       // don't redraw under a finger mid-drag
@@ -1742,6 +1796,7 @@ function render(){
   const ovHtml = runner ? viewRunner() : viewer ? viewViewer() : sheet ? (sheet.kind === 'shift' ? shiftSheet() : sheet.kind === 'publish' ? publishSheet() : sheet.kind === 'punch' ? punchSheet() : sheet.kind === 'editchat' ? editChatSheet() : sheet.kind === 'loc' ? locSheet() : sheet.kind === 'preppop' ? prepPopSheet() : sheet.kind === 'testacc' ? testAccSheet() : sheet.kind === 'reqedit' ? reqEditSheet() : sheet.kind === 'availedit' ? availEditSheet() : sheet.kind === 'trainnew' ? trainNewSheet() : sheet.kind === 'trainnote' ? trainNoteSheet() : pickSheet(sheet.kind)) : '';
   if (ovHtml !== lastOvHtml){ $('#overlay').innerHTML = ovHtml; lastOvHtml = ovHtml; }
   restoreForms(formSnap);
+  document.querySelectorAll('form[data-form=availedit]').forEach(f => { syncAvailPick(f); if (!f.dataset.scrolled){ f.dataset.scrolled = '1'; scrollAvailPick(f); } });
   document.body.classList.toggle('noscroll', !!(viewer || sheet || runner));
   if (keepWage){ const el = document.querySelector(keepWage[0]); if (el){ el.value = keepWage[1]; el.focus(); try { el.setSelectionRange(keepWage[2], keepWage[2]); } catch (_) {} } }
   const sf = document.querySelector('form[data-form=shift]'), est = $('#est'); if (sf && est) est.innerHTML = shiftEstimate(sf);
@@ -1844,6 +1899,14 @@ document.addEventListener('click', async e => {
     q.status = 'Cancelled'; render(); act('cancelRequest', { id: q.id }).then(r => { if (r) toast(q.from === data.me.name ? 'Cancelled' : 'Removed'); }); return; }
   if (d.editreq){ sheet = { kind: 'reqedit', id: d.editreq }; render(); return; }
   if (d.editavail){ sheet = { kind: 'availedit', id: d.editavail }; render(); return; }
+  if (d.mycal !== undefined){ myCal = d.mycal === '1'; save('pt-mycal', myCal ? 1 : 0); render(); return; }
+  if (d.calstep){ const [y, m] = (calMonth || T().slice(0, 7) + '-01').split('-').map(Number), nd = new Date(y, m - 1 + Number(d.calstep), 1); calMonth = nd.getFullYear() + '-' + pad(nd.getMonth() + 1) + '-01'; render(); return; }
+  if (d.calday){ calDay = calDay === d.calday ? '' : d.calday; render(); return; }
+  if (d.addavail !== undefined){ sheet = { kind: 'availedit', id: '' }; render(); return; }
+  if (d.tpick){ const f = b.closest('form'), [k, t] = d.tpick.split('|'); if (!f) return;
+    f.elements.namedItem(k).value = t;
+    if (k === 'from' && f.elements.namedItem('to').value && f.elements.namedItem('to').value <= t) f.elements.namedItem('to').value = '';
+    DIRTY_FORMS.add(formKey(f)); syncAvailPick(f); return; }
   if (d.addshift){ sheet = { kind: 'shift', date: d.addshift, name: d.who || '', start: (data.presets[0] || {}).start, end: (data.presets[0] || {}).end }; render(); return; }
   if (d.editshift){ const s = data.shifts.find(x => x.id === d.editshift); if (s) { sheet = Object.assign({ kind: 'shift' }, s); render(); } return; }
   if (d.delshift){ if (!confirm('Delete this shift?')) return; const x = data.shifts.find(s => s.id === d.delshift);
@@ -2008,11 +2071,16 @@ document.addEventListener('submit', async e => {
     Object.assign(q, { date: v('date'), until, details: v('details') }); if (again) q.status = 'Pending'; sheet = null; render();
     act('editRequest', { id: q.id, date: q.date, until, details: q.details }).then(r => { if (r) toast(again ? 'Saved – sent to a manager to approve again' : 'Saved'); }); return; }
   if (kind === 'availedit'){
-    const a = (data.availability || []).find(x => x.id === sheet.id); if (!a) { sheet = null; render(); return; }
+    const isNew = !sheet.id, a = isNew ? null : (data.availability || []).find(x => x.id === sheet.id); if (!isNew && !a) { sheet = null; render(); return; }
     const day = v('day') === 'date' ? v('date') : v('day'); if (!day){ toast('Pick a date'); return; }
-    if ((v('from') && !v('to')) || (!v('from') && v('to')) || (v('from') && v('to') <= v('from'))){ toast('Give a start and an end time, or leave both blank for all day'); return; }
-    Object.assign(a, { day, from: v('from'), to: v('to'), note: v('note') }); sheet = null; render();
-    act('editAvail', { id: a.id, day, from: a.from, to: a.to, note: a.note }).then(r => { if (r) toast('Saved'); }); return; }
+    const part = v('span') === 'part', from = part ? v('from') : '', to = part ? v('to') : '';
+    if (part && (!from || !to)){ toast(from ? 'Pick when it ends' : 'Pick when it starts and ends'); return; }
+    if (part && to <= from){ toast('The end time is before the start time'); return; }
+    sheet = null;
+    if (isNew){ (data.availability = data.availability || []).push({ id: 'tmp' + Date.now(), name: data.me.name, day, from, to, note: v('note') }); render();
+      act('addAvail', { day, from, to, note: v('note') }).then(r => { if (r) toast('Added'); }); return; }
+    Object.assign(a, { day, from, to, note: v('note') }); render();
+    act('editAvail', { id: a.id, day, from, to, note: a.note }).then(r => { if (r) toast('Saved'); }); return; }
   if (kind === 'avail'){ const day = v('day') === 'date' ? v('date') : v('day'); if (!day){ toast('Pick a date'); return; }
     (data.availability = data.availability || []).push({ id: 'tmp' + Date.now(), name: data.me.name, day, from: v('from'), to: v('to'), note: v('note') }); render(); act('addAvail', { day, from: v('from'), to: v('to'), note: v('note') }).then(r => { if (r) toast('Added'); }); f.reset(); return; }
   if (kind === 'editchat'){ const c = curChat(); if (!c) { sheet = null; render(); return; } if (!v('name')){ toast('Give it a name'); return; }

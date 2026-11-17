@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '4.97';
+const VERSION = '4.98';
 const ROLES = ['Manager', 'Lead', 'Staff'];
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Morning of', 'Morning and before', 'Off'];
 
@@ -1732,7 +1732,11 @@ function clean_(v, max) { let t = String(v == null ? '' : v).slice(0, max).trim(
 function esc_(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function nextId_(sh, prefix) {
   let n = 0; vals_(sh).forEach(r => { const m = String(r[0]).match(new RegExp('^' + prefix + '(\\d+)$')); if (m) n = Math.max(n, Number(m[1])); });
-  return prefix + pad_(n + 1);
+  // Never hand out an ID again after its row is deleted: a phone still showing the old row could otherwise
+  // delete or change the new one that took its ID (this deleted people's new availability).
+  const props = PropertiesService.getScriptProperties(), key = 'LASTID_' + sh.getName() + '_' + prefix;
+  n = Math.max(n, Number(props.getProperty(key)) || 0) + 1; props.setProperty(key, String(n));
+  return prefix + pad_(n);
 }
 function findRow_(sh, id) { const v = vals_(sh); for (let i = 0; i < v.length; i++) if (String(v[i][0]) === String(id)) return i + 2; return 0; }
 
