@@ -1,5 +1,7 @@
 # Peregrine Team app
 
+> **Developers:** start with [DEVELOPERS.md](DEVELOPERS.md) – how the pieces fit, where each feature lives, and how to ship changes safely.
+
 A phone app for the Peregrine Coffee Roasters team: checklists, schedule, announcements, time-off and swap requests, and team management for managers. It installs to the home screen and opens full screen like a normal app.
 
 - **App (what staff open):** https://salem-bell.github.io/Peregrine-App/
