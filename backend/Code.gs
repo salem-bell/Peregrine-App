@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '5.0';
+const VERSION = '5.01';
 const ROLES = ['Manager', 'Lead', 'Staff', 'Shop']; // Shop: the shared counter iPad – lists, messages, resources, schedule, clock-in screen
 // Everything the Shop iPad may change. Anything else is refused on the server, whatever the app sends.
 const SHOP_ACTIONS_ = ['check', 'read', 'addPrep', 'donePrep', 'delPrep', 'kioskClock', 'pinChat'];
@@ -101,7 +101,7 @@ const TABS = {
     'Note',
     'Last day (time off)',
   ],
-  Links: ['Name', 'Link', 'Who sees it', 'Order', 'Opens in (blank = the app, or Drive)'],
+  Links: ['Name', 'Link', 'Who sees it', 'Order', 'Opens in (blank = the app, or Drive)', 'Group (shop iPad tab)'],
   'Training items': ['Section', 'Skill', 'Standard', 'Order'],
   Trainees: [
     'ID',
@@ -1184,6 +1184,7 @@ function state_(ss, me, slim, have) {
             ? 'Leads and managers'
             : 'Everyone',
         file: !!driveId_(r[1]) && !/^drive$/i.test(String(r[4] || '').trim()),
+        group: String(r[5] || '').trim(), // the shop iPad shows each group as its own tab
         order: Number(r[3]) || 0,
       }))
       .sort((a, b) => a.order - b.order);

@@ -3756,24 +3756,27 @@ document.addEventListener('change', (e) => {
   const o = f.querySelector('[data-trainother]');
   if (o) o.hidden = e.target.value !== '*';
 });
+const resRow = (l) =>
+  l.file && !/\/spreadsheets\//.test(l.url)
+    ? rowBtn(
+        `data-pdf="${esc(l.id)}"`,
+        `<div class="txt"><b>${esc(l.name)}</b><div class="sub">Opens in the app</div></div><span>›</span>`
+      )
+    : `<a class="row" href="${esc(l.url)}" target="_blank" rel="noopener" style="text-decoration:none"><div class="txt"><b>${esc(l.name)}</b>${opensIn(l.url)}</div><span>↗</span></a>`;
+/** Shop iPad: one resource group as its own tab. */
+function viewResGroup(g) {
+  const xs = (data.links || []).filter((l) => l.group === g);
+  return `<h1>${esc(g)}</h1><div class="card">${xs.map(resRow).join('') || '<div class="empty">Nothing here yet.</div>'}</div>`;
+}
 function viewResources() {
   const tiers = ['Everyone', 'Leads and managers', 'Managers'],
-    ls = data.links || [];
+    ls = (data.links || []).filter((l) => !shop() || !l.group); // on the shop iPad, grouped ones have their own tabs
   return `${back()}<h1>Resources</h1>${
     tiers
       .map((t) => {
         const xs = ls.filter((l) => l.tier === t);
         return xs.length
-          ? `<h2>${t === 'Everyone' ? 'Everyone' : t}</h2><div class="card">${xs
-              .map((l) =>
-                l.file && !/\/spreadsheets\//.test(l.url)
-                  ? rowBtn(
-                      `data-pdf="${esc(l.id)}"`,
-                      `<div class="txt"><b>${esc(l.name)}</b><div class="sub">Opens in the app</div></div><span>›</span>`
-                    )
-                  : `<a class="row" href="${esc(l.url)}" target="_blank" rel="noopener" style="text-decoration:none"><div class="txt"><b>${esc(l.name)}</b>${opensIn(l.url)}</div><span>↗</span></a>`
-              )
-              .join('')}</div>`
+          ? `<h2>${t === 'Everyone' ? 'Everyone' : t}</h2><div class="card">${xs.map(resRow).join('')}</div>`
           : '';
       })
       .join('') || '<div class="card"><div class="empty">No resources yet.</div></div>'
@@ -4116,7 +4119,7 @@ function viewMore() {
 }
 function viewMoreList() {
   if (shop())
-    return `<h1>More</h1><div class="card">${rowBtn('data-more="news"', '<div class="txt"><b>Announcements</b></div><span>›</span>')}${rowBtn('data-more="resources"', '<div class="txt"><b>Resources</b><div class="sub">Recipes, guides, handbooks</div></div><span>›</span>')}</div>
+    return `<h1>More</h1><div class="card">${rowBtn('data-more="news"', '<div class="txt"><b>Announcements</b></div><span>›</span>')}${(data.links || []).some((l) => !l.group) ? rowBtn('data-more="resources"', '<div class="txt"><b>Other resources</b></div><span>›</span>') : ''}</div>
     <div class="card">${rowBtn('data-more="settings"', '<div class="txt"><b>Settings</b><div class="sub">Look, sign out</div></div><span>›</span>')}</div>`;
   const pendN = mgr()
     ? (data.requests || []).filter((q) => q.status === 'Pending' && q.from !== data.me.name).length
@@ -4320,14 +4323,19 @@ function viewShopSchedule() {
 }
 // Phone: Schedule · Chat · [Today] · Lists · More (Today raised in the middle; Tests lives under More).
 // Desktop sidebar: Today first, Tests shown (see .home / .deskonly in app.css).
-// The shop iPad: the clock-in screen in the middle, no Tests, a short More.
-const SHOP_TABS = [
-  ['schedule', 'Schedule', '▦'],
-  ['chat', 'Chat', '✉︎'],
-  ['today', 'Clock in', '◷', 'home'],
-  ['lists', 'Lists', '✓'],
-  ['more', 'More', '☰'],
-];
+// The shop iPad: clock-in screen first, then one tab per resource group (Links › Group column), no Tests, a short More.
+const RES_ICONS = ['☾︎', '❦', '☑', '❏', '◇', '✧'];
+const resGroups = () =>
+  (data.links || []).reduce((a, l) => (l.group && a.indexOf(l.group) < 0 ? a.concat(l.group) : a), []);
+const shopTabs = () =>
+  [
+    ['today', 'Clock in', '◷'],
+    ['schedule', 'Schedule', '▦'],
+    ['chat', 'Chat', '✉︎'],
+    ['lists', 'Lists', '✓'],
+  ]
+    .concat(resGroups().map((g, i) => ['res:' + g, g, RES_ICONS[i % RES_ICONS.length]]))
+    .concat([['more', 'More', '☰']]);
 const TABS = [
   ['schedule', 'Schedule', '▦'],
   ['chat', 'Chat', '✉︎'],
@@ -4365,7 +4373,7 @@ function deskMore() {
   if (shop()) {
     const it = (k, n, ic) =>
       `<button data-more="${k}" class="deskonly" ${tab === 'more' && moreView === k ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}</button>`;
-    return `<div class="tabsep deskonly" aria-hidden="true"></div>${it('news', 'Announcements', '⚑')}${it('resources', 'Resources', '❏')}<div class="tabspacer deskonly" aria-hidden="true"></div>${it('settings', 'Settings', '⚙︎')}`;
+    return `<div class="tabsep deskonly" aria-hidden="true"></div>${it('news', 'Announcements', '⚑')}${(data.links || []).some((l) => !l.group) ? it('resources', 'Other resources', '❏') : ''}<div class="tabspacer deskonly" aria-hidden="true"></div>${it('settings', 'Settings', '⚙︎')}`;
   }
   const pendN = mgr()
       ? (data.requests || []).filter((q) => q.status === 'Pending' && q.from !== data.me.name).length
@@ -4519,9 +4527,9 @@ function render() {
       (data.announcements || []).filter((a) => !a.read).length,
   };
   $('#tabs').hidden = false;
-  if (shop() && !SHOP_TABS.some((t) => t[0] === tab)) tab = 'today';
+  if (shop() && !shopTabs().some((t) => t[0] === tab)) tab = 'today';
   $('#tabs').innerHTML =
-    (shop() ? SHOP_TABS : TABS)
+    (shop() ? shopTabs() : TABS)
       .map(
         ([k, n, ic, cls]) =>
           `<button data-tab="${k}" class="${cls || ''}${k === 'more' ? ' mobonly' : ''}${k === 'more' && tab === 'tests' ? ' cur-m' : ''}" ${tab === k && !(k === 'more' && wide()) ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}${badge[k] ? `<span class="n">${badge[k]}</span>` : ''}</button>`
@@ -4555,8 +4563,9 @@ function render() {
         ? [chat.open, ms0.scrollTop, ms0.scrollHeight - ms0.scrollTop - ms0.clientHeight]
         : null;
   const formSnap = snapForms();
-  const mainHtml =
-    tab === 'tests'
+  const mainHtml = /^res:/.test(tab)
+    ? viewResGroup(tab.slice(4))
+    : tab === 'tests'
       ? viewTests()
       : tab === 'lists'
         ? viewLists()
