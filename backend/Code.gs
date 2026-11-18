@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '5.02';
+const VERSION = '5.03';
 const ROLES = ['Manager', 'Lead', 'Staff', 'Shop']; // Shop: the shared counter iPad – lists, messages, resources, schedule, clock-in screen
 // Everything the Shop iPad may change. Anything else is refused on the server, whatever the app sends.
 const SHOP_ACTIONS_ = ['check', 'read', 'addPrep', 'donePrep', 'delPrep', 'kioskClock', 'pinChat'];
@@ -1126,7 +1126,15 @@ function state_(ss, me, slim, have) {
   }
 
   // Prep requests for upcoming shifts
-  if (want('prep')) out.prep = prepList_(ss, me, tz);
+  if (want('prep')) {
+    out.prep = prepList_(ss, me, tz);
+    // for the "how much do we have now?" question after a prep item is done: inventory names and units only
+    out.invNames = out.prep.some((x) => !x.doneAt) ? invNames_(ss) : [];
+    const map = prepInvMap_();
+    out.prep.forEach((x) => {
+      x.inv = out.invNames.length ? prepInvMatch_(x.item, out.invNames, map) : '';
+    });
+  }
 
   // Chat: live service (the app connects to it itself) or, without one, the channel list from this sheet
   if (want('chat')) {
@@ -1765,6 +1773,34 @@ function act_(ss, me, p, touched) {
         row = findRow_(sh, p.id);
       if (!row) throw new Error('That prep item was removed');
       sh.getRange(row, 9, 1, 2).setValues([p.done === '1' ? [asWho(), new Date()] : ['', '']]);
+      // "How much do we have now?": the answer goes straight into the inventory sheet, and the link is remembered for next time
+      if (p.done === '1' && (p.inv || p.noinv === '1')) {
+        const text = String(sh.getRange(row, 2).getValue()),
+          map = prepInvMap_();
+        if (p.noinv === '1') map[normInv_(text)] = { k: 'none' };
+        else {
+          const n = String(p.count == null ? '' : p.count).trim(),
+            [t, r0] = String(p.inv).split('|'),
+            r = Number(r0);
+          if (n === '' || !(Number(n) >= 0 && Number(n) < 100000)) throw new Error('Type how many we have');
+          if (splitList_(setting_(ss, 'Inventory tabs')).indexOf(t) < 0)
+            throw new Error('That inventory item moved – pull down to refresh');
+          const ish = invBook_(ss).getSheetByName(t);
+          if (
+            !ish ||
+            !(r >= 2) ||
+            r > ish.getLastRow() ||
+            String(ish.getRange(r, 1).getValue()).trim() !== String(p.invItem || '').trim()
+          )
+            throw new Error('That inventory item moved – pull down to refresh');
+          ish.getRange(r, 5).setValue(Number(n));
+          ish.getRange(r, 8).setValue(atLocal_(today, '00:00', tz));
+          CacheService.getScriptCache().put('G:INV', String(Date.now()), 21600);
+          map[normInv_(text)] = { k: p.inv, item: String(p.invItem).trim() };
+          audit(asWho() + ' counted ' + String(p.invItem).trim() + ': ' + Number(n) + ' (after prep)');
+        }
+        PropertiesService.getScriptProperties().setProperty('PREP_INV', JSON.stringify(map).slice(0, 8500));
+      }
       return;
     }
     case 'delPrep': {
@@ -3475,6 +3511,74 @@ function shortDay_(ymd) {
     ' ' +
     d
   );
+}
+/** Inventory item names and units (no costs) for the prep count question. Cached 10 minutes; [] when there's no inventory sheet. */
+function invNames_(ss) {
+  const c = CacheService.getScriptCache(),
+    k = 'INVN:' + (c.get('G:INV') || '0'),
+    hit = c.get(k);
+  if (hit) {
+    try {
+      return JSON.parse(hit);
+    } catch (_) {}
+  }
+  let out = [];
+  try {
+    if (driveId_(setting_(ss, 'Inventory sheet'))) {
+      const book = invBook_(ss);
+      splitList_(setting_(ss, 'Inventory tabs')).forEach((t) => {
+        const sh = book.getSheetByName(t);
+        if (!sh || sh.getLastRow() < 2) return;
+        sh.getRange(2, 1, sh.getLastRow() - 1, 5)
+          .getValues()
+          .forEach((r, i) => {
+            if (String(r[0]).trim())
+              out.push({
+                k: t + '|' + (i + 2),
+                tab: t,
+                item: String(r[0]).trim(),
+                unit: String(r[3] || ''),
+                onHand: r[4] === '' ? '' : Number(r[4]),
+              });
+          });
+      });
+    }
+  } catch (e) {
+    console.log('Inventory names: ' + e.message);
+    out = [];
+  }
+  try {
+    c.put(k, JSON.stringify(out), 600);
+  } catch (_) {}
+  return out;
+}
+const normInv_ = (t) =>
+  String(t || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+/** Which inventory item a prep item is about: one someone picked before for the same words, the same name, or the only close match. */
+function prepInvMatch_(text, names, map) {
+  const n = normInv_(text);
+  if (!n) return '';
+  const m = map[n];
+  if (m && m.k === 'none') return 'none';
+  if (m && names.some((x) => x.k === m.k && x.item === m.item)) return m.k;
+  const exact = names.find((x) => normInv_(x.item) === n);
+  if (exact) return exact.k;
+  const hits = names.filter((x) => {
+    const w = normInv_(x.item);
+    return w.length > 2 && (n.indexOf(w) >= 0 || w.indexOf(n) >= 0);
+  });
+  return hits.length === 1 ? hits[0].k : '';
+}
+function prepInvMap_() {
+  try {
+    return JSON.parse(PropertiesService.getScriptProperties().getProperty('PREP_INV') || '{}');
+  } catch (_) {
+    return {};
+  }
 }
 function prepList_(ss, me, tz) {
   const cutoff = Date.now() - 36 * 36e5;

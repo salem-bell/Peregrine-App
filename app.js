@@ -4297,6 +4297,78 @@ function viewShopHome() {
       ${tile('data-more="news"', '⚑', 'Announcements', '', 0, 0)}
     </div></div>`;
 }
+/* ---------- prep done: "how much do we have now?" → straight into the inventory sheet ---------- */
+function askCount(id, as) {
+  const x = (data.prep || []).find((p) => p.id === id);
+  if (!x || !(data.invNames || []).length || x.inv === 'none') return false;
+  sheet = { kind: 'prepcount', id, as, pick: x.inv || '', val: '', err: '' };
+  render();
+  return true;
+}
+function finishPrep(w, extra) {
+  const x = (data.prep || []).find((p) => p.id === w.id),
+    it = extra && extra.inv ? (data.invNames || []).find((n) => n.k === extra.inv) : null;
+  if (x) {
+    x.doneAt = new Date().toISOString();
+    x.doneBy = w.as || data.me.name;
+    if (extra) x.inv = extra.noinv ? 'none' : extra.inv;
+  }
+  if (it) {
+    it.onHand = Number(extra.count);
+    if (inv) {
+      const ii = inv.items.find((i) => i.tab + '|' + i.row === extra.inv);
+      if (ii) {
+        ii.onHand = Number(extra.count);
+        ii.counted = T();
+      }
+    }
+  }
+  sheet = null;
+  render();
+  act(
+    'donePrep',
+    Object.assign({ id: w.id, done: '1' }, w.as ? { as: w.as } : {}, extra || {}, it ? { invItem: it.item } : {})
+  ).then((r) => {
+    if (r && it) toast(`Saved – ${it.item}: ${extra.count}${it.unit ? ' ' + it.unit : ''}`);
+  });
+}
+function prepCountSheet() {
+  const x = (data.prep || []).find((p) => p.id === sheet.id);
+  if (!x) return '';
+  const names = data.invNames || [],
+    it = sheet.pick && sheet.pick !== 'none' ? names.find((n) => n.k === sheet.pick) : null,
+    tabs = [...new Set(names.map((n) => n.tab))];
+  const picker = `<label class="f">Which inventory item is it?<select name="pick" data-pcpick><option value="">Pick one…</option>${tabs
+    .map(
+      (t) =>
+        `<optgroup label="${esc(t)}">${names
+          .filter((n) => n.tab === t)
+          .map(
+            (n) =>
+              `<option value="${esc(n.k)}" ${n.k === sheet.pick ? 'selected' : ''}>${esc(n.item)}${n.unit ? ' (' + esc(n.unit) + ')' : ''}</option>`
+          )
+          .join('')}</optgroup>`
+    )
+    .join(
+      ''
+    )}<option value="none" ${sheet.pick === 'none' ? 'selected' : ''}>It's not in inventory</option></select></label>`;
+  return `<div class="sheet" role="dialog" aria-label="How much do we have now?"><div class="sheet-in pc"><div class="pc-ok">✓</div>
+    <h1 style="margin:0">${esc(x.item)} done</h1><p class="sub" style="margin:4px 0 14px">${sheet.as ? esc(first(sheet.as)) + ', how' : 'How'} much do we have now?</p>
+    <form class="stack" data-form="prepcount" style="padding:0" onsubmit="return false">
+      ${it && !sheet.relink ? `<div class="pc-item"><b>${esc(it.item)}</b><span class="sub">${it.unit ? esc(it.unit) + ' · ' : ''}${it.onHand === '' ? 'not counted yet' : 'last count ' + it.onHand}</span><button type="button" class="lnk" data-pcrelink>Not this item?</button></div>` : picker}
+      <div class="ic-step pc-step"><button type="button" data-pcstep="-1" aria-label="One less">−</button><input class="cnt" name="n" inputmode="decimal" value="${esc(sheet.val)}" placeholder="–" aria-label="How many now"><button type="button" data-pcstep="1" aria-label="One more">+</button></div>
+      ${sheet.err ? `<p class="kerr" role="alert">${esc(sheet.err)}</p>` : ''}
+      <div class="btns"><button type="button" class="btn go" data-pcsave>Save</button><button type="button" class="btn" data-pcskip>Skip</button></div>
+      <p class="sub" style="margin:0">This updates the inventory count${it ? ' for ' + esc(it.item) : ''}.</p></form></div></div>`;
+}
+document.addEventListener('change', (e) => {
+  if (!e.target.matches || !e.target.matches('[data-pcpick]') || !sheet || sheet.kind !== 'prepcount') return;
+  const f = e.target.form;
+  sheet.val = f.elements.namedItem('n').value.trim();
+  sheet.pick = e.target.value;
+  sheet.relink = !sheet.pick; // picked an item: show it like a linked one
+  render();
+});
 /** Shop iPad: pick your name, then the keypad. */
 function kpickSheet() {
   const { today, rest } = shopPeople(),
@@ -4800,9 +4872,11 @@ function render() {
                                   ? kioskDoneSheet()
                                   : sheet.kind === 'kpick'
                                     ? kpickSheet()
-                                    : sheet.kind === 'who'
-                                      ? whoSheet()
-                                      : pickSheet(sheet.kind)
+                                    : sheet.kind === 'prepcount'
+                                      ? prepCountSheet()
+                                      : sheet.kind === 'who'
+                                        ? whoSheet()
+                                        : pickSheet(sheet.kind)
         : '';
   if (ovHtml !== lastOvHtml) {
     $('#overlay').innerHTML = ovHtml;
@@ -4981,6 +5055,7 @@ document.addEventListener('click', async (e) => {
     render();
     return;
   }
+  if (d.prepdone && d.on !== '1' && askCount(d.prepdone, '')) return;
   if (d.prepdone) {
     const x = (data.prep || []).find((p) => p.id === d.prepdone),
       on = d.on !== '1';
@@ -5330,6 +5405,38 @@ document.addEventListener('click', async (e) => {
     });
     return;
   }
+  if (
+    sheet &&
+    sheet.kind === 'prepcount' &&
+    (d.pcstep || d.pcsave !== undefined || d.pcskip !== undefined || d.pcrelink !== undefined)
+  ) {
+    const f = $('form[data-form=prepcount]'),
+      val = f ? f.elements.namedItem('n').value.trim() : '',
+      pick = f && f.elements.namedItem('pick') ? f.elements.namedItem('pick').value : sheet.pick;
+    sheet.val = val;
+    sheet.pick = pick;
+    if (d.pcrelink !== undefined) {
+      sheet.pick = '';
+      sheet.relink = true;
+      render();
+      return;
+    }
+    if (d.pcstep) {
+      sheet.val = String(Math.max(0, (Number(val) || 0) + Number(d.pcstep)));
+      if (f) f.elements.namedItem('n').value = sheet.val; // change the number in place (a redraw would put the typed value back)
+      return;
+    }
+    if (d.pcsave !== undefined && pick && pick !== 'none' && (val === '' || isNaN(+val) || +val < 0)) {
+      sheet.err = 'Type how many we have';
+      render();
+      return;
+    }
+    finishPrep(
+      sheet,
+      d.pcskip !== undefined ? null : pick === 'none' ? { noinv: '1' } : pick ? { inv: pick, count: val } : null
+    );
+    return;
+  }
   if (d.kpick !== undefined) {
     sheet = { kind: 'kpick' };
     render();
@@ -5357,6 +5464,7 @@ document.addEventListener('click', async (e) => {
   if (d.whopick && sheet && sheet.kind === 'who') {
     const w = sheet;
     sheet = null;
+    if (w.what === 'prep' && askCount(w.id, d.whopick)) return;
     if (w.what === 'prep') {
       const x = (data.prep || []).find((p) => p.id === w.id);
       if (x) {
