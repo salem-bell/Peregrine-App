@@ -6835,3 +6835,26 @@ if (invite && TOKEN) {
 } else if (invite) loadInvite();
 render();
 if (TOKEN) refresh();
+
+/* The logo at the top goes home (Today, or the shop iPad's home screen). The location switcher next to it keeps working. */
+document.addEventListener('click', (e) => {
+  const b = e.target.closest && e.target.closest('#top .brand');
+  if (!b || e.target.closest('.locbtn') || !TOKEN || !data) return;
+  if (shop()) return kioskHome();
+  sheet = null;
+  viewer = null;
+  editUser = null;
+  moreView = '';
+  stopChat();
+  tab = 'today';
+  save('pt-tab', tab);
+  window.scrollTo(0, 0);
+  render();
+});
+(() => {
+  const b = document.querySelector('#top .brand');
+  if (b) {
+    b.title = 'Home';
+    b.style.cursor = 'pointer';
+  }
+})();
