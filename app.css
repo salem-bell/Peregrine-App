@@ -3195,3 +3195,86 @@ body.navhide main {
   font-size: 0.9rem;
   letter-spacing: 0.1em;
 }
+
+/* Inventory: simple count screen */
+.ic-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.ic-prog {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 0;
+}
+.ic-prog {
+  flex-wrap: wrap;
+}
+.ic-prog .progress {
+  flex: 1 1 100%;
+}
+.ic-prog span {
+  flex: 1;
+}
+.ic-prog span {
+  font-size: 0.85rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.ic-sec {
+  padding: 10px 14px 4px;
+  font: 500 0.75rem/1 var(--head);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.icount {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--soft);
+}
+.icount.done {
+  background: color-mix(in srgb, #2fb344 7%, transparent);
+}
+.ic-name {
+  flex: 1;
+  min-width: 0;
+}
+.ic-name b {
+  display: block;
+  font-size: 1.02rem;
+}
+.ic-name small {
+  color: var(--muted);
+}
+.ic-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ic-step button {
+  all: unset;
+  cursor: pointer;
+  width: 46px;
+  height: 46px;
+  border-radius: 23px;
+  background: var(--soft);
+  text-align: center;
+  font: 500 1.5rem/46px var(--body);
+  -webkit-tap-highlight-color: transparent;
+}
+.ic-step button:active {
+  background: var(--accent-soft);
+}
+.ic-step .cnt {
+  width: 64px;
+  height: 46px;
+  text-align: center;
+  font-size: 1.2rem;
+  font-weight: 600;
+  border-radius: 12px;
+}

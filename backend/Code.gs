@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '5.01';
+const VERSION = '5.02';
 const ROLES = ['Manager', 'Lead', 'Staff', 'Shop']; // Shop: the shared counter iPad – lists, messages, resources, schedule, clock-in screen
 // Everything the Shop iPad may change. Anything else is refused on the server, whatever the app sends.
 const SHOP_ACTIONS_ = ['check', 'read', 'addPrep', 'donePrep', 'delPrep', 'kioskClock', 'pinChat'];
@@ -3376,7 +3376,13 @@ function inventory_(token, counts) {
         });
       });
   });
-  const out = { ok: true, tabs, items, url: setting_(ss, 'Inventory sheet'), canEditPar: isMgr };
+  // Leads and the shop iPad just count: no sheet link, costs or vendors (managers get everything)
+  if (!isMgr)
+    items.forEach((x) => {
+      delete x.cost;
+      delete x.vendor;
+    });
+  const out = { ok: true, tabs, items, url: isMgr ? setting_(ss, 'Inventory sheet') : '', canEditPar: isMgr };
   try {
     const t = JSON.stringify(out);
     if (t.length < 95000) cache.put(ck, t, 60);

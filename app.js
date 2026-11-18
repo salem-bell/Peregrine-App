@@ -1500,12 +1500,13 @@ async function loadInv(force) {
   try {
     const r = await post({ fn: 'inventory', token: TOKEN });
     inv = r;
+    inv.at = Date.now();
     if (!invTab || (invTab !== 'Reorder' && r.tabs.indexOf(invTab) < 0)) invTab = r.tabs[0];
   } catch (e) {
     toast(String(e.message || e));
   }
   invBusy = false;
-  if (tab === 'lists' && listTab === INV) render();
+  if (tab === 'inventory') render();
 }
 function queueCount(x, field, val) {
   x[field] = val === '' ? '' : Number(val);
@@ -1535,11 +1536,53 @@ async function flushCounts() {
     invTimer = setTimeout(flushCounts, 5000);
   }
 }
-function viewInventory(cl) {
+let invFull = false,
+  invTodo = false;
+/** Inventory: a simple count screen for everyone; managers can switch to reorder and pars. */
+function viewInventory() {
   if (!inv) {
     loadInv();
-    return `<h1>Checklists</h1>${listSeg(cl)}<div class="card"><div class="empty">Loading inventory…</div></div>`;
+    return `<h1>Inventory</h1><div class="card"><div class="empty">Loading inventory…</div></div>`;
   }
+  if (Date.now() - (inv.at || 0) > 120000 && !Object.keys(invQueue).length) loadInv(); // fresh numbers in the background
+  if (!(mgr() && invFull)) return viewInvCount();
+  return viewInvFull();
+}
+function viewInvCount() {
+  if (invTab === 'Reorder' || inv.tabs.indexOf(invTab) < 0) invTab = inv.tabs[0];
+  const q = invQ.trim().toLowerCase(),
+    done = (x) => x.counted === T() && x.onHand !== '' && x.onHand != null;
+  const area = inv.items.filter((x) => x.tab === invTab),
+    areaDone = area.filter(done).length;
+  let list = q ? inv.items.filter((x) => (x.item + ' ' + x.cat).toLowerCase().includes(q)) : area;
+  if (invTodo && !q) list = list.filter((x) => !done(x));
+  let lastCat = '';
+  const rows = list
+    .map((x) => {
+      const k = esc(x.tab) + '|' + x.row,
+        head = !q && x.cat !== lastCat ? `<div class="ic-sec">${esc(x.cat || 'Other')}</div>` : '';
+      lastCat = x.cat;
+      return `${head}<div class="icount ${done(x) ? 'done' : ''}"><div class="ic-name"><b>${esc(x.item)}</b><small>${esc(x.unit || '')}${q ? (x.unit ? ' · ' : '') + esc(x.tab) : ''}${done(x) ? ' · ✓ counted today' : ''}</small></div>
+        <div class="ic-step"><button data-invstep="-1" data-invk="${k}" aria-label="One less">−</button><input class="cnt" data-invf="onHand" data-invk="${k}" inputmode="decimal" value="${x.onHand === '' || x.onHand == null ? '' : x.onHand}" placeholder="–" aria-label="${esc(x.item)} on hand"><button data-invstep="1" data-invk="${k}" aria-label="One more">+</button></div></div>`;
+    })
+    .join('');
+  return `<div class="ic-head"><h1>Inventory</h1>${mgr() ? '<button class="btn sm" data-invfull>Reorder & pars ›</button>' : ''}</div>
+    <p class="sub" style="margin-top:0">Count what's on the shelf. Each number saves as you go.</p>
+    ${
+      q
+        ? ''
+        : `<div class="seg">${inv.tabs
+            .map((t) => {
+              const a = inv.items.filter((x) => x.tab === t);
+              return `<button data-invtab="${esc(t)}" aria-pressed="${t === invTab}">${esc(t)} ${a.filter(done).length}/${a.length}</button>`;
+            })
+            .join('')}</div>`
+    }
+    ${q ? '' : `<div class="ic-prog"><div class="progress"><i style="width:${area.length ? Math.round((areaDone / area.length) * 100) : 0}%"></i></div><span>${areaDone} of ${area.length} counted today</span><button class="btn sm" data-invtodo aria-pressed="${invTodo}">${invTodo ? 'Show all' : 'Only not counted'}</button></div>`}
+    <input class="search" data-invsearch placeholder="Find an item" value="${esc(invQ)}" aria-label="Find an item">
+    <div class="card ic-list">${rows || `<div class="empty">${invTodo ? 'Everything here is counted ✓' : 'No items.'}</div>`}</div>`;
+}
+function viewInvFull() {
   const items = inv.items,
     need = items.filter((x) => ['Out', 'Below par'].includes(invStatus(x))),
     out = items.filter((x) => invStatus(x) === 'Out'),
@@ -1583,7 +1626,7 @@ function viewInventory(cl) {
         .join('') || '<div class="empty">No items.</div>'
     }</div>`;
   }
-  return `<h1>Checklists</h1>${listSeg(cl)}
+  return `<div class="ic-head"><h1>Inventory</h1><button class="btn sm" data-invfull>‹ Simple count</button></div>
     <div class="card"><div class="row"><div class="txt"><b>${need.length} to order</b><div class="sub">${out.length} out · ${notC.length} not counted · about ${money(cost)} at known costs</div></div><a class="btn sm" href="${esc(inv.url)}" target="_blank" rel="noopener">Open sheet ↗</a></div></div>
     <input class="search" data-invsearch placeholder="Search all items" value="${esc(invQ)}" aria-label="Search inventory">
     ${q ? '' : `<div class="seg">${tabs.map((t) => `<button data-invtab="${esc(t)}" aria-pressed="${t === invTab}">${esc(t)}${t === 'Reorder' && need.length ? ' ' + need.length : ''}</button>`).join('')}</div>`}
@@ -1626,7 +1669,7 @@ function prepPopSheet() {
 }
 function listSeg(cl) {
   const n = prepOpen().length;
-  return `<div class="seg">${cl.map((x) => `<button data-list="${esc(x.list)}" aria-pressed="${x.list === listTab}">${esc(x.list)} ${x.done}/${x.total}</button>`).join('')}<button data-list="${PREP}" aria-pressed="${listTab === PREP}">Prep${n ? ' ' + n : ''}</button>${lead() || shop() ? `<button data-list="${INV}" aria-pressed="${listTab === INV}">Inventory</button>` : ''}</div>`;
+  return `<div class="seg">${cl.map((x) => `<button data-list="${esc(x.list)}" aria-pressed="${x.list === listTab}">${esc(x.list)} ${x.done}/${x.total}</button>`).join('')}<button data-list="${PREP}" aria-pressed="${listTab === PREP}">Prep${n ? ' ' + n : ''}</button></div>`;
 }
 function prepRow(x) {
   const on = !!x.doneAt,
@@ -1664,7 +1707,7 @@ function viewPrep(cl) {
 function viewLists() {
   const cl = data.checklists || [];
   if (listTab === PREP) return viewPrep(cl);
-  if (listTab === INV && (lead() || shop())) return viewInventory(cl);
+  if (listTab === INV) listTab = ''; // inventory has its own tab now
   if (!cl.length)
     return (
       '<h1>Checklists</h1>' +
@@ -4249,6 +4292,7 @@ function viewShopHome() {
       ${tile('data-tab="chat"', '✉︎', 'Chat', chatN ? chatN + ' unread' : '', chatN, 175)}
       ${tile('data-tab="lists"', '✓', 'Checklists', clAll ? clDone + ' of ' + clAll + ' done' : '', 0, 120)}
       ${tile(`data-golist="${PREP}"`, '✎', 'Prep', prepN ? prepN + ' to do' : 'All done', prepN, 40)}
+      ${tile('data-tab="inventory"', '▤', 'Inventory', 'Count stock', 0, 225)}
       ${groups.join('')}
       ${tile('data-more="news"', '⚑', 'Announcements', '', 0, 0)}
     </div></div>`;
@@ -4445,10 +4489,13 @@ const shopTabs = () =>
     ['schedule', 'Schedule', '▦'],
     ['chat', 'Chat', '✉︎'],
     ['lists', 'Lists', '✓'],
+    ['inventory', 'Inventory', '▤'],
   ]
     .concat(resGroups().map((g, i) => ['res:' + g, g, RES_ICONS[i % RES_ICONS.length]]))
     .concat([['more', 'More', '☰']]);
 let navHide = load('pt-navhide') === '1';
+const INV_TAB = ['inventory', 'Inventory', '▤'];
+const mainTabs = () => (lead() ? TABS.slice(0, 4).concat([INV_TAB], TABS.slice(4)) : TABS); // leads and managers count inventory
 const TABS = [
   ['schedule', 'Schedule', '▦'],
   ['chat', 'Chat', '✉︎'],
@@ -4641,8 +4688,9 @@ function render() {
   };
   $('#tabs').hidden = false;
   if (shop() && !shopTabs().some((t) => t[0] === tab)) tab = 'today';
+  if (!shop() && tab === 'inventory' && !lead()) tab = 'today';
   $('#tabs').innerHTML =
-    (shop() ? shopTabs() : TABS)
+    (shop() ? shopTabs() : mainTabs())
       .map(
         ([k, n, ic, cls]) =>
           `<button data-tab="${k}" class="${cls || ''}${k === 'more' ? ' mobonly' : ''}${k === 'more' && tab === 'tests' ? ' cur-m' : ''}" ${tab === k && !(k === 'more' && wide()) ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}${badge[k] ? `<span class="n">${badge[k]}</span>` : ''}</button>`
@@ -4682,17 +4730,19 @@ function render() {
   const formSnap = snapForms();
   const mainHtml = /^res:/.test(tab)
     ? viewResGroup(tab.slice(4))
-    : tab === 'tests'
-      ? viewTests()
-      : tab === 'lists'
-        ? viewLists()
-        : tab === 'schedule'
-          ? viewSchedule()
-          : tab === 'chat'
-            ? viewChat()
-            : tab === 'more'
-              ? viewMore()
-              : viewToday();
+    : tab === 'inventory'
+      ? viewInventory()
+      : tab === 'tests'
+        ? viewTests()
+        : tab === 'lists'
+          ? viewLists()
+          : tab === 'schedule'
+            ? viewSchedule()
+            : tab === 'chat'
+              ? viewChat()
+              : tab === 'more'
+                ? viewMore()
+                : viewToday();
   if (mainHtml !== lastMainHtml || !$('#main').firstChild) {
     $('#main').innerHTML = mainHtml;
     lastMainHtml = mainHtml;
@@ -4905,6 +4955,16 @@ document.addEventListener('click', async (e) => {
   if (d.invtab) {
     invTab = d.invtab;
     save('pt-invtab', invTab);
+    render();
+    return;
+  }
+  if (d.invfull !== undefined) {
+    invFull = !invFull;
+    render();
+    return;
+  }
+  if (d.invtodo !== undefined) {
+    invTodo = !invTodo;
     render();
     return;
   }
@@ -5775,7 +5835,7 @@ document.addEventListener('input', (e) => {
   }
 });
 document.addEventListener('change', (e) => {
-  if (e.target.dataset && e.target.dataset.invf && tab === 'lists') render();
+  if (e.target.dataset && e.target.dataset.invf && tab === 'inventory') render();
 });
 window.addEventListener('pagehide', () => {
   if (Object.keys(invQueue).length) flushCounts();
