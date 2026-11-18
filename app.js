@@ -4264,14 +4264,7 @@ function viewShopHome() {
   const tile = (attrs, ic, label, sub, n, hue) =>
     `<button class="hs-app" ${attrs}><span class="hs-ic" style="--hue:${hue}">${ic}${n ? `<span class="hs-n">${n > 99 ? '99+' : n}</span>` : ''}</span><b>${label}</b>${sub ? `<small>${sub}</small>` : ''}</button>`;
   const groups = resGroups().map((g, i) =>
-    tile(
-      `data-tab="res:${esc(g)}"`,
-      RES_ICONS[i % RES_ICONS.length],
-      esc(g),
-      '',
-      0,
-      [28, 340, 150, 210, 260, 100][i % 6]
-    )
+    tile(`data-tab="res:${esc(g)}"`, resIcon(g, i), esc(g), '', 0, [28, 340, 150, 210, 260, 100][i % 6])
   );
   return `<div class="hs">
     <div class="hs-top"><div class="hs-time">${now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(/\s?[AP]M$/i, '')}<span>${now.getHours() < 12 ? 'AM' : 'PM'}</span></div><div class="hs-date">${now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}</div></div>
@@ -4553,6 +4546,15 @@ function viewShopSchedule() {
 // Desktop sidebar: Today first, Tests shown (see .home / .deskonly in app.css).
 // The shop iPad: clock-in screen first, then one tab per resource group (Links › Group column), no Tests, a short More.
 const RES_ICONS = ['☾︎', '❦', '☑', '❏', '◇', '✧'];
+/** A resource tab's icon follows its name (so renaming or merging groups keeps sensible icons). */
+const resIcon = (g, i) =>
+  /recipe|drink|menu|season/i.test(g)
+    ? '❦'
+    : /manual|handbook|training|policy/i.test(g)
+      ? '❏'
+      : /clos|clean|side|check/i.test(g)
+        ? '☾︎'
+        : RES_ICONS[i % RES_ICONS.length];
 const resGroups = () =>
   (data.links || []).reduce((a, l) => (l.group && a.indexOf(l.group) < 0 ? a.concat(l.group) : a), []);
 const shopTabs = () =>
@@ -4563,7 +4565,7 @@ const shopTabs = () =>
     ['lists', 'Lists', '✓'],
     ['inventory', 'Inventory', '▤'],
   ]
-    .concat(resGroups().map((g, i) => ['res:' + g, g, RES_ICONS[i % RES_ICONS.length]]))
+    .concat(resGroups().map((g, i) => ['res:' + g, g, resIcon(g, i)]))
     .concat([['more', 'More', '☰']]);
 let navHide = load('pt-navhide') === '1';
 const INV_TAB = ['inventory', 'Inventory', '▤'];
