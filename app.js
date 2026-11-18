@@ -2367,17 +2367,21 @@ const SVG_EDIT =
   '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>';
 function viewChat() {
   if (chat.open) return viewConversation();
+  // Pinned conversations sit in a compact strip at the top (in the order they were pinned).
+  // Everything else: unread first, then newest message first.
   const pins = myPins(),
-    pinAt = (c) => pins.indexOf(c.id);
-  const ch = (data.channels || [])
-    .slice()
+    all = data.channels || [];
+  const pinned = pins.map((id) => all.find((c) => c.id === id)).filter(Boolean);
+  const ch = all
+    .filter((c) => pins.indexOf(c.id) < 0)
     .sort(
       (a, b) =>
-        (pinAt(a) < 0) - (pinAt(b) < 0) ||
-        (pinAt(a) >= 0 && pinAt(b) >= 0 ? pinAt(a) - pinAt(b) : 0) ||
+        (Number(b.unread) > 0) - (Number(a.unread) > 0) ||
         String((b.last || {}).at || '').localeCompare(String((a.last || {}).at || '')) ||
         (a.kind === 'channel' ? -1 : 1)
     );
+  const chip = (c) =>
+    `<button class="pchip ${c.unread ? 'unread' : ''}" data-openchat="${esc(c.id)}" aria-label="${esc(c.name)}${c.unread ? ', ' + c.unread + ' unread' : ''}">${avatar(c, 48)}${c.unread ? `<span class="cn">${c.unread > 99 ? '99+' : c.unread}</span>` : ''}<span class="pname">${esc(c.kind === 'dm' ? first(c.name) : c.name)}</span></button>`;
   const row = (c) => {
     const l = c.last,
       mine = l && first(l.from) === first(data.me.name) && l.from === data.me.name;
@@ -2388,7 +2392,7 @@ function viewChat() {
       : (mine ? 'You: ' : c.kind === 'dm' ? '' : esc(first(l.from)) + ': ') + esc(l.text);
     const dr = drafts()[c.id];
     if (dr) pre = `<span class="cdraft">Draft:</span> ${esc(dr)}`;
-    return `<button class="crow ${c.unread ? 'unread' : ''}" data-openchat="${esc(c.id)}">${avatar(c)}<span class="cbody"><span class="ctop"><b>${esc(c.name)}</b>${pinAt(c) >= 0 ? '<span class="cpin" aria-label="Pinned">📌</span>' : ''}<span class="cwhen">${l ? shortWhen(l.at) : ''}</span></span><span class="cbot"><span class="cpre">${pre}</span>${c.unread ? `<span class="cn">${c.unread > 99 ? '99+' : c.unread}</span>` : ''}</span></span></button>`;
+    return `<button class="crow ${c.unread ? 'unread' : ''}" data-openchat="${esc(c.id)}">${avatar(c)}<span class="cbody"><span class="ctop"><b>${esc(c.name)}</b><span class="cwhen">${l ? shortWhen(l.at) : ''}</span></span><span class="cbot"><span class="cpre">${pre}</span>${c.unread ? `<span class="cn">${c.unread > 99 ? '99+' : c.unread}</span>` : ''}</span></span></button>`;
   };
   const q = chat.q || '',
     searching = v3() && q.trim().length >= 2;
@@ -2405,8 +2409,10 @@ function viewChat() {
     ? chat.results
       ? chat.results.map(res).join('') || '<div class="empty">No messages match.</div>'
       : '<div class="empty">Searching…</div>'
-    : ch.map(row).join('') || '<div class="empty">No conversations yet. Tap the pencil to start one.</div>';
-  const unreadN = ch.reduce((n, c) => n + (Number(c.unread) || 0), 0);
+    : (pinned.length ? `<div class="pins" aria-label="Pinned conversations">${pinned.map(chip).join('')}</div>` : '') +
+      (ch.map(row).join('') ||
+        (pinned.length ? '' : '<div class="empty">No conversations yet. Tap the pencil to start one.</div>'));
+  const unreadN = all.reduce((n, c) => n + (Number(c.unread) || 0), 0);
   return `<div class="chathead"><h1>Messages</h1>${unreadN && LIVE ? '<button class="btn sm" data-readall style="margin-left:auto;margin-right:8px">Mark all read</button>' : ''}<button class="iconbtn" data-newdm aria-label="New message">${SVG_EDIT}</button></div>
     ${v3() ? `<div class="csearch"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><input type="search" data-csearch placeholder="Search messages" value="${esc(q)}" aria-label="Search messages" autocomplete="off">${q ? '<button class="cx" data-clearsearch aria-label="Clear search">×</button>' : ''}</div>` : ''}
     <div class="clist">${body}</div>`;
