@@ -2979,3 +2979,219 @@ h2.today {
 .card.ann .msg {
   margin: 6px 0 4px;
 }
+
+/* Shop iPad: home screen */
+.hs {
+  max-width: 900px;
+  margin: 0 auto;
+}
+.hs-top {
+  text-align: center;
+  margin: 18px 0 22px;
+}
+.hs-time {
+  font: 300 5.2rem/1 var(--head);
+  letter-spacing: 0.02em;
+}
+.hs-time span {
+  font-size: 1.6rem;
+  margin-left: 6px;
+  vertical-align: top;
+  letter-spacing: 0.08em;
+}
+.hs-date {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 1.05rem;
+}
+.hs-clock {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 22px;
+  border-radius: 22px;
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+  -webkit-tap-highlight-color: transparent;
+}
+.hs-clock:active {
+  filter: brightness(0.92);
+}
+.hs-cic {
+  font-size: 2.6rem;
+  line-height: 1;
+}
+.hs-clock b {
+  display: block;
+  font: 500 1.6rem/1.1 var(--head);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.hs-clock small {
+  display: block;
+  opacity: 0.85;
+  margin-top: 4px;
+}
+.hs-on {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin: 14px 4px 4px;
+  min-height: 34px;
+}
+.hs-who {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.hs-who > span:last-child {
+  display: flex;
+  flex-direction: column;
+  font-weight: 600;
+  font-size: 0.9rem;
+  line-height: 1.15;
+}
+.hs-who small {
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.hs-ann {
+  margin: 12px 0 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--card);
+  border: 1px solid var(--soft);
+}
+.hs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 18px 12px;
+  margin-top: 22px;
+}
+.hs-app {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+  padding: 6px 4px;
+  border-radius: 16px;
+  -webkit-tap-highlight-color: transparent;
+}
+.hs-app:active {
+  background: var(--soft);
+}
+.hs-ic {
+  position: relative;
+  width: 76px;
+  height: 76px;
+  border-radius: 20px;
+  display: grid;
+  place-items: center;
+  font-size: 2.1rem;
+  color: #fff;
+  background: hsl(var(--hue), 42%, 42%);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+.hs-n {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 12px;
+  background: #d64541;
+  color: #fff;
+  font: 700 0.78rem/24px var(--body);
+  box-sizing: border-box;
+}
+.hs-app b {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+.hs-app small {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+/* Shop iPad: the menu can fold away */
+body.navhide .tabs {
+  display: none !important;
+}
+body.navhide main {
+  padding-bottom: 90px;
+}
+#navfab {
+  all: unset;
+  position: fixed;
+  z-index: 6;
+  right: 16px;
+  bottom: calc(16px + var(--safe-bot));
+  padding: 12px 18px;
+  border-radius: 24px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+  font: 500 0.85rem/1 var(--head);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+#navfab[hidden] {
+  display: none;
+}
+@media (min-width: 1000px) {
+  body.navhide main {
+    margin-left: 0;
+  }
+  .tabs .navhidebtn {
+    flex: none;
+    margin-top: 6px;
+    color: var(--muted);
+  }
+}
+/* Shop iPad: sleep screen */
+#sleep {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: #0b0f10;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+#sleep[hidden] {
+  display: none;
+}
+#sleep .sl-in {
+  text-align: center;
+  transition: transform 2s ease;
+}
+#sleep img {
+  width: min(42vw, 280px);
+  opacity: 0.9;
+}
+#sleep .sl-name {
+  margin-top: 18px;
+  font: 400 1.6rem/1 var(--head);
+  letter-spacing: 0.35em;
+  text-transform: uppercase;
+  color: #d9a441;
+}
+#sleep .sl-tap {
+  margin-top: 26px;
+  color: #6b7678;
+  font-size: 0.9rem;
+  letter-spacing: 0.1em;
+}

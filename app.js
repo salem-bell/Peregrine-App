@@ -4206,32 +4206,144 @@ function shopPeople() {
   const known = today.map((n) => ppl.find((p) => p.name === n)).filter(Boolean);
   return { today: known, rest: ppl.filter((p) => today.indexOf(p.name) < 0) };
 }
+/** Shop iPad home screen: big clock, one big Clock in / out button, who's on now, and app-style tiles. */
 function viewShopHome() {
-  const { today, rest } = shopPeople(),
+  const now = new Date(),
+    on = data.onClock || [],
     sh = shopToday(),
-    now = new Date();
-  const btn = (p) => {
+    chatN = (data.channels || []).reduce((n, c) => n + (Number(c.unread) || 0), 0),
+    cl = data.checklists || [],
+    clDone = cl.reduce((n, c) => n + c.done, 0),
+    clAll = cl.reduce((n, c) => n + c.total, 0),
+    prepN = (data.prep || []).filter((x) => !x.doneAt && (!x.date || x.date <= T())).length,
+    pinned = (data.announcements || []).find((a) => a.pinned);
+  const working = [...new Set(sh.map((s) => s.name))].length;
+  const tile = (attrs, ic, label, sub, n, hue) =>
+    `<button class="hs-app" ${attrs}><span class="hs-ic" style="--hue:${hue}">${ic}${n ? `<span class="hs-n">${n > 99 ? '99+' : n}</span>` : ''}</span><b>${label}</b>${sub ? `<small>${sub}</small>` : ''}</button>`;
+  const groups = resGroups().map((g, i) =>
+    tile(
+      `data-tab="res:${esc(g)}"`,
+      RES_ICONS[i % RES_ICONS.length],
+      esc(g),
+      '',
+      0,
+      [28, 340, 150, 210, 260, 100][i % 6]
+    )
+  );
+  return `<div class="hs">
+    <div class="hs-top"><div class="hs-time">${now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(/\s?[AP]M$/i, '')}<span>${now.getHours() < 12 ? 'AM' : 'PM'}</span></div><div class="hs-date">${now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}</div></div>
+    <button class="hs-clock" data-kpick><span class="hs-cic">◷</span><span><b>Clock in / out</b><small>Tap, pick your name, type your code</small></span></button>
+    <div class="hs-on">${
+      on.length
+        ? `<span class="sub">On the clock</span>${on
+            .map((x) => {
+              const p = (data.people || []).find((q) => q.name === x.name) || { name: x.name, id: x.name };
+              return `<span class="hs-who">${avatar(p, 30)}<span>${esc(first(x.name))}<small>since ${timeOf(x.in)}</small></span></span>`;
+            })
+            .join('')}`
+        : '<span class="sub">No one is clocked in</span>'
+    }</div>
+    ${pinned ? `<div class="hs-ann"><span class="pill">Pinned</span> <b>${esc(pinned.title)}</b>${pinned.message ? ` <span class="sub">${linkify(esc(pinned.message))}</span>` : ''}</div>` : ''}
+    <div class="hs-grid">
+      ${tile('data-tab="schedule"', '▦', 'Schedule', working ? working + ' working today' : 'No one today', 0, 195)}
+      ${tile('data-tab="chat"', '✉︎', 'Chat', chatN ? chatN + ' unread' : '', chatN, 175)}
+      ${tile('data-tab="lists"', '✓', 'Checklists', clAll ? clDone + ' of ' + clAll + ' done' : '', 0, 120)}
+      ${tile(`data-golist="${PREP}"`, '✎', 'Prep', prepN ? prepN + ' to do' : 'All done', prepN, 40)}
+      ${groups.join('')}
+      ${tile('data-more="news"', '⚑', 'Announcements', '', 0, 0)}
+    </div></div>`;
+}
+/** Shop iPad: pick your name, then the keypad. */
+function kpickSheet() {
+  const { today, rest } = shopPeople(),
+    sh = shopToday();
+  const b = (p) => {
     const since = onClockSince(p.name),
       mine = sh.filter((s) => s.name === p.name);
     const sub = since
       ? `<span class="pill ok">In since ${timeOf(since)}</span>`
       : mine.length
-        ? `<span class="sub">${mine.map((s) => t12(s.start) + '–' + t12(s.end) + (s.position ? ' · ' + esc(s.position) : '')).join(', ')}</span>`
-        : '<span class="sub">Not on today</span>';
-    return `<button class="kbtn ${since ? 'in' : ''}" data-kiosk="${esc(p.id)}">${avatar(p, 52)}<b>${esc(p.name)}</b>${sub}</button>`;
+        ? `<span class="sub">${mine.map((s) => t12(s.start) + '–' + t12(s.end)).join(', ')}</span>`
+        : '';
+    return `<button class="kbtn ${since ? 'in' : ''}" data-kiosk="${esc(p.id)}">${avatar(p, 48)}<b>${esc(p.name)}</b>${sub}</button>`;
   };
-  const news = (data.announcements || [])
-    .filter((a) => a.pinned)
-    .concat((data.announcements || []).filter((a) => !a.pinned))
-    .slice(0, 3);
-  const prepN = (data.prep || []).filter((x) => !x.doneAt && (!x.date || x.date <= T())).length;
-  return `<div class="khead"><h1>Clock in or out</h1><div class="kclock">${now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}<small>${now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}</small></div></div>
-    <p class="sub" style="margin-top:0">Tap your name, then type your 4-digit code.</p>
-    ${today.length ? `<h2>Working today</h2><div class="kgrid">${today.map(btn).join('')}</div>` : '<div class="card"><div class="empty">No one is on the schedule today.</div></div>'}
-    ${rest.length ? `<details class="kmore"><summary>Someone else</summary><div class="kgrid">${rest.map(btn).join('')}</div></details>` : ''}
-    ${prepN ? `<div class="card">${rowBtn(`data-golist="${PREP}"`, `<div class="txt"><b>${prepN} prep item${prepN > 1 ? 's' : ''} for today</b></div><span>›</span>`)}</div>` : ''}
-    ${news.length ? `<h2>Announcements</h2>${news.map((a) => `<div class="card ann">${a.pinned ? '<span class="pill">Pinned</span> ' : ''}<b>${esc(a.title)}</b>${a.message ? `<div class="msg">${linkify(esc(a.message))}</div>` : ''}<div class="sub">From ${esc(first(a.from))} · ${ago(a.posted)}</div></div>`).join('')}` : ''}`;
+  return `<div class="sheet" role="dialog" aria-label="Clock in or out"><div class="sheet-in"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="margin:0">Who are you?</h1><button class="btn sm" data-closesheet>Cancel</button></div>
+    ${today.length ? `<h2>Working today</h2><div class="kgrid">${today.map(b).join('')}</div>` : ''}
+    ${rest.length ? `<details class="kmore" ${today.length ? '' : 'open'}><summary>Someone else</summary><div class="kgrid">${rest.map(b).join('')}</div></details>` : ''}</div></div>`;
 }
+/* ---------- shop iPad: back to the home screen after a minute, asleep after five ---------- */
+const KIOSK_HOME_MS = 60000,
+  KIOSK_SLEEP_MS = 5 * 60000;
+let kioskIdle = Date.now(),
+  asleep = false;
+function kioskHome() {
+  sheet = null;
+  viewer = null;
+  runner = null;
+  moreView = '';
+  stopChat();
+  tab = 'today';
+  save('pt-tab', tab);
+  window.scrollTo(0, 0);
+  render();
+}
+function sleepEl() {
+  let el = $('#sleep');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'sleep';
+    el.hidden = true;
+    el.setAttribute('aria-label', 'Tap to wake');
+    el.innerHTML =
+      '<div class="sl-in"><img src="brand/falcon.png" alt="Peregrine"><div class="sl-name">Peregrine</div><div class="sl-tap">Tap to start</div></div>';
+    document.body.appendChild(el);
+  }
+  return el;
+}
+function setAsleep(on) {
+  asleep = on;
+  const el = sleepEl();
+  el.hidden = !on;
+  if (on) sleepDrift();
+}
+function sleepDrift() {
+  // move the logo a little now and then, so the screen doesn't wear in one spot
+  const i = $('#sleep .sl-in');
+  if (i)
+    i.style.transform = `translate(${Math.round((Math.random() - 0.5) * 30)}vw, ${Math.round((Math.random() - 0.5) * 30)}vh)`;
+}
+['pointerdown', 'keydown', 'wheel', 'touchstart'].forEach((ev) =>
+  document.addEventListener(
+    ev,
+    (e) => {
+      kioskIdle = Date.now();
+      if (asleep) {
+        e.preventDefault();
+        e.stopPropagation();
+        setAsleep(false);
+        kioskHome(); // a tap wakes it straight to the home screen (and doesn't press whatever was underneath)
+      }
+    },
+    { capture: true, passive: false }
+  )
+);
+document.addEventListener(
+  'click',
+  (e) => {
+    if (e.target.closest && e.target.closest('#sleep')) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  },
+  true
+);
+setInterval(() => {
+  if (!shop() || !TOKEN) return asleep && setAsleep(false);
+  const idle = Date.now() - kioskIdle;
+  if (asleep) return idle % 60000 < 5000 && sleepDrift();
+  if (idle > KIOSK_SLEEP_MS) return setAsleep(true);
+  if (idle > KIOSK_HOME_MS && (tab !== 'today' || sheet || viewer || chat.open || moreView)) kioskHome();
+}, 5000);
 function kioskSheet() {
   const p = (data.people || []).find((x) => x.id === sheet.id);
   if (!p) return '';
@@ -4336,6 +4448,7 @@ const shopTabs = () =>
   ]
     .concat(resGroups().map((g, i) => ['res:' + g, g, RES_ICONS[i % RES_ICONS.length]]))
     .concat([['more', 'More', '☰']]);
+let navHide = load('pt-navhide') === '1';
 const TABS = [
   ['schedule', 'Schedule', '▦'],
   ['chat', 'Chat', '✉︎'],
@@ -4534,7 +4647,11 @@ function render() {
         ([k, n, ic, cls]) =>
           `<button data-tab="${k}" class="${cls || ''}${k === 'more' ? ' mobonly' : ''}${k === 'more' && tab === 'tests' ? ' cur-m' : ''}" ${tab === k && !(k === 'more' && wide()) ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}${badge[k] ? `<span class="n">${badge[k]}</span>` : ''}</button>`
       )
-      .join('') + deskMore();
+      .join('') +
+    deskMore() +
+    (shop()
+      ? '<button data-navhide class="navhidebtn" aria-label="Hide menu"><span class="ic" aria-hidden="true">⌄</span>Hide</button>'
+      : '');
   const ae = document.activeElement,
     keepWage =
       ae && ae.dataset && (ae.dataset.wage || ae.dataset.invf)
@@ -4631,9 +4748,11 @@ function render() {
                                 ? kioskSheet()
                                 : sheet.kind === 'kioskdone'
                                   ? kioskDoneSheet()
-                                  : sheet.kind === 'who'
-                                    ? whoSheet()
-                                    : pickSheet(sheet.kind)
+                                  : sheet.kind === 'kpick'
+                                    ? kpickSheet()
+                                    : sheet.kind === 'who'
+                                      ? whoSheet()
+                                      : pickSheet(sheet.kind)
         : '';
   if (ovHtml !== lastOvHtml) {
     $('#overlay').innerHTML = ovHtml;
@@ -4648,6 +4767,17 @@ function render() {
     }
   });
   document.body.classList.toggle('noscroll', !!(viewer || sheet || runner));
+  document.body.classList.toggle('navhide', shop() && navHide); // shop iPad: menu folded away
+  let fab = $('#navfab');
+  if (shop() && !fab) {
+    fab = document.createElement('button');
+    fab.id = 'navfab';
+    fab.dataset.navshow = '';
+    fab.setAttribute('aria-label', 'Show menu');
+    fab.innerHTML = '<span aria-hidden="true">☰</span> Menu';
+    document.body.appendChild(fab);
+  }
+  if (fab) fab.hidden = !(shop() && navHide);
   if (keepWage) {
     const el = document.querySelector(keepWage[0]);
     if (el) {
@@ -5138,6 +5268,17 @@ document.addEventListener('click', async (e) => {
       if (r)
         toast(d.clock === 'in' ? 'Clocked in · ' + timeOf(new Date().toISOString()) : 'Clocked out · have a good one');
     });
+    return;
+  }
+  if (d.kpick !== undefined) {
+    sheet = { kind: 'kpick' };
+    render();
+    return;
+  }
+  if (d.navhide !== undefined || d.navshow !== undefined) {
+    navHide = d.navhide !== undefined;
+    save('pt-navhide', navHide ? '1' : null);
+    render();
     return;
   }
   if (d.kiosk) {
