@@ -11,8 +11,11 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '4.99';
-const ROLES = ['Manager', 'Lead', 'Staff'];
+const VERSION = '5.0';
+const ROLES = ['Manager', 'Lead', 'Staff', 'Shop']; // Shop: the shared counter iPad – lists, messages, resources, schedule, clock-in screen
+// Everything the Shop iPad may change. Anything else is refused on the server, whatever the app sends.
+const SHOP_ACTIONS_ = ['check', 'read', 'addPrep', 'donePrep', 'delPrep', 'kioskClock', 'pinChat'];
+const isShop_ = (r) => role_(r[1]) === 'Shop'; // a Users row
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Morning of', 'Morning and before', 'Off'];
 
 const TABS = {
@@ -774,6 +777,7 @@ function role_(v) {
 /** Token → the signed-in person, or an error the app turns into the sign-in screen. */
 /** How long a sign-in lasts: Settings › Ask for the code again every, or the shorter manager limit (default 7 days) for managers. */
 function signInDays_(ss, role) {
+  if (role === 'Shop') return 0; // the counter iPad stays signed in (a new code in Team signs it out)
   const all = Number(setting_(ss, 'Ask for the code again every') || 60),
     raw = setting_(ss, 'Managers sign in again every'),
     mgr = raw === '' ? 7 : Number(raw) || 0;
@@ -913,7 +917,8 @@ function state_(ss, me, slim, have) {
   const tz = ss.getSpreadsheetTimeZone(),
     today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
   const isMgr = me.role === 'Manager',
-    isLead = me.role === 'Lead' || isMgr;
+    isLead = me.role === 'Lead' || isMgr,
+    isShop = me.role === 'Shop';
   have = have && typeof have === 'object' ? have : {};
   const same = [],
     vers = {};
@@ -935,7 +940,7 @@ function state_(ss, me, slim, have) {
     dirty_('Users');
   }
   const users = rv_(ss, 'Users').filter((r) => String(r[0]).trim());
-  const active = users.filter((r) => truthy_(r[3])).map((r) => String(r[0]));
+  const active = users.filter((r) => truthy_(r[3]) && !isShop_(r)).map((r) => String(r[0])); // the shop iPad isn't a person
   const out = {
     ok: true,
     version: VERSION,
@@ -967,7 +972,7 @@ function state_(ss, me, slim, have) {
     },
     team: active,
     people: users
-      .filter((r) => truthy_(r[3]) && r[6])
+      .filter((r) => truthy_(r[3]) && r[6] && !isShop_(r))
       .map((r) => ({
         id: String(r[6]),
         name: String(r[0]),
@@ -1062,7 +1067,7 @@ function state_(ss, me, slim, have) {
           message: String(r[4] || ''),
           pinned: truthy_(r[5]),
           mustAck: truthy_(r[7]) && Date.now() - toMs_(r[1]) < 30 * 864e5,
-          read: readers.indexOf(me.name) >= 0 || String(r[2] || '') === me.name,
+          read: isShop || readers.indexOf(me.name) >= 0 || String(r[2] || '') === me.name, // the iPad never acknowledges for anyone
         }; // the poster has read their own; must-read lapses after 30 days
         if (isLead) {
           a.readers = readers.filter((n) => active.indexOf(n) >= 0);
@@ -1109,6 +1114,11 @@ function state_(ss, me, slim, have) {
     out.punches = punchesFor_(rv_(ss, 'Time clock', 2500), me, first, '9999', tz); // only the newest rows of the Time clock are read
     out.open =
       out.punches.find((x) => x.name === me.name && x.in && !x.out && Date.now() - new Date(x.in) < 16 * 36e5) || null; // older ones are missed clock-outs for a manager to fix
+    // Shop iPad: who is on the clock right now (names and clock-in times only – no hours, no pay)
+    if (isShop)
+      out.onClock = rv_(ss, 'Time clock', 400)
+        .filter((r) => r[1] && openPunch_(r) && Date.now() - toMs_(r[3]) < 16 * 36e5)
+        .map((r) => ({ name: String(r[1]).trim(), in: toIso_(r[3]) }));
 
     // Labor now (leads + managers): who is on the clock and what today's labor has cost so far.
     // Managers get each person's cost; leads get names, times and the running total only (no one's wage).
@@ -1247,8 +1257,8 @@ function shiftsFor_(ss, me, first, last, tz) {
   )
     .filter((s) => s.date && s.name && s.date >= first && s.date <= last)
     .sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
-  if (!isLead) {
-    // baristas see their own shifts and the people working with them – not the whole schedule
+  if (!isLead && me.role !== 'Shop') {
+    // baristas see their own shifts and the people working with them – not the whole schedule (the shop iPad shows everyone's)
     const mine = list.filter((s) => s.name === me.name);
     list = list.filter(
       (s) => s.name === me.name || mine.some((m) => m.date === s.date && s.start < m.end && s.end > m.start)
@@ -1322,6 +1332,16 @@ function act_(ss, me, p, touched) {
   const needLead = () => {
     if (!isLead) throw new Error('Only managers and leads can do that');
   };
+  const isShop = me.role === 'Shop';
+  if (isShop && SHOP_ACTIONS_.indexOf(A) < 0) throw new Error("The shop iPad can't do that – use your own phone");
+  // On the shop iPad, ticks and prep are recorded under the person who picked their name
+  const asWho = () => {
+    if (!isShop) return me.name;
+    const n = String(p.as || '').trim(),
+      ok = vals_(ss.getSheetByName('Users')).some((r) => String(r[0]).trim() === n && truthy_(r[3]) && !isShop_(r));
+    if (!ok) throw new Error('Pick who did it');
+    return n;
+  };
 
   switch (A) {
     case 'check': {
@@ -1340,14 +1360,15 @@ function act_(ss, me, p, touched) {
         v = vals_(sh);
       const i = v.findIndex((r) => ymd_(r[0], tz) === today && String(r[1]) === list && String(r[2]) === task);
       if (p.done === '1') {
-        if (i < 0) sh.appendRow([today, list, task, me.name, new Date()]);
+        if (i < 0) sh.appendRow([today, list, task, asWho(), new Date()]);
       } else if (i >= 0) {
-        if (String(v[i][3]) !== me.name && !isLead) throw new Error(v[i][3] + ' checked that one');
+        if (String(v[i][3]) !== me.name && !isLead && !isShop) throw new Error(v[i][3] + ' checked that one');
         sh.deleteRow(i + 2);
       }
       return;
     }
     case 'read': {
+      if (isShop) return; // the iPad never acknowledges for anyone
       const id = String(p.id),
         sh = tab('Reads');
       if (!vals_(sh).some((r) => String(r[0]) === id && String(r[1]) === me.name))
@@ -1742,7 +1763,7 @@ function act_(ss, me, p, touched) {
       const sh = tab('Prep'),
         row = findRow_(sh, p.id);
       if (!row) throw new Error('That prep item was removed');
-      sh.getRange(row, 9, 1, 2).setValues([p.done === '1' ? [me.name, new Date()] : ['', '']]);
+      sh.getRange(row, 9, 1, 2).setValues([p.done === '1' ? [asWho(), new Date()] : ['', '']]);
       return;
     }
     case 'delPrep': {
@@ -2116,6 +2137,34 @@ function act_(ss, me, p, touched) {
         shiftId = matchShift_(ss, me.name, now, tz);
       put_(sh, [nextId_(sh, 'p'), me.name, today, now, '', shiftId, place_(ss, p.lat, p.lng), '', '', '']);
       return;
+    }
+    case 'kioskClock': {
+      // Shop iPad: someone taps their name and types their own code to clock in or out
+      if (!isShop) throw new Error('Only the shop iPad does that');
+      const cache = CacheService.getScriptCache(),
+        k = 'kiosk_' + String(p.who).slice(0, 40);
+      if (Number(cache.get(k) || 0) >= 5)
+        throw new Error('Too many wrong codes – try again in 15 minutes, or use your phone');
+      if (Number(cache.get('kiosk_all') || 0) >= 30)
+        throw new Error('Too many wrong codes – the clock-in screen is paused for an hour');
+      const u = vals_(ss.getSheetByName('Users')).find(
+        (r) => String(r[6]) === String(p.who) && truthy_(r[3]) && !isShop_(r)
+      );
+      if (!u) throw new Error('Pick your name');
+      if (!/^\d{4}$/.test(String(p.code || '')) || String(u[2]).trim() !== String(p.code)) {
+        cache.put(k, String(Number(cache.get(k) || 0) + 1), 900);
+        cache.put('kiosk_all', String(Number(cache.get('kiosk_all') || 0) + 1), 3600);
+        throw new Error("That code doesn't match");
+      }
+      cache.remove(k);
+      const person = { name: String(u[0]).trim(), role: role_(u[1]), id: String(u[6]) },
+        isIn = vals_(tab('Time clock')).some((r) => String(r[1]).trim() === person.name && openPunch_(r)),
+        did = p.want === 'in' || p.want === 'out' ? p.want : isIn ? 'out' : 'in';
+      if (did === 'in' && isIn) throw new Error(first_(person.name) + ' is already clocked in');
+      if (did === 'out' && !isIn) throw new Error(first_(person.name) + " isn't clocked in");
+      act_(ss, person, { action: did === 'in' ? 'clockIn' : 'clockOut', lat: p.lat, lng: p.lng }, touched);
+      audit(person.name + ' clocked ' + did + ' on the shop iPad');
+      return { name: person.name, did, at: new Date().toISOString() };
     }
     case 'clockOut': {
       const sh = tab('Time clock'),
@@ -2533,7 +2582,8 @@ function place_(ss, lat, lng) {
     : 'away (' + (dist < 1000 ? Math.round(dist) + ' m' : (dist / 1000).toFixed(1) + ' km') + ')';
 }
 
-const tierOk_ = (me, w) => (/^manager/i.test(w) ? me.role === 'Manager' : /lead/i.test(w) ? me.role !== 'Staff' : true);
+const tierOk_ = (me, w) =>
+  /^manager/i.test(w) ? me.role === 'Manager' : /lead/i.test(w) ? me.role === 'Lead' || me.role === 'Manager' : true;
 /** Channels this person can see, with unread counts and the last message. DMs are 'dm-<id>-<id>'. */
 function channels_(ss, me, users) {
   const byId = {};
@@ -2556,12 +2606,12 @@ function channels_(ss, me, users) {
         .filter(Boolean),
       who: String(r[4] || 'Everyone'),
     }))
-    .filter((c) => (c.kind === 'channel' ? tierOk_(me, c.who) : c.members.indexOf(me.id) >= 0));
-  // DMs exist as soon as there is a message
+    .filter((c) => (c.kind === 'channel' ? tierOk_(me, c.who) : me.role !== 'Shop' && c.members.indexOf(me.id) >= 0));
+  // DMs exist as soon as there is a message (never on the shop iPad)
   const dms = {};
   msgs.forEach((m) => {
     const c = String(m[1]);
-    if (/^dm-/.test(c) && c.split('-').indexOf(me.id) > 0) dms[c] = 1;
+    if (me.role !== 'Shop' && /^dm-/.test(c) && c.split('-').indexOf(me.id) > 0) dms[c] = 1;
   });
   Object.keys(dms).forEach((c) => {
     if (!list.some((x) => x.id === c)) {
@@ -2613,10 +2663,11 @@ function chat_(token, channel, text, photo, opt) {
     // a brand-new DM: both people must be active teammates
     const ids = channel.split('-').slice(1),
       act = users.filter((r) => truthy_(r[3])).map((r) => String(r[6]));
+    const shopIds = users.filter(isShop_).map((r) => String(r[6]));
     ok =
       ids.length === 2 &&
       ids.indexOf(me.id) >= 0 &&
-      ids.every((x) => act.indexOf(x) >= 0) &&
+      ids.every((x) => act.indexOf(x) >= 0 && shopIds.indexOf(x) < 0) &&
       channel === 'dm-' + ids.slice().sort().join('-');
   }
   if (!ok) throw new Error("You can't see that conversation");
@@ -3114,7 +3165,7 @@ function testTeam_(ss) {
       .toLowerCase()
       .replace(/\s+/g, ' ');
   const people = vals_(ss.getSheetByName('Users'))
-    .filter((r) => String(r[0]).trim() && truthy_(r[3]))
+    .filter((r) => String(r[0]).trim() && truthy_(r[3]) && !isShop_(r))
     .map((r) => ({ name: String(r[0]).trim(), role: role_(r[1]) }));
   const firsts = {};
   people.forEach((u) => {
@@ -3257,7 +3308,7 @@ function inventory_(token, counts) {
   const ss = SpreadsheetApp.getActive(),
     me = who_(ss, token),
     isMgr = me.role === 'Manager';
-  if (me.role !== 'Lead' && !isMgr) throw new Error('Only managers and leads can see inventory');
+  if (me.role !== 'Lead' && me.role !== 'Shop' && !isMgr) throw new Error('Only managers and leads can see inventory');
   const tz = ss.getSpreadsheetTimeZone(),
     book = invBook_(ss),
     tabs = splitList_(setting_(ss, 'Inventory tabs'));
@@ -3451,6 +3502,7 @@ function prepList_(ss, me, tz) {
 
 /** On the scheduling lineup unless a manager hid them (blank = yes). */
 function onSched_(r) {
+  if (isShop_(r)) return false;
   const v = r[11];
   return v === '' || v === null || v === undefined ? true : truthy_(v);
 }
@@ -4374,6 +4426,7 @@ function chatRoster_(ss) {
       name: String(r[0]).trim(),
       tier: chatTier_(role_(r[1])),
       ro: false,
+      kiosk: isShop_(r),
       active: truthy_(r[3]),
     })),
     channels: seed,
@@ -4417,7 +4470,15 @@ function chatTicket_(token) {
   const exp = Math.floor(Date.now() / 1000) + 86400,
     body = b64u_(
       Utilities.newBlob(
-        JSON.stringify({ s: space_(ss), u: me.id, n: me.name, t: chatTier_(me.role), ro: false, e: exp })
+        JSON.stringify({
+          s: space_(ss),
+          u: me.id,
+          n: me.name,
+          t: chatTier_(me.role),
+          ro: false,
+          k: me.role === 'Shop',
+          e: exp,
+        })
       ).getBytes()
     );
   return {

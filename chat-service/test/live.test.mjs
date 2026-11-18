@@ -344,6 +344,50 @@ try {
   ).json();
   const sm = await B.wait((m) => m.t === 'msg' && /schedule/.test(m.m.text));
   ok(sr3.ok && !!sm, 'note from the sheet appears live');
+  // Shop iPad ("kiosk"): team channels only, can post, no private conversations, never in "Seen by"
+  await roster({ people: people.concat([{ id: 'pK', name: 'Shop iPad', tier: 0, kiosk: 1, active: 1 }]) });
+  const K = client(ticket('pK', 'Shop iPad', 0));
+  await K.ready;
+  const hk = await K.wait((m) => m.t === 'hello');
+  ok(
+    hk.channels.length && hk.channels.every((c) => c.kind === 'channel'),
+    'kiosk sees channels only: ' + hk.channels.map((c) => c.kind + ':' + c.name).join(',')
+  );
+  await S.ask({ t: 'open', ch: 'general' }, (m) => m.t === 'history');
+  await K.ask({ t: 'open', ch: 'general' }, (m) => m.t === 'history');
+  await sleep(200);
+  ok(!S.inbox.some((m) => m.t === 'seen' && m.name === 'Shop iPad'), 'kiosk opening a channel sends no "seen"');
+  const kh = await S.ask({ t: 'open', ch: 'general' }, (m) => m.t === 'history');
+  ok(
+    !kh.seen.some((x) => x.id === 'pK') && !(kh.dlv || []).some((x) => x.id === 'pK'),
+    'kiosk left out of Seen/Delivered lists'
+  );
+  K.send({ t: 'send', ch: 'general', text: 'Oat milk is out', tmp: 'k1' });
+  const ks = await K.wait((m) => m.t === 'sent' && m.tmp === 'k1');
+  ok(ks.m && ks.m.text === 'Oat milk is out', 'kiosk can post in a team channel');
+  const kd = await K.ask({ t: 'send', ch: 'dm-pB-pK', text: 'hi', tmp: 'k2' }, (m) => m.t === 'err');
+  ok(/can't see/.test(kd.msg), 'kiosk cannot message someone privately');
+  const bd = await B.ask({ t: 'send', ch: 'dm-pB-pK', text: 'hi', tmp: 'k3' }, (m) => m.t === 'err');
+  ok(/can't see/.test(bd.msg), 'nobody can message the kiosk privately');
+  const kn = await K.ask({ t: 'newch', kind: 'group', name: 'x', members: 'pB' }, (m) => m.t === 'err');
+  ok(/can't start/.test(kn.msg), 'kiosk cannot start a group');
+  const sg = await S.ask(
+    { t: 'newch', kind: 'group', name: 'With iPad', members: 'pB,pK' },
+    (m) => m.t === 'ok' || m.t === 'err'
+  );
+  await sleep(200);
+  const kl = await K.ask({ t: 'list' }, (m) => m.t === 'channels');
+  ok(sg.t === 'ok' && !kl.channels.some((c) => c.name === 'With iPad'), 'kiosk cannot be added to a group');
+  const ap = await (
+    await fetch(BASE + '/s/family/api', {
+      method: 'POST',
+      body: JSON.stringify({ who: { u: 'pS', n: 'Salem', t: 2 }, msg: { t: 'people' } }),
+    })
+  )
+    .json()
+    .catch(() => ({}));
+  if (ap.people) ok(!ap.people.some((p) => p.id === 'pK'), 'kiosk not in the people list');
+  K.ws.close();
   [S, B, T, G].forEach((c) => c.ws.close());
 } catch (e) {
   fail++;

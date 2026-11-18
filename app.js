@@ -832,7 +832,8 @@ const hmOf = (iso) => {
   return pad(d.getHours()) + ':' + pad(d.getMinutes());
 };
 const mgr = () => data && data.me.role === 'Manager',
-  lead = () => data && (data.me.role === 'Lead' || mgr());
+  lead = () => data && (data.me.role === 'Lead' || mgr()),
+  shop = () => !!data && data.me.role === 'Shop'; // the shared counter iPad
 const first = (n) => String(n || '').split(' ')[0];
 function toast(m) {
   const t = $('#toast');
@@ -1374,12 +1375,17 @@ setInterval(() => {
   });
 }, 1000);
 setInterval(() => {
+  // shop iPad: keep the clock on the clock-in screen current
+  if (shop() && tab === 'today' && !sheet && !document.hidden) render();
+}, 20000);
+setInterval(() => {
   // time sheets: keep hours and pay moving while someone is on the clock
   if (!data || tab !== 'more' || moreView !== 'time' || sheet || viewer || document.hidden) return;
   if ((data.punches || []).some((p) => p.in && !p.out && Date.now() - new Date(p.in) < 16 * 36e5)) render();
 }, 30000);
 
 function viewToday() {
+  if (shop()) return viewShopHome();
   const d = data,
     today = shiftsOn(T()).filter(live),
     next = myNextShift();
@@ -1620,7 +1626,7 @@ function prepPopSheet() {
 }
 function listSeg(cl) {
   const n = prepOpen().length;
-  return `<div class="seg">${cl.map((x) => `<button data-list="${esc(x.list)}" aria-pressed="${x.list === listTab}">${esc(x.list)} ${x.done}/${x.total}</button>`).join('')}<button data-list="${PREP}" aria-pressed="${listTab === PREP}">Prep${n ? ' ' + n : ''}</button>${lead() ? `<button data-list="${INV}" aria-pressed="${listTab === INV}">Inventory</button>` : ''}</div>`;
+  return `<div class="seg">${cl.map((x) => `<button data-list="${esc(x.list)}" aria-pressed="${x.list === listTab}">${esc(x.list)} ${x.done}/${x.total}</button>`).join('')}<button data-list="${PREP}" aria-pressed="${listTab === PREP}">Prep${n ? ' ' + n : ''}</button>${lead() || shop() ? `<button data-list="${INV}" aria-pressed="${listTab === INV}">Inventory</button>` : ''}</div>`;
 }
 function prepRow(x) {
   const on = !!x.doneAt,
@@ -1658,7 +1664,7 @@ function viewPrep(cl) {
 function viewLists() {
   const cl = data.checklists || [];
   if (listTab === PREP) return viewPrep(cl);
-  if (listTab === INV && lead()) return viewInventory(cl);
+  if (listTab === INV && (lead() || shop())) return viewInventory(cl);
   if (!cl.length)
     return (
       '<h1>Checklists</h1>' +
@@ -1806,6 +1812,7 @@ function weekBounds() {
   return [monday(plus(T(), -21)), monday(plus(T(), lead() ? 49 : 7))];
 }
 function viewSchedule() {
+  if (shop()) return viewShopSchedule();
   const seg = lead()
     ? `<div class="seg" style="max-width:420px;margin-left:0"><button data-sview="build" aria-pressed="${schedView !== 'mine'}">Build schedule</button><button data-sview="mine" aria-pressed="${schedView === 'mine'}">My shifts</button></div>`
     : '';
@@ -2413,7 +2420,7 @@ function viewChat() {
       (ch.map(row).join('') ||
         (pinned.length ? '' : '<div class="empty">No conversations yet. Tap the pencil to start one.</div>'));
   const unreadN = all.reduce((n, c) => n + (Number(c.unread) || 0), 0);
-  return `<div class="chathead"><h1>Messages</h1>${unreadN && LIVE ? '<button class="btn sm" data-readall style="margin-left:auto;margin-right:8px">Mark all read</button>' : ''}<button class="iconbtn" data-newdm aria-label="New message">${SVG_EDIT}</button></div>
+  return `<div class="chathead"><h1>Messages</h1>${unreadN && LIVE ? '<button class="btn sm" data-readall style="margin-left:auto;margin-right:8px">Mark all read</button>' : ''}${shop() ? '' : `<button class="iconbtn" data-newdm aria-label="New message">${SVG_EDIT}</button>`}</div>
     ${v3() ? `<div class="csearch"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><input type="search" data-csearch placeholder="Search messages" value="${esc(q)}" aria-label="Search messages" autocomplete="off">${q ? '<button class="cx" data-clearsearch aria-label="Clear search">×</button>' : ''}</div>` : ''}
     <div class="clist">${body}</div>`;
 }
@@ -3230,7 +3237,7 @@ const pushOn_ = () => !!(pushSub && pushOK() && Notification.permission === 'gra
    Re-checked whenever the app comes back to the screen and when Settings/Notifications open. */
 let pushAt = 0;
 async function pushCheck(force) {
-  if (!pushOK() || !data || !data.push || pushChecked === 'busy') return;
+  if (!pushOK() || !data || !data.push || pushChecked === 'busy' || shop()) return; // no notifications on the shop iPad
   if (!force && pushChecked && Date.now() - pushAt < 5000) return;
   pushChecked = 'busy';
   try {
@@ -4065,7 +4072,7 @@ function viewTeam() {
         : '';
   const form = (u) => `<form class="stack" data-form="user" ${u ? `data-id="${esc(u.id)}"` : ''}>
       <label class="f">Name<input name="name" maxlength="60" value="${esc(u ? u.name : '')}" placeholder="First and last name"></label>
-      <label class="f">Role<select name="role">${['Staff', 'Lead', 'Manager'].map((r) => `<option ${u && u.role === r ? 'selected' : ''}>${r}</option>`).join('')}</select></label>
+      <label class="f">Role<select name="role">${['Staff', 'Lead', 'Manager', 'Shop'].map((r) => `<option value="${r}" ${u && u.role === r ? 'selected' : ''}>${r === 'Shop' ? 'Shop iPad (shared device)' : r}</option>`).join('')}</select></label>
       <div class="two"><label class="f">Phone${u ? '' : ' (optional)'}<input name="phone" type="tel" maxlength="40" value="${esc(u ? u.phone : '')}"></label><label class="f">Email${u ? '' : ' (optional)'}<input name="email" type="email" maxlength="120" value="${esc(u ? u.email : '')}"></label></div>
       ${u ? '' : '<p class="sub" style="margin:0">Leave these blank and they\'ll add them from their invite link. Their code is always the last 4 digits of their phone.</p>'}
       <label class="f">Hourly wage ($) – only managers see this<input name="wage" inputmode="decimal" maxlength="8" value="${u && u.wage ? Number(u.wage).toFixed(2) : ''}" placeholder="e.g. 15.50"></label>
@@ -4103,10 +4110,14 @@ function viewMore() {
     training: () => (lead() ? viewTraining() : viewMoreList()),
     team: () => (mgr() ? viewTeam() : viewMoreList()),
   };
+  if (shop() && ['news', 'resources', 'settings'].indexOf(moreView) < 0) moreView = wide() ? 'news' : '';
   if (!views[moreView] && wide()) moreView = 'settings'; // desktop has no More list – the sidebar lists everything
   return views[moreView] ? views[moreView]() : viewMoreList();
 }
 function viewMoreList() {
+  if (shop())
+    return `<h1>More</h1><div class="card">${rowBtn('data-more="news"', '<div class="txt"><b>Announcements</b></div><span>›</span>')}${rowBtn('data-more="resources"', '<div class="txt"><b>Resources</b><div class="sub">Recipes, guides, handbooks</div></div><span>›</span>')}</div>
+    <div class="card">${rowBtn('data-more="settings"', '<div class="txt"><b>Settings</b><div class="sub">Look, sign out</div></div><span>›</span>')}</div>`;
   const pendN = mgr()
     ? (data.requests || []).filter((q) => q.status === 'Pending' && q.from !== data.me.name).length
     : 0;
@@ -4131,6 +4142,17 @@ function viewMoreList() {
 }
 /** Settings: everything about this person and this phone, in one place (phone: from More; desktop: in the sidebar). */
 function viewSettings() {
+  if (shop())
+    return `${wide() ? '' : back()}<h1>Settings</h1>
+    <h2>Look</h2><div class="seg">${[
+      ['auto', 'Auto'],
+      ['light', 'Light'],
+      ['dark', 'Dark'],
+    ]
+      .map(([k, n]) => `<button data-theme="${k}" aria-pressed="${theme() === k}">${n}</button>`)
+      .join('')}</div>
+    <h2>Shop iPad</h2><div class="card"><div class="row"><div class="txt sub">Signed in as <b>${esc(data.me.name)}</b>. It stays signed in; a manager can sign it out from Team by giving it a new code.</div><button class="btn sm" data-signout>Sign out</button></div></div>
+    <p class="sub" style="text-align:center">Peregrine Team · server ${esc(data.version || '')}</p>`;
   pushCheck();
   const item = (k, label, sub) =>
       rowBtn(
@@ -4161,8 +4183,151 @@ function viewSettings() {
     <p class="sub" style="text-align:center">Peregrine Team · server ${esc(data.version || '')}</p>`;
 }
 
+/* ---------- shop iPad: clock-in screen, whole-team schedule, "who did it" ---------- */
+const shopToday = () =>
+  shiftsOn(T())
+    .filter(live)
+    .sort((a, b) => a.start.localeCompare(b.start));
+const onClockSince = (name) => ((data.onClock || []).find((x) => x.name === name) || {}).in || '';
+/** People for the clock-in screen and the "who did it" picker: today's shifts first, then anyone on the clock, then everyone else. */
+function shopPeople() {
+  const ppl = (data.people || []).slice().sort((a, b) => a.name.localeCompare(b.name)),
+    sh = shopToday(),
+    today = [];
+  sh.forEach((s) => {
+    if (today.indexOf(s.name) < 0) today.push(s.name);
+  });
+  (data.onClock || []).forEach((x) => {
+    if (today.indexOf(x.name) < 0) today.push(x.name);
+  });
+  const known = today.map((n) => ppl.find((p) => p.name === n)).filter(Boolean);
+  return { today: known, rest: ppl.filter((p) => today.indexOf(p.name) < 0) };
+}
+function viewShopHome() {
+  const { today, rest } = shopPeople(),
+    sh = shopToday(),
+    now = new Date();
+  const btn = (p) => {
+    const since = onClockSince(p.name),
+      mine = sh.filter((s) => s.name === p.name);
+    const sub = since
+      ? `<span class="pill ok">In since ${timeOf(since)}</span>`
+      : mine.length
+        ? `<span class="sub">${mine.map((s) => t12(s.start) + '–' + t12(s.end) + (s.position ? ' · ' + esc(s.position) : '')).join(', ')}</span>`
+        : '<span class="sub">Not on today</span>';
+    return `<button class="kbtn ${since ? 'in' : ''}" data-kiosk="${esc(p.id)}">${avatar(p, 52)}<b>${esc(p.name)}</b>${sub}</button>`;
+  };
+  const news = (data.announcements || [])
+    .filter((a) => a.pinned)
+    .concat((data.announcements || []).filter((a) => !a.pinned))
+    .slice(0, 3);
+  const prepN = (data.prep || []).filter((x) => !x.doneAt && (!x.date || x.date <= T())).length;
+  return `<div class="khead"><h1>Clock in or out</h1><div class="kclock">${now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}<small>${now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}</small></div></div>
+    <p class="sub" style="margin-top:0">Tap your name, then type your 4-digit code.</p>
+    ${today.length ? `<h2>Working today</h2><div class="kgrid">${today.map(btn).join('')}</div>` : '<div class="card"><div class="empty">No one is on the schedule today.</div></div>'}
+    ${rest.length ? `<details class="kmore"><summary>Someone else</summary><div class="kgrid">${rest.map(btn).join('')}</div></details>` : ''}
+    ${prepN ? `<div class="card">${rowBtn(`data-golist="${PREP}"`, `<div class="txt"><b>${prepN} prep item${prepN > 1 ? 's' : ''} for today</b></div><span>›</span>`)}</div>` : ''}
+    ${news.length ? `<h2>Announcements</h2>${news.map((a) => `<div class="card ann">${a.pinned ? '<span class="pill">Pinned</span> ' : ''}<b>${esc(a.title)}</b>${a.message ? `<div class="msg">${linkify(esc(a.message))}</div>` : ''}<div class="sub">From ${esc(first(a.from))} · ${ago(a.posted)}</div></div>`).join('')}` : ''}`;
+}
+function kioskSheet() {
+  const p = (data.people || []).find((x) => x.id === sheet.id);
+  if (!p) return '';
+  const since = onClockSince(p.name),
+    dots = [0, 1, 2, 3].map((i) => `<span class="${i < sheet.code.length ? 'on' : ''}"></span>`).join(''),
+    keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'];
+  return `<div class="sheet" role="dialog" aria-label="Clock ${since ? 'out' : 'in'}"><div class="sheet-in kiosk"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="margin:0">${esc(p.name)}</h1><button class="btn sm" data-closesheet>Cancel</button></div>
+    <p class="sub">${since ? 'Clocking <b>out</b> · in since ' + timeOf(since) : 'Clocking <b>in</b>'} · type your code</p>
+    <div class="kdots" aria-live="polite">${dots}</div>${sheet.err ? `<p class="kerr" role="alert">${esc(sheet.err)}</p>` : ''}
+    <div class="kpad">${keys.map((k) => (k ? `<button data-kpad="${k === '⌫' ? 'del' : k}" ${sheet.busy ? 'disabled' : ''} aria-label="${k === '⌫' ? 'Delete' : k}">${k}</button>` : '<span></span>')).join('')}</div>
+    ${sheet.busy ? `<p class="sub" style="text-align:center">Clocking ${since ? 'out' : 'in'}…</p>` : ''}</div></div>`;
+}
+function kioskDoneSheet() {
+  return `<div class="sheet" role="dialog" aria-label="Done"><div class="sheet-in kiosk kdone"><div class="kok">✓</div><h1>${esc(first(sheet.name))} clocked ${sheet.did}</h1><p class="sub">${timeOf(sheet.at)}</p></div></div>`;
+}
+async function kioskGo() {
+  const k = sheet;
+  k.busy = true;
+  k.err = '';
+  render();
+  let got = null,
+    err = '';
+  try {
+    const pos = await getPos();
+    got = await post({
+      fn: 'api',
+      token: TOKEN,
+      p: Object.assign({ action: 'kioskClock', who: k.id, code: k.code, have: haveNow() }, pos),
+    });
+  } catch (e) {
+    err = String(e.message || e);
+  }
+  if (sheet !== k) return;
+  if (err) {
+    if (/^signin/.test(err)) return signOut(err.replace(/^signin:\s*/, ''));
+    k.busy = false;
+    k.code = '';
+    k.err = err === 'timeout' ? 'That took too long – check the list before trying again' : err;
+    render();
+    return;
+  }
+  data = mergeGot(data, got);
+  save('pt-cache', JSON.stringify(data));
+  const r = got.result || {};
+  sheet = { kind: 'kioskdone', name: r.name || '', did: r.did || '', at: r.at || new Date().toISOString() };
+  render();
+  setTimeout(() => {
+    if (sheet && sheet.kind === 'kioskdone') {
+      sheet = null;
+      render();
+    }
+  }, 2500);
+}
+function whoSheet() {
+  const { today, rest } = shopPeople(),
+    what = sheet.what === 'prep' ? ((data.prep || []).find((x) => x.id === sheet.id) || {}).item : sheet.task;
+  const b = (p) =>
+    `<button class="kbtn sm" data-whopick="${esc(p.name)}">${avatar(p, 40)}<b>${esc(p.name)}</b></button>`;
+  return `<div class="sheet" role="dialog" aria-label="Who did it?"><div class="sheet-in"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="margin:0">Who did it?</h1><button class="btn sm" data-closesheet>Cancel</button></div>
+    <p class="sub">${esc(what || '')}</p>
+    ${today.length ? `<div class="kgrid sm">${today.map(b).join('')}</div>` : ''}
+    ${rest.length ? `<details class="kmore" ${today.length ? '' : 'open'}><summary>Someone else</summary><div class="kgrid sm">${rest.map(b).join('')}</div></details>` : ''}</div></div>`;
+}
+/** Whole-team schedule, published shifts only, a week at a time. */
+let shopWeek = '';
+function viewShopSchedule() {
+  const mon = shopWeek || monday(T()),
+    days = [0, 1, 2, 3, 4, 5, 6].map((n) => plus(mon, n));
+  const day = (d) => {
+    const xs = shiftsOn(d)
+      .filter(live)
+      .sort((a, b) => a.start.localeCompare(b.start) || a.name.localeCompare(b.name));
+    return `<h2 ${d === T() ? 'class="today"' : ''}>${dayName(d)}${d === T() ? ' · Today' : ''}</h2><div class="card">${
+      xs.length
+        ? xs
+            .map(
+              (s) =>
+                `<div class="row"><div class="txt"><b>${esc(s.name)}</b>${s.position ? `<div class="sub">${esc(s.position)}</div>` : ''}</div><span class="sub">${t12(s.start)}–${t12(s.end)}</span></div>`
+            )
+            .join('')
+        : '<div class="empty">No one scheduled</div>'
+    }</div>`;
+  };
+  return `<h1>Schedule</h1><div class="weeknav"><button class="btn sm" data-shopweek="-7" aria-label="Previous week">‹</button><b>${shortDay(mon)} – ${shortDay(plus(mon, 6))}</b><button class="btn sm" data-shopweek="7" aria-label="Next week">›</button>${mon !== monday(T()) ? '<button class="btn sm" data-shopweek="0">This week</button>' : ''}</div>
+    ${days
+      .filter((d) => d >= (data.from || ''))
+      .map(day)
+      .join('')}`;
+}
 // Phone: Schedule · Chat · [Today] · Lists · More (Today raised in the middle; Tests lives under More).
 // Desktop sidebar: Today first, Tests shown (see .home / .deskonly in app.css).
+// The shop iPad: the clock-in screen in the middle, no Tests, a short More.
+const SHOP_TABS = [
+  ['schedule', 'Schedule', '▦'],
+  ['chat', 'Chat', '✉︎'],
+  ['today', 'Clock in', '◷', 'home'],
+  ['lists', 'Lists', '✓'],
+  ['more', 'More', '☰'],
+];
 const TABS = [
   ['schedule', 'Schedule', '▦'],
   ['chat', 'Chat', '✉︎'],
@@ -4197,6 +4362,11 @@ function syncBadge() {
 /** Desktop sidebar: the More pages listed out, with Settings at the bottom (the phone keeps them under More). */
 function deskMore() {
   if (!wide() || !data) return '';
+  if (shop()) {
+    const it = (k, n, ic) =>
+      `<button data-more="${k}" class="deskonly" ${tab === 'more' && moreView === k ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}</button>`;
+    return `<div class="tabsep deskonly" aria-hidden="true"></div>${it('news', 'Announcements', '⚑')}${it('resources', 'Resources', '❏')}<div class="tabspacer deskonly" aria-hidden="true"></div>${it('settings', 'Settings', '⚙︎')}`;
+  }
   const pendN = mgr()
       ? (data.requests || []).filter((q) => q.status === 'Pending' && q.from !== data.me.name).length
       : 0,
@@ -4349,11 +4519,14 @@ function render() {
       (data.announcements || []).filter((a) => !a.read).length,
   };
   $('#tabs').hidden = false;
+  if (shop() && !SHOP_TABS.some((t) => t[0] === tab)) tab = 'today';
   $('#tabs').innerHTML =
-    TABS.map(
-      ([k, n, ic, cls]) =>
-        `<button data-tab="${k}" class="${cls || ''}${k === 'more' ? ' mobonly' : ''}${k === 'more' && tab === 'tests' ? ' cur-m' : ''}" ${tab === k && !(k === 'more' && wide()) ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}${badge[k] ? `<span class="n">${badge[k]}</span>` : ''}</button>`
-    ).join('') + deskMore();
+    (shop() ? SHOP_TABS : TABS)
+      .map(
+        ([k, n, ic, cls]) =>
+          `<button data-tab="${k}" class="${cls || ''}${k === 'more' ? ' mobonly' : ''}${k === 'more' && tab === 'tests' ? ' cur-m' : ''}" ${tab === k && !(k === 'more' && wide()) ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}${badge[k] ? `<span class="n">${badge[k]}</span>` : ''}</button>`
+      )
+      .join('') + deskMore();
   const ae = document.activeElement,
     keepWage =
       ae && ae.dataset && (ae.dataset.wage || ae.dataset.invf)
@@ -4445,7 +4618,13 @@ function render() {
                             ? trainNewSheet()
                             : sheet.kind === 'trainnote'
                               ? trainNoteSheet()
-                              : pickSheet(sheet.kind)
+                              : sheet.kind === 'kiosk'
+                                ? kioskSheet()
+                                : sheet.kind === 'kioskdone'
+                                  ? kioskDoneSheet()
+                                  : sheet.kind === 'who'
+                                    ? whoSheet()
+                                    : pickSheet(sheet.kind)
         : '';
   if (ovHtml !== lastOvHtml) {
     $('#overlay').innerHTML = ovHtml;
@@ -4595,6 +4774,11 @@ document.addEventListener('click', async (e) => {
     if (!x) return;
     const v = Math.max(0, (Number(x.onHand) || 0) + Number(d.invstep));
     queueCount(x, 'onHand', String(v));
+    render();
+    return;
+  }
+  if (d.prepdone && shop() && d.on !== '1') {
+    sheet = { kind: 'who', what: 'prep', id: d.prepdone };
     render();
     return;
   }
@@ -4945,6 +5129,48 @@ document.addEventListener('click', async (e) => {
       if (r)
         toast(d.clock === 'in' ? 'Clocked in · ' + timeOf(new Date().toISOString()) : 'Clocked out · have a good one');
     });
+    return;
+  }
+  if (d.kiosk) {
+    sheet = { kind: 'kiosk', id: d.kiosk, code: '', err: '' };
+    render();
+    return;
+  }
+  if (d.kpad && sheet && sheet.kind === 'kiosk' && !sheet.busy) {
+    if (d.kpad === 'del') sheet.code = sheet.code.slice(0, -1);
+    else if (sheet.code.length < 4) sheet.code += d.kpad;
+    sheet.err = '';
+    render();
+    if (sheet.code.length === 4) kioskGo();
+    return;
+  }
+  if (d.whopick && sheet && sheet.kind === 'who') {
+    const w = sheet;
+    sheet = null;
+    if (w.what === 'prep') {
+      const x = (data.prep || []).find((p) => p.id === w.id);
+      if (x) {
+        x.doneAt = new Date().toISOString();
+        x.doneBy = d.whopick;
+      }
+      render();
+      act('donePrep', { id: w.id, done: '1', as: d.whopick });
+    } else {
+      busy['c|' + w.list + '|' + w.task] = true;
+      render();
+      act('check', { list: w.list, task: w.task, done: '1', as: d.whopick });
+    }
+    return;
+  }
+  if (d.shopweek !== undefined) {
+    shopWeek = d.shopweek === '0' ? '' : plus(shopWeek || monday(T()), Number(d.shopweek));
+    if (shopWeek === monday(T())) shopWeek = '';
+    render();
+    return;
+  }
+  if (d.check && shop() && d.on !== '1') {
+    sheet = { kind: 'who', what: 'check', list: listTab, task: d.check };
+    render();
     return;
   }
   if (d.check) {

@@ -2838,3 +2838,144 @@ body {
   height: 20px;
   line-height: 16px;
 }
+
+/* Shop iPad: clock-in screen */
+.khead {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+.kclock {
+  font: 600 2rem/1 var(--body);
+  text-align: right;
+}
+.kclock small {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: var(--muted);
+  margin-top: 4px;
+}
+.kgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.kgrid.sm {
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+}
+.kbtn {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  background: var(--card);
+  border: 1px solid var(--soft);
+  border-radius: 16px;
+  padding: 16px 10px 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+  min-height: 150px;
+  -webkit-tap-highlight-color: transparent;
+}
+.kbtn.sm {
+  min-height: 0;
+  padding: 12px 8px;
+}
+.kbtn:active {
+  background: var(--soft);
+}
+.kbtn.in {
+  border-color: #2fb344;
+  box-shadow: inset 0 0 0 1px #2fb344;
+}
+.kbtn b {
+  font-weight: 600;
+}
+.kbtn .sub {
+  font-size: 0.78rem;
+}
+.kmore > summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--accent);
+  margin: 4px 0 10px;
+}
+.kiosk {
+  max-width: 380px;
+  margin: 0 auto;
+}
+.kdots {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  margin: 18px 0;
+}
+.kdots span {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+}
+.kdots span.on {
+  background: var(--accent);
+}
+.kerr {
+  text-align: center;
+  color: #c0392b;
+  font-weight: 600;
+}
+.kpad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-top: 8px;
+}
+.kpad button {
+  all: unset;
+  cursor: pointer;
+  height: 68px;
+  border-radius: 34px;
+  background: var(--soft);
+  font: 500 1.7rem/68px var(--body);
+  text-align: center;
+  -webkit-tap-highlight-color: transparent;
+}
+.kpad button:active {
+  background: var(--accent-soft);
+}
+.kpad button:disabled {
+  opacity: 0.4;
+}
+.kdone {
+  text-align: center;
+  padding: 24px 0;
+}
+.kok {
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 12px;
+  border-radius: 50%;
+  background: #2fb344;
+  color: #fff;
+  font: 700 2.4rem/72px var(--body);
+}
+.weeknav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+h2.today {
+  color: var(--accent);
+}
+.card.ann {
+  padding: 12px 14px;
+}
+.card.ann .msg {
+  margin: 6px 0 4px;
+}

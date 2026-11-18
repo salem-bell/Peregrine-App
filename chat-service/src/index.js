@@ -206,6 +206,8 @@ export class Space {
       CREATE TABLE IF NOT EXISTS photos (key TEXT PRIMARY KEY, type TEXT, data BLOB, at INTEGER);`);
     if (!this.one("SELECT 1 AS x FROM pragma_table_info('messages') WHERE name = 'file'"))
       this.sql.exec('ALTER TABLE messages ADD COLUMN file TEXT'); // PDFs: the file's name
+    if (!this.one("SELECT 1 AS x FROM pragma_table_info('people') WHERE name = 'kiosk'"))
+      this.sql.exec('ALTER TABLE people ADD COLUMN kiosk INTEGER'); // a shared shop device: team channels only, no private conversations
   }
   /* ---------- small helpers ---------- */
   q(sql, ...a) {
@@ -251,14 +253,15 @@ export class Space {
   me(who) {
     const p = this.person(who.u);
     return p
-      ? { id: p.id, name: p.name, tier: p.tier, ro: !!p.ro, active: !!p.active }
-      : { id: who.u, name: who.n, tier: Number(who.t) || 0, ro: !!who.ro, active: true };
+      ? { id: p.id, name: p.name, tier: p.tier, ro: !!p.ro, kiosk: !!p.kiosk, active: !!p.active }
+      : { id: who.u, name: who.n, tier: Number(who.t) || 0, ro: !!who.ro, kiosk: !!who.k, active: true };
   }
   canSee(me, ch) {
     if (!me.active) return false;
     if (/^dm-/.test(ch)) {
       const ids = ch.split('-').slice(1);
       if (ids.length !== 2 || ids.indexOf(me.id) < 0 || ch !== 'dm-' + ids.slice().sort().join('-')) return false;
+      if (me.kiosk || ids.some((x) => this.isKiosk(x))) return false; // nobody messages the shop device privately
       return (
         !!this.one('SELECT 1 FROM messages WHERE ch = ? LIMIT 1', ch) ||
         ids.every((x) => {
@@ -271,9 +274,13 @@ export class Space {
     if (!c) return false;
     return c.kind === 'channel'
       ? me.tier >= (c.who || 0)
-      : String(c.members || '')
-          .split(',')
-          .indexOf(me.id) >= 0;
+      : !me.kiosk &&
+          String(c.members || '')
+            .split(',')
+            .indexOf(me.id) >= 0;
+  }
+  isKiosk(id) {
+    return !!this.one('SELECT 1 AS x FROM people WHERE id = ? AND kiosk = 1', id);
   }
   memberIds(ch) {
     if (/^dm-/.test(ch)) return ch.split('-').slice(1);
@@ -419,14 +426,14 @@ export class Space {
   }
   seen(me, ch) {
     return this.q(
-      'SELECT r.uid AS uid, r.at AS at, p.name AS name FROM reads r JOIN people p ON p.id = r.uid WHERE r.ch = ? AND r.uid != ? AND p.active = 1',
+      'SELECT r.uid AS uid, r.at AS at, p.name AS name FROM reads r JOIN people p ON p.id = r.uid WHERE r.ch = ? AND r.uid != ? AND p.active = 1 AND COALESCE(p.kiosk, 0) = 0',
       ch,
       me.id
     ).map((r) => ({ id: r.uid, name: r.name, at: new Date(r.at).toISOString() }));
   }
   dlv(me, ch) {
     return this.q(
-      'SELECT d.uid AS uid, d.at AS at, p.name AS name FROM dlv d JOIN people p ON p.id = d.uid WHERE d.ch = ? AND d.uid != ? AND p.active = 1',
+      'SELECT d.uid AS uid, d.at AS at, p.name AS name FROM dlv d JOIN people p ON p.id = d.uid WHERE d.ch = ? AND d.uid != ? AND p.active = 1 AND COALESCE(p.kiosk, 0) = 0',
       ch,
       me.id
     ).map((r) => ({ id: r.uid, name: r.name, at: new Date(r.at).toISOString() }));
@@ -434,7 +441,8 @@ export class Space {
   /** "Delivered": the conversation reached these people's app (an open connection, or the next time they open it). */
   delivered(ch, ids) {
     const at = Date.now(),
-      names = this.names();
+      names = this.names(),
+      kiosk = this.q('SELECT id FROM people WHERE kiosk = 1').map((r) => r.id);
     ids.forEach((u) => {
       this.sql.exec(
         'INSERT INTO dlv (uid, ch, at) VALUES (?, ?, ?) ON CONFLICT(uid, ch) DO UPDATE SET at = excluded.at',
@@ -443,7 +451,7 @@ export class Space {
         at
       );
       this.fanout(ch, (them, ta) =>
-        ta.who.u !== u && ta.open === ch
+        ta.who.u !== u && ta.open === ch && kiosk.indexOf(u) < 0
           ? { t: 'dlv', ch, id: u, name: names[u] || '', at: new Date(at).toISOString() }
           : null
       );
@@ -555,7 +563,9 @@ export class Space {
       if (msg.t === 'people')
         return json({
           t: 'people',
-          people: this.q('SELECT id, name, tier FROM people WHERE active = 1 ORDER BY name').map((p) => ({
+          people: this.q(
+            'SELECT id, name, tier FROM people WHERE active = 1 AND COALESCE(kiosk, 0) = 0 ORDER BY name'
+          ).map((p) => ({
             id: p.id,
             name: p.name,
             tier: p.tier,
@@ -669,7 +679,7 @@ export class Space {
         const at = this.markRead(me, ch);
         reply(Object.assign({ t: 'history' }, this.history(me, ch, msg.find)));
         this.fanout(ch, (them, ta) =>
-          ta.who.u !== me.id && ta.open === ch
+          ta.who.u !== me.id && ta.open === ch && !me.kiosk
             ? { t: 'seen', ch, id: me.id, name: me.name, at: new Date(at).toISOString() }
             : null
         );
@@ -679,7 +689,7 @@ export class Space {
         if (!this.canSee(me, ch)) return;
         const at = this.markRead(me, ch);
         this.fanout(ch, (them, ta) =>
-          ta.who.u !== me.id && ta.open === ch
+          ta.who.u !== me.id && ta.open === ch && !me.kiosk
             ? { t: 'seen', ch, id: me.id, name: me.name, at: new Date(at).toISOString() }
             : null
         );
@@ -793,6 +803,7 @@ export class Space {
       }
       case 'newch': {
         if (me.ro) return fail('This sign-in is view-only');
+        if (me.kiosk) return fail("The shop iPad can't start conversations");
         const kind = msg.kind === 'group' ? 'group' : 'channel',
           name = String(msg.name || '')
             .trim()
@@ -800,7 +811,7 @@ export class Space {
         if (!name) return fail('Give it a name');
         if (kind === 'channel' && me.tier < R.makeChannel)
           return fail(R.channelHint || 'Only organizers can make channels – start a group instead');
-        const act = this.q('SELECT id FROM people WHERE active = 1').map((r) => r.id);
+        const act = this.q('SELECT id FROM people WHERE active = 1 AND COALESCE(kiosk, 0) = 0').map((r) => r.id);
         let members = String(msg.members || '')
           .split(',')
           .filter((x, i, arr) => act.indexOf(x) >= 0 && arr.indexOf(x) === i);
@@ -827,6 +838,7 @@ export class Space {
         const c = this.one('SELECT * FROM channels WHERE id = ?', String(msg.id));
         if (!c) return fail('That conversation was removed');
         if (me.ro) return fail('This sign-in is view-only');
+        if (me.kiosk) return fail("The shop iPad can't change conversations");
         if (
           c.kind === 'channel'
             ? me.tier < R.editChannel
@@ -842,7 +854,7 @@ export class Space {
         let members = c.members,
           who = c.who;
         if (c.kind === 'group' && msg.members !== undefined) {
-          const act = this.q('SELECT id FROM people WHERE active = 1').map((r) => r.id);
+          const act = this.q('SELECT id FROM people WHERE active = 1 AND COALESCE(kiosk, 0) = 0').map((r) => r.id);
           const list = String(msg.members || '')
             .split(',')
             .filter((x, i, arr) => act.indexOf(x) >= 0 && arr.indexOf(x) === i);
@@ -871,12 +883,13 @@ export class Space {
     b.people.forEach((p) => {
       if (p && p.id)
         this.sql.exec(
-          'INSERT INTO people (id, name, tier, ro, active) VALUES (?, ?, ?, ?, ?)',
+          'INSERT INTO people (id, name, tier, ro, active, kiosk) VALUES (?, ?, ?, ?, ?, ?)',
           String(p.id),
           String(p.name || ''),
           Number(p.tier) || 0,
           p.ro ? 1 : 0,
-          p.active ? 1 : 0
+          p.active ? 1 : 0,
+          p.kiosk ? 1 : 0
         );
     });
     if (Array.isArray(b.channels) && !this.one('SELECT 1 FROM channels LIMIT 1'))
