@@ -259,7 +259,7 @@ const SETTINGS = [
   ],
   [
     'Clock-in types for payroll',
-    'Barista = Regular Shift, Lead = Regular Shift, Manager = Regular Shift',
+    'Barista = Regular Shift, Lead = Regular Shift, Manager = Admin',
     'Which payroll shift type (from Shift types) each clock-in type counts as. A type not listed here goes to payroll as itself if it is one of the Shift types, otherwise as the first Shift type.',
   ],
   [
@@ -5269,7 +5269,7 @@ function clockPayType_(ss, label) {
     .find((x) => x.length === 2 && x[0].toLowerCase() === k);
   return punchType_(ss, m ? m[1] : label);
 }
-const CT_DEFAULTS_PAY_ = 'Barista = Regular Shift, Lead = Regular Shift, Manager = Regular Shift';
+const CT_DEFAULTS_PAY_ = 'Barista = Regular Shift, Lead = Regular Shift, Manager = Admin';
 function shiftTypes_(ss) {
   const t = splitList_(setting_(ss, 'Shift types'));
   return t.length ? t : ['Regular Shift', 'Training', 'Meeting', 'Admin'];
