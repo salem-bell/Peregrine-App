@@ -4715,6 +4715,7 @@ const KIOSK_HOME_MS = 60000,
 let kioskIdle = Date.now(),
   asleep = false;
 function kioskHome() {
+  clearWho();
   recSel = '';
   recEdit = '';
   sheet = null;
@@ -4838,6 +4839,45 @@ async function kioskGo() {
     }
   }, 2500);
 }
+/* Shop iPad: whoever just ticked something off keeps ticking without being asked again, for a minute after their last tick */
+const WHO_MS = 60000;
+let shopWho = { name: '', at: 0 },
+  whoT = 0;
+const whoNow = () => (shopWho.name && Date.now() - shopWho.at < WHO_MS ? shopWho.name : '');
+function setWho(name) {
+  shopWho = { name, at: Date.now() };
+  clearTimeout(whoT);
+  whoT = setTimeout(() => {
+    if (!whoNow()) render(); // the "ticking off as" bar goes away when the minute is up
+  }, WHO_MS + 300);
+}
+function clearWho() {
+  shopWho = { name: '', at: 0 };
+  clearTimeout(whoT);
+}
+/** Record a shop-iPad tick (a checklist task or a prep item) under the person who did it. */
+function shopDone(w, who) {
+  setWho(who);
+  if (w.what === 'prep' && askCount(w.id, who)) return;
+  if (w.what === 'prep') {
+    const x = (data.prep || []).find((p) => p.id === w.id);
+    if (x) {
+      x.doneAt = new Date().toISOString();
+      x.doneBy = who;
+    }
+    render();
+    act('donePrep', { id: w.id, done: '1', as: who });
+  } else {
+    busy['c|' + w.list + '|' + w.task] = true;
+    render();
+    if (navigator.vibrate) navigator.vibrate(10);
+    act('check', { list: w.list, task: w.task, done: '1', as: who });
+  }
+}
+const whoBar = () =>
+  shop() && whoNow()
+    ? `<div class="whobar" role="status">${avatar((data.people || []).find((q) => q.name === whoNow()) || { name: whoNow(), id: whoNow() }, 28)}<span class="whotxt">Ticking off as <b>${esc(first(whoNow()))}</b></span><button class="btn sm" data-whoclear>Not you?</button></div>`
+    : '';
 function whoSheet() {
   const { today, rest } = shopPeople(),
     what = sheet.what === 'prep' ? ((data.prep || []).find((x) => x.id === sheet.id) || {}).item : sheet.task;
@@ -5145,7 +5185,7 @@ function render() {
         : tab === 'tests'
           ? viewTests()
           : tab === 'lists'
-            ? viewLists()
+            ? whoBar() + viewLists()
             : tab === 'schedule'
               ? viewSchedule()
               : tab === 'chat'
@@ -5456,6 +5496,7 @@ document.addEventListener('click', async (e) => {
     return;
   }
   if (d.prepdone && shop() && d.on !== '1') {
+    if (whoNow()) return shopDone({ what: 'prep', id: d.prepdone }, whoNow());
     sheet = { kind: 'who', what: 'prep', id: d.prepdone };
     render();
     return;
@@ -5869,20 +5910,12 @@ document.addEventListener('click', async (e) => {
   if (d.whopick && sheet && sheet.kind === 'who') {
     const w = sheet;
     sheet = null;
-    if (w.what === 'prep' && askCount(w.id, d.whopick)) return;
-    if (w.what === 'prep') {
-      const x = (data.prep || []).find((p) => p.id === w.id);
-      if (x) {
-        x.doneAt = new Date().toISOString();
-        x.doneBy = d.whopick;
-      }
-      render();
-      act('donePrep', { id: w.id, done: '1', as: d.whopick });
-    } else {
-      busy['c|' + w.list + '|' + w.task] = true;
-      render();
-      act('check', { list: w.list, task: w.task, done: '1', as: d.whopick });
-    }
+    shopDone(w, d.whopick);
+    return;
+  }
+  if (d.whoclear !== undefined) {
+    clearWho();
+    render();
     return;
   }
   if (d.shopweek !== undefined) {
@@ -5892,6 +5925,7 @@ document.addEventListener('click', async (e) => {
     return;
   }
   if (d.check && shop() && d.on !== '1') {
+    if (whoNow()) return shopDone({ what: 'check', list: listTab, task: d.check }, whoNow());
     sheet = { kind: 'who', what: 'check', list: listTab, task: d.check };
     render();
     return;
