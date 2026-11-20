@@ -99,7 +99,7 @@ chat service is set.
 | `state_`, `SECTIONS_` | What each person gets back |
 | `act_` | Every change the app can make |
 | `channels_`, `chat_`, `chat*_` | Chat (sheet fallback + live chat glue) |
-| `recipes_`, `recipeCosts_` | Recipes tab → the recipe book; managers' costs read from the Menu and Prep COGS sheets (Settings) |
+| `recipes_`, `recipeCosts_`, `saveRecipe`/`showRecipe`/`delRecipe` (in `act_`) | Recipes tab → the recipe book (managers edit it in the app too); managers' costs read from the Menu and Prep COGS sheets (Settings) |
 | `training_`, `level1Results_`, `trainDoc_` | Trainee checklists; filing them as Google Docs |
 | `tests_`, `testTeam_`, `testSees_` | Certification tests (results come from a separate results sheet) |
 | `sendShiftReminders`, `clockTick_`, `payrollTick_`, `pushDataTick` | Timed triggers (every 15 min / every minute) |

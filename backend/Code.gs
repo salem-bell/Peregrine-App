@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '5.04';
+const VERSION = '5.05';
 const ROLES = ['Manager', 'Lead', 'Staff', 'Shop']; // Shop: the shared counter iPad – lists, messages, resources, schedule, clock-in screen
 // Everything the Shop iPad may change. Anything else is refused on the server, whatever the app sends.
 const SHOP_ACTIONS_ = ['check', 'read', 'addPrep', 'donePrep', 'delPrep', 'kioskClock', 'pinChat'];
@@ -1879,6 +1879,82 @@ function act_(ss, me, p, touched) {
       }
       return;
     }
+    // Recipe book: managers add, change, hide and delete recipes in the app (the same Recipes tab they can edit by hand)
+    case 'saveRecipe': {
+      needMgr();
+      const sh = tab('Recipes'),
+        name = clean_(p.name, 120),
+        txt = (v, n) =>
+          clean_(
+            String(v == null ? '' : v)
+              .replace(/\r/g, '')
+              .split('\n')
+              .map((l) => l.trim())
+              .filter(Boolean)
+              .join('\n'),
+            n
+          ); // one line per row of the cell; clean_ guards the start of the cell against formulas
+      if (!name) throw new Error('Give the recipe a name');
+      const vals = [
+        name,
+        /^prep/i.test(String(p.type)) ? 'Prep' : 'Drink',
+        clean_(p.cat, 60),
+        clean_(p.size, 80),
+        clean_(p.serve, 80),
+        clean_(p.keeps, 60),
+        txt(p.ing, 5000),
+        txt(p.steps, 8000),
+        clean_(p.notes, 2000),
+      ];
+      const tier = /^manager/i.test(String(p.tier))
+          ? 'Managers'
+          : /lead/i.test(String(p.tier))
+            ? 'Leads and managers'
+            : 'Everyone',
+        cogs = clean_(p.cogs, 400);
+      const m = /^R(\d+)$/.exec(String(p.id || ''));
+      if (m) {
+        const row = Number(m[1]);
+        // rows can move when someone sorts or deletes in the sheet: only save over the recipe that was opened
+        if (
+          row < 2 ||
+          row > sh.getLastRow() ||
+          String(sh.getRange(row, 1).getValue()).trim() !== String(p.orig || '').trim()
+        )
+          throw new Error('That recipe moved in the sheet – pull down to refresh, then edit it again');
+        sh.getRange(row, 1, 1, 9).setValues([vals]);
+        sh.getRange(row, 12, 1, 2).setValues([[tier, cogs]]);
+        if (p.order !== undefined && p.order !== '' && isFinite(Number(p.order)))
+          sh.getRange(row, 10).setValue(Number(p.order));
+        audit('Edited recipe: ' + name);
+        return { id: 'R' + row };
+      }
+      const v = vals_(sh),
+        order = v.reduce((a, r) => Math.max(a, Number(r[9]) || 0), 0) + 1;
+      sh.appendRow(vals.concat([order, true, tier, cogs]));
+      audit('Added recipe: ' + name);
+      return { id: 'R' + sh.getLastRow() };
+    }
+    case 'showRecipe':
+    case 'delRecipe': {
+      needMgr();
+      const sh = tab('Recipes'),
+        row = Number((/^R(\d+)$/.exec(String(p.id || '')) || [])[1]);
+      if (
+        !(row >= 2) ||
+        row > sh.getLastRow() ||
+        String(sh.getRange(row, 1).getValue()).trim() !== String(p.orig || '').trim()
+      )
+        throw new Error('That recipe moved in the sheet – pull down to refresh');
+      if (A === 'delRecipe') {
+        sh.deleteRow(row);
+        audit('Deleted recipe: ' + p.orig);
+      } else {
+        sh.getRange(row, 11).setValue(p.on === '1');
+        audit((p.on === '1' ? 'Showed' : 'Hid') + ' recipe: ' + p.orig);
+      }
+      return;
+    }
     case 'delPrep': {
       const sh = tab('Prep'),
         row = findRow_(sh, p.id);
@@ -3513,7 +3589,9 @@ function recipes_(ss, isMgr, isLead) {
   const can = (w) => (/^manager/i.test(w) ? isMgr : /lead/i.test(w) ? isLead : true);
   return rv_(ss, 'Recipes')
     .map((r, i) => ({ r, row: i + 2 }))
-    .filter(({ r }) => String(r[0]).trim() && (r[10] === '' || truthy_(r[10])) && can(String(r[11] || 'Everyone')))
+    .filter(
+      ({ r }) => String(r[0]).trim() && (isMgr || r[10] === '' || truthy_(r[10])) && can(String(r[11] || 'Everyone'))
+    )
     .map(({ r, row }) => {
       const o = {
         id: 'R' + row,
@@ -3531,6 +3609,12 @@ function recipes_(ss, isMgr, isLead) {
       if (isMgr) {
         o.row = row;
         o.cogs = String(r[12] || '').trim();
+        o.tier = /^manager/i.test(String(r[11]))
+          ? 'Managers'
+          : /lead/i.test(String(r[11]))
+            ? 'Leads and managers'
+            : 'Everyone';
+        o.hidden = !(r[10] === '' || truthy_(r[10])); // hidden from the team; managers still see it, marked
       }
       return o;
     })

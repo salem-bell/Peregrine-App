@@ -3680,10 +3680,12 @@ function viewRequests() {
 let recSel = '',
   recKind = load('pt-reckind') || 'Drink',
   recScale = 1,
+  recEdit = '', // '' | 'new' | a recipe id: managers editing in the app
   recCost = null,
   recCostBusy = false,
   wakeLock = null;
 const RECIPES = () => data.recipes || [];
+const canEditRec = () => mgr() && Number(data.version) >= 5.05;
 const rnorm = (s) =>
   String(s || '')
     .toLowerCase()
@@ -3802,6 +3804,8 @@ document.addEventListener('visibilitychange', syncWake);
 function viewRecipes(o) {
   o = o || {};
   const rs = RECIPES();
+  if (recEdit && canEditRec()) return viewRecipeEdit(recEdit === 'new' ? null : recById(recEdit), o);
+  recEdit = '';
   if (recSel && recById(recSel)) return viewRecipe(recById(recSel), o);
   recSel = '';
   if (mgr()) loadRecCost();
@@ -3812,9 +3816,9 @@ function viewRecipes(o) {
       Number(data.version) < 5.04
         ? "The recipe book needs the server update (Code.gs 5.04) in this location's sheet."
         : mgr()
-          ? 'No recipes yet. Add them on the <b>Recipes</b> tab in the sheet, one row per recipe.'
+          ? 'No recipes yet. Add one here, or on the <b>Recipes</b> tab in the sheet.'
           : 'No recipes yet.'
-    }</div>${mgr() && data.recipeSheet ? `<div class="btns" style="padding:0 14px 14px"><a class="btn" href="${esc(data.recipeSheet)}" target="_blank" rel="noopener">Open the Recipes tab ↗</a></div>` : ''}</div>${docs}`;
+    }</div>${canEditRec() ? '<div class="btns" style="padding:0 14px 14px"><button class="btn go" data-recedit="new">+ Add a recipe</button></div>' : ''}${mgr() && data.recipeSheet ? `<div class="btns" style="padding:0 14px 14px"><a class="btn" href="${esc(data.recipeSheet)}" target="_blank" rel="noopener">Open the Recipes tab ↗</a></div>` : ''}</div>${docs}`;
   const kinds = ['Drink', 'Prep'].filter((k) => rs.some((r) => r.type === k));
   if (kinds.indexOf(recKind) < 0) recKind = kinds[0];
   const pct = (r) => {
@@ -3823,7 +3827,7 @@ function viewRecipes(o) {
     return x ? `<span class="rb-pct ${/over/i.test(x.status) ? 'over' : ''}">${Math.round(x.pct)}%</span>` : '';
   };
   const card = (r) =>
-    `<button class="rb-card${pct(r) ? ' has-pct' : ''}" data-recipe="${esc(r.id)}" data-kind="${r.type}" data-q="${esc(rnorm([r.name, r.cat, r.ing.join(' ')].join(' ')))}"><b>${esc(r.name)}</b>${pct(r)}<small>${esc(r.size || r.serve || '')}</small></button>`;
+    `<button class="rb-card${pct(r) ? ' has-pct' : ''}" data-recipe="${esc(r.id)}" data-kind="${r.type}" data-q="${esc(rnorm([r.name, r.cat, r.ing.join(' ')].join(' ')))}"><b>${esc(r.name)}</b>${pct(r)}<small>${r.hidden ? '<span class="pill mute">Hidden</span> ' : ''}${esc(r.size || r.serve || '')}</small></button>`;
   const sections = kinds
     .map((k) => {
       const cats = [...new Set(rs.filter((r) => r.type === k).map((r) => r.cat || 'Other'))];
@@ -3840,10 +3844,69 @@ function viewRecipes(o) {
     .join('');
   return `${head}
     <div class="rb-tools">${kinds.length > 1 ? `<div class="seg" role="tablist">${kinds.map((k) => `<button data-reckind="${k}" aria-pressed="${k === recKind}">${k === 'Drink' ? 'Drinks' : 'Prep'}</button>`).join('')}</div>` : ''}
-    <input type="search" class="rb-search" data-recsearch placeholder="Search recipes or ingredients" autocomplete="off" aria-label="Search recipes"></div>
+    <input type="search" class="rb-search" data-recsearch placeholder="Search recipes or ingredients" autocomplete="off" aria-label="Search recipes">${canEditRec() ? '<button class="btn go" data-recedit="new">+ Add recipe</button>' : ''}</div>
     <div class="rb-none sub" hidden>No recipe matches that.</div>
     ${sections}${docs}
-    ${mgr() ? `<p class="sub">Recipes come from the Recipes tab in the sheet${data.recipeSheet ? ` (<a href="${esc(data.recipeSheet)}" target="_blank" rel="noopener">open it</a>)` : ''}. Edits show up here within a few minutes.${recCost && recCost.errs && recCost.errs.length ? ' Costs: ' + esc(recCost.errs.join(' · ')) : ''}</p>` : ''}`;
+    ${mgr() ? `<p class="sub">Recipes live on the Recipes tab in the sheet${data.recipeSheet ? ` (<a href="${esc(data.recipeSheet)}" target="_blank" rel="noopener">open it</a>)` : ''}. ${canEditRec() ? 'Edit them here or there; edits made here show for everyone straight away, edits in the sheet within a few minutes.' : 'Edits show up here within a few minutes.'}${recCost && recCost.errs && recCost.errs.length ? ' Costs: ' + esc(recCost.errs.join(' · ')) : ''}</p>` : ''}`;
+}
+/** Managers: add or change a recipe in the app. Saves to the same Recipes tab row the sheet shows. */
+function viewRecipeEdit(r, o) {
+  const x = r || {
+    name: '',
+    type: recKind || 'Drink',
+    cat: '',
+    size: '',
+    serve: '',
+    keeps: '',
+    ing: [],
+    steps: [],
+    notes: '',
+    tier: 'Everyone',
+    cogs: '',
+    order: '',
+  };
+  const cats = [
+    ...new Set(
+      RECIPES()
+        .map((y) => y.cat)
+        .filter(Boolean)
+    ),
+  ].sort();
+  const cogsNames = recCost ? (x.type === 'Prep' ? recCost.prep : recCost.menu).map((y) => y.item) : [];
+  const f = (label, name, val, extra) =>
+    `<label class="f">${label}<input name="${name}" value="${esc(val || '')}" ${extra || ''}></label>`;
+  return `<button class="btn sm" data-reccancel style="margin-bottom:8px">‹ ${r ? 'Back to the recipe' : 'Recipes'}</button>
+    <h1>${r ? 'Edit recipe' : 'New recipe'}</h1>
+    <form class="card stack rc-form" data-form="recipe" data-id="${esc(r ? r.id : 'new')}" style="padding:14px" autocomplete="off">
+      ${f('Name', 'name', x.name, 'maxlength="120" required placeholder="e.g. Vanilla Latte"')}
+      <div class="f">Type<div class="seg" role="radiogroup">${['Drink', 'Prep']
+        .map(
+          (k) =>
+            `<label class="segopt"><input type="radio" name="type" value="${k}" ${x.type === k ? 'checked' : ''}> ${k === 'Drink' ? 'Drink' : 'Prep'}</label>`
+        )
+        .join('')}</div></div>
+      ${f('Category', 'cat', x.cat, 'maxlength="60" list="rec-cats" placeholder="e.g. Flavored Lattes"')}
+      <datalist id="rec-cats">${cats.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>
+      <div class="rc-two">${f('Size or yield', 'size', x.size, 'maxlength="80" placeholder="e.g. 12oz hot · 16oz iced"')}${f('Serve in / store in', 'serve', x.serve, 'maxlength="80" placeholder="e.g. Latte mug"')}</div>
+      ${f('Keeps for (prep)', 'keeps', x.keeps, 'maxlength="60" placeholder="e.g. 24 hours, fridge"')}
+      <label class="f">Ingredients<span class="sub">One per line, amount first (“32g vanilla syrup”). A line ending in : is a heading. Amounts are what the batch buttons multiply.</span><textarea name="ing" rows="${Math.max(5, x.ing.length + 1)}" maxlength="5000">${esc(x.ing.join('\n'))}</textarea></label>
+      <label class="f">Steps<span class="sub">One per line, in order; the app numbers them. Start a line with ! for a red warning.</span><textarea name="steps" rows="${Math.max(5, x.steps.length + 1)}" maxlength="8000">${esc(x.steps.join('\n'))}</textarea></label>
+      <label class="f">Good to know<span class="sub">Optional. Tips, when to make it, how long it keeps.</span><textarea name="notes" rows="3" maxlength="2000">${esc(x.notes)}</textarea></label>
+      <label class="f">Who sees it<select name="tier">${['Everyone', 'Leads and managers', 'Managers']
+        .map((t) => `<option ${t === (x.tier || 'Everyone') ? 'selected' : ''}>${t}</option>`)
+        .join('')}</select></label>
+      ${f('COGS name', 'cogs', x.cogs, `maxlength="400" list="rec-cogs" placeholder="Blank = same as the name"`)}
+      <datalist id="rec-cogs">${cogsNames.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>
+      <p class="sub" style="margin:-6px 0 0">Its name in the COGS sheet, for costs. Several (hot and iced, say) go with | between them.</p>
+      ${r ? f('Order in the book', 'order', x.order, 'type="number" inputmode="numeric" min="0" step="1"') : ''}
+      <div class="btns"><button class="btn go">${r ? 'Save changes' : 'Add recipe'}</button><button type="button" class="btn" data-reccancel>Cancel</button></div>
+    </form>
+    ${
+      r
+        ? `<div class="card"><div class="row"><div class="txt"><b>${r.hidden ? 'Hidden from the team' : 'Hide from the team'}</b><div class="sub">${r.hidden ? 'Only managers see it. Show it to bring it back.' : 'Keeps the recipe for later (a seasonal drink, say) but takes it out of everyone else’s book.'}</div></div><button class="btn sm" data-recshow="${esc(r.id)}" data-on="${r.hidden ? 1 : 0}">${r.hidden ? 'Show it' : 'Hide it'}</button></div>
+          <div class="row"><div class="txt"><b>Delete</b><div class="sub">Removes its row from the sheet for good.</div></div><button class="btn sm warn" data-recdel="${esc(r.id)}">Delete</button></div></div>`
+        : ''
+    }`;
 }
 function recCostCard(r) {
   if (!mgr()) return '';
@@ -3897,6 +3960,7 @@ function viewRecipe(r, o) {
     )
     .join('');
   return `<button class="btn sm" data-recback style="margin-bottom:8px">‹ ${esc(o && o.title && !/^recipes?$/i.test(o.title) ? o.title : 'Recipes')}</button>
+    ${r.hidden ? `<div class="card rc-hidden"><div class="row"><div class="txt"><b>Hidden from the team</b><div class="sub">Only managers can see this recipe.</div></div>${canEditRec() ? `<button class="btn sm" data-recshow="${esc(r.id)}" data-on="1">Show it</button>` : ''}</div></div>` : ''}
     <article class="rc ${prep ? 'prep' : 'drink'}">
       <header class="rc-head"><div class="rc-brand"><img src="brand/bird-gold.png" alt=""><span>Peregrine${r.cat ? ' · ' + esc(r.cat) : ''}</span></div>
         <h1 class="rc-title">${esc(r.name)}</h1>
@@ -3909,7 +3973,11 @@ function viewRecipe(r, o) {
       ${r.notes ? `<section class="rc-note"><h2 class="rc-h">Good to know</h2><p>${linkify(esc(r.notes)).replace(/\n/g, '<br>')}</p></section>` : ''}
       <footer class="rc-foot"><span class="rc-branch" aria-hidden="true"></span>Peregrine Coffee Roasters</footer>
     </article>
-    ${mgr() && data.recipeSheet && r.row ? `<div class="btns"><a class="btn" href="${esc(data.recipeSheet)}&range=A${r.row}" target="_blank" rel="noopener">Edit in the sheet ↗</a></div>` : ''}`;
+    ${
+      mgr()
+        ? `<div class="btns">${canEditRec() ? `<button class="btn go" data-recedit="${esc(r.id)}">Edit recipe</button>` : ''}${data.recipeSheet && r.row ? `<a class="btn" href="${esc(data.recipeSheet)}&range=A${r.row}" target="_blank" rel="noopener">Open in the sheet ↗</a>` : ''}</div>`
+        : ''
+    }`;
 }
 document.addEventListener('input', (e) => {
   const q = e.target.closest && e.target.closest('[data-recsearch]');
@@ -4648,6 +4716,7 @@ let kioskIdle = Date.now(),
   asleep = false;
 function kioskHome() {
   recSel = '';
+  recEdit = '';
   sheet = null;
   viewer = null;
   runner = null;
@@ -5238,6 +5307,42 @@ document.addEventListener('click', async (e) => {
     openRecipe(d.recipe);
     return;
   }
+  if (d.recedit) {
+    recEdit = d.recedit;
+    if (d.recedit !== 'new') recSel = d.recedit;
+    loadRecCost();
+    window.scrollTo(0, 0);
+    render();
+    return;
+  }
+  if (d.reccancel !== undefined) {
+    if (recEdit === 'new') recSel = '';
+    recEdit = '';
+    DIRTY_FORMS.clear();
+    window.scrollTo(0, 0);
+    render();
+    return;
+  }
+  if (d.recshow) {
+    const r = recById(d.recshow);
+    if (!r) return;
+    const on = d.on === '1';
+    r.hidden = !on;
+    render();
+    act('showRecipe', { id: r.id, orig: r.name, on: on ? '1' : '0' });
+    toast(on ? 'Shown to the team' : 'Hidden from the team');
+    return;
+  }
+  if (d.recdel) {
+    const r = recById(d.recdel);
+    if (!r || !confirm('Delete “' + r.name + '” for good? It comes out of the sheet too.')) return;
+    data.recipes = RECIPES().filter((y) => y.id !== r.id);
+    recEdit = '';
+    recSel = '';
+    render();
+    act('delRecipe', { id: r.id, orig: r.name });
+    return;
+  }
   if (d.recback !== undefined) {
     recSel = '';
     recScale = 1;
@@ -5290,6 +5395,7 @@ document.addEventListener('click', async (e) => {
     sheet = null;
     viewer = null;
     recSel = '';
+    recEdit = '';
     editUser = null;
     tsPerson = '';
     if (tab === 'more') moreView = '';
@@ -5312,6 +5418,7 @@ document.addEventListener('click', async (e) => {
     moreView = d.more;
     editUser = null;
     recSel = '';
+    recEdit = '';
     if (d.more !== 'time') tsPerson = '';
     if (d.more === 'time' && b.textContent.includes('Back')) tsPerson = '';
     window.scrollTo(0, 0);
@@ -6602,6 +6709,64 @@ document.addEventListener('submit', async (e) => {
     act('trainStart', { name, trainer: v('trainer'), started: v('started') }).then((r) => {
       if (r && r.result && r.result.id) {
         trainSel = r.result.id;
+        render();
+      }
+    });
+    return;
+  }
+  if (kind === 'recipe') {
+    if (!v('name')) {
+      toast('Give the recipe a name');
+      return;
+    }
+    const id = f.dataset.id,
+      old = id !== 'new' && recById(id),
+      typ = (f.querySelector('input[name=type]:checked') || {}).value || 'Drink',
+      lines = (n) =>
+        v(n)
+          .split('\n')
+          .map((l) => l.replace(/^\s*(?:[-•*·]|\d+[.)])\s+/, '').trim())
+          .filter(Boolean);
+    const p = {
+      id: old ? id : '',
+      orig: old ? old.name : '',
+      name: v('name'),
+      type: typ,
+      cat: v('cat'),
+      size: v('size'),
+      serve: v('serve'),
+      keeps: v('keeps'),
+      ing: lines('ing').join('\n'),
+      steps: lines('steps').join('\n'),
+      notes: v('notes'),
+      tier: v('tier'),
+      cogs: v('cogs'),
+    };
+    if (old) p.order = v('order');
+    // show it straight away; the save brings back the sheet's copy
+    const shown = Object.assign({}, old || { id: 'tmp' + Date.now(), order: 9999, hidden: false }, {
+      name: p.name,
+      type: p.type,
+      cat: p.cat,
+      size: p.size,
+      serve: p.serve,
+      keeps: p.keeps,
+      ing: lines('ing'),
+      steps: lines('steps'),
+      notes: p.notes,
+      tier: p.tier,
+      cogs: p.cogs,
+    });
+    data.recipes = old ? RECIPES().map((y) => (y.id === id ? shown : y)) : RECIPES().concat(shown);
+    recEdit = '';
+    recSel = shown.id;
+    recKind = typ;
+    window.scrollTo(0, 0);
+    render();
+    act('saveRecipe', p).then((r) => {
+      if (r && r.result && r.result.id) {
+        if (!recEdit && isRecView() && (recSel === shown.id || !recSel)) recSel = r.result.id; // open the saved recipe
+        toast(old ? 'Recipe saved' : 'Recipe added');
         render();
       }
     });
