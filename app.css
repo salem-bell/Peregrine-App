@@ -3818,3 +3818,74 @@ body.navhide main {
   background: var(--paper);
   font-size: 0.9rem;
 }
+
+/* prep: quick picks and recipe links */
+.pchips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.pchips .sub {
+  width: 100%;
+  margin-bottom: -2px;
+}
+.pchip {
+  flex: none;
+  width: auto;
+  min-height: 0;
+  white-space: nowrap;
+  line-height: 1.2;
+  padding: 7px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+.pchip.rec {
+  border-color: var(--gold);
+}
+.pchip.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+.prep-rec {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.prep-rec b {
+  text-decoration: underline;
+  text-decoration-color: var(--gold);
+  text-underline-offset: 3px;
+}
+.rc-prep {
+  margin: 6px 20px 4px;
+  padding: 4px 14px 10px !important;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  transition:
+    background 0.3s,
+    border-color 0.3s;
+}
+.rc-prep.ready {
+  border: 2px solid var(--ok);
+  background: var(--ok-soft);
+}
+.rc-prow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+}
+.rc-prow .txt {
+  flex: 1;
+}

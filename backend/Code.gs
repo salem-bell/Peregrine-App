@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '5.06';
+const VERSION = '5.07';
 const ROLES = ['Manager', 'Lead', 'Staff', 'Shop']; // Shop: the shared counter iPad – lists, messages, resources, schedule, clock-in screen
 // Everything the Shop iPad may change. Anything else is refused on the server, whatever the app sends.
 const SHOP_ACTIONS_ = ['check', 'read', 'addPrep', 'donePrep', 'delPrep', 'kioskClock', 'pinChat'];
@@ -121,7 +121,19 @@ const TABS = {
   Audit: ['When', 'Who', 'What'],
   'Reminder log': ['Key', 'Name', 'Kind', 'Sent'],
   Push: ['User ID', 'Name', 'Endpoint', 'Keys (do not edit)', 'Device', 'Added', 'Last sent'],
-  Prep: ['ID', 'Item', 'Details', 'For date', 'For', 'For people', 'Added by', 'Added at', 'Done by', 'Done at'],
+  Prep: [
+    'ID',
+    'Item',
+    'Details',
+    'For date',
+    'For',
+    'For people',
+    'Added by',
+    'Added at',
+    'Done by',
+    'Done at',
+    'Recipe',
+  ],
   Sales: [
     'Date',
     'Net sales',
@@ -245,6 +257,11 @@ const SETTINGS = [
     'Shift types',
     'Regular Shift, Training, Meeting, Admin',
     "Kinds of shift for payroll, separated by commas – the first is the usual one. They must match the Shift Type list in the payroll template (Setup tab). Managers set a punch's type when fixing it in the app.",
+  ],
+  [
+    'Prep options (not recipes)',
+    'Fold towels, Hang towels, Wash towels',
+    'Quick choices when adding prep that are not recipes, separated by commas. Prep recipes from the Recipes tab are offered too.',
   ],
   [
     'Clock-in types for staff',
@@ -979,7 +996,7 @@ const SECTIONS_ = {
   news: ['Announcements', 'Reads', 'Users'],
   sched: ['Shifts', 'Availability', 'Settings', 'Users'],
   clock: ['Time clock', 'Users', 'Shifts', 'Settings'],
-  prep: ['Prep', 'Shifts', 'Users'],
+  prep: ['Prep', 'Shifts', 'Users', 'Settings', 'Recipes'],
   chat: ['Channels', 'Messages', 'Chat reads', 'Users', 'Settings'],
   reqs: ['Requests'],
   links: ['Links'],
@@ -1226,6 +1243,7 @@ function state_(ss, me, slim, have) {
   // Prep requests for upcoming shifts
   if (want('prep')) {
     out.prep = prepList_(ss, me, tz);
+    out.prepOptions = splitList_(setting_(ss, 'Prep options (not recipes)') || 'Fold towels, Hang towels, Wash towels');
     // for the "how much do we have now?" question after a prep item is done: inventory names and units only
     out.invNames = out.prep.some((x) => !x.doneAt) ? invNames_(ss) : [];
     const map = prepInvMap_();
@@ -1847,6 +1865,18 @@ function act_(ss, me, p, touched) {
       const tgt = prepTarget_(ss, p.when, tz),
         sh = tab('Prep'),
         id = nextId_(sh, 'x');
+      // linked to a prep recipe when the item is one (by its name), so the list can open it
+      const rec = ss.getSheetByName('Recipes')
+        ? rv_(ss, 'Recipes').find(
+            (r) =>
+              /^prep/i.test(String(r[1])) &&
+              String(r[0]).trim().toLowerCase() ===
+                String(p.recipe || item)
+                  .trim()
+                  .toLowerCase()
+          )
+        : null;
+      if (sh.getLastColumn() < 11) buildTab_(ss, 'Prep');
       sh.appendRow([
         id,
         item,
@@ -1858,6 +1888,7 @@ function act_(ss, me, p, touched) {
         new Date(),
         '',
         '',
+        rec ? String(rec[0]).trim() : '',
       ]);
       // The people on that shift get a pop-up in the app on the day (and a notification if they have them on) – no email.
       if (p.notify !== '0') {
@@ -3927,6 +3958,7 @@ function prepList_(ss, me, tz) {
         at: toIso_(r[7]),
         doneBy: String(r[8] || ''),
         doneAt: toIso_(r[9]),
+        recipe: String(r[10] || ''), // the prep recipe it was picked from, if any
         mine: names.indexOf(me.name) >= 0,
       };
     })

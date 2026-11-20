@@ -1690,10 +1690,25 @@ function prepRow(x) {
   const on = !!x.doneAt,
     canDel = x.by === data.me.name || lead();
   return `<div class="row ${on ? 'done' : ''}"><button class="chk ${on ? 'on' : ''}" data-prepdone="${esc(x.id)}" data-on="${on ? 1 : 0}" aria-label="${on ? 'Undo' : 'Done'}: ${esc(x.item)}">${on ? '✓' : ''}</button>
-    <div class="txt"><b>${esc(x.item)}</b>${x.mine && !on ? ' <span class="pill warn">Your shift</span>' : ''}${((r) => (r ? ` <button class="lnk" data-recipe="${esc(r.id)}">Recipe ›</button>` : ''))(recipeFor(x.item))}${x.details ? `<div class="sub">${esc(x.details)}</div>` : ''}
+    <div class="txt">${((r) => (r ? `<button class="prep-rec" data-recipe="${esc(r.id)}"><b>${esc(x.item)}</b> <span class="pill">Recipe ›</span></button>` : `<b>${esc(x.item)}</b>`))(recipeFor(x.item, x.recipe))}${x.mine && !on ? ' <span class="pill warn">Your shift</span>' : ''}${x.details ? `<div class="sub">${esc(x.details)}</div>` : ''}
       <div class="sub">For ${esc(x.label || 'next shift')}${x.for.length ? ' · ' + x.for.map((n) => esc(first(n))).join(', ') : ''} · from ${esc(first(x.by))} ${ago(x.at)}</div>
       ${on ? `<div class="sub">Done by ${esc(first(x.doneBy))} · ${timeOf(x.doneAt)}</div>` : ''}</div>
     ${canDel ? `<button class="btn sm" data-prepdel="${esc(x.id)}" aria-label="Remove">✕</button>` : ''}</div>`;
+}
+/** Quick picks when adding prep: prep recipes (linked) and the other options from Settings (not linked). */
+function prepChoices() {
+  const recs = RECIPES().filter((r) => r.type === 'Prep' && !r.hidden),
+    other = data.prepOptions || [];
+  if (!recs.length && !other.length) return '';
+  const chip = (t, rec) =>
+    `<button type="button" class="pchip ${rec ? 'rec' : ''}" data-prepfill="${esc(t)}">${esc(t)}</button>`;
+  return `<datalist id="prep-choices">${recs
+    .map((r) => r.name)
+    .concat(other)
+    .map((t) => `<option value="${esc(t)}">`)
+    .join('')}</datalist>
+    ${recs.length ? `<div class="pchips"><span class="sub">Recipes</span>${recs.map((r) => chip(r.name, true)).join('')}</div>` : ''}
+    ${other.length ? `<div class="pchips"><span class="sub">Other</span>${other.map((t) => chip(t, false)).join('')}</div>` : ''}`;
 }
 function viewPrep(cl) {
   const items = data.prep || [],
@@ -1710,7 +1725,8 @@ function viewPrep(cl) {
   );
   return `<h1>Checklists</h1>${listSeg(cl)}
     <div class="card"><form class="stack" data-form="prep">
-      <label class="f">What needs prepping<input name="item" maxlength="120" placeholder="e.g. Batch cold brew" autocomplete="off"></label>
+      <label class="f">What needs prepping<input name="item" maxlength="120" placeholder="Pick below or type something new" autocomplete="off" list="prep-choices"></label>
+      ${prepChoices()}
       <label class="f">Details (optional)<input name="details" maxlength="300" placeholder="e.g. 2 gallons, we're out of concentrate"></label>
       <label class="f">For<select name="when">${opts.join('')}</select></label>
       <label class="opt"><input type="checkbox" name="notify" checked> Also send them a notification</label>
@@ -3791,8 +3807,12 @@ function openRecipe(id) {
   render();
   loadRecCost();
 }
-/** A prep item's recipe, when its name says which ("Batch cold brew" → Cold Brew). */
-function recipeFor(text) {
+/** A prep item's recipe: the one it was picked from, else the one its name says ("Batch cold brew" → Cold Brew). */
+function recipeFor(text, picked) {
+  if (picked) {
+    const r = RECIPES().find((y) => y.type === 'Prep' && rnorm(y.name) === rnorm(picked));
+    if (r) return r;
+  }
   const t = rnorm(text);
   if (!t) return null;
   return RECIPES().find((r) => r.type === 'Prep' && rbase(r.name).length >= 4 && t.indexOf(rbase(r.name)) >= 0) || null;
@@ -3923,6 +3943,19 @@ function viewRecipeEdit(r, o) {
         : ''
     }`;
 }
+/** Open prep items for this recipe: tick them off from here once it's made. */
+function recPrepCard(r) {
+  if (r.type !== 'Prep') return '';
+  const xs = (data.prep || []).filter((x) => !x.doneAt && !/^tmp/.test(x.id) && recipeFor(x.item, x.recipe) === r);
+  if (!xs.length) return '';
+  return `<section class="rc-prep" id="rc-prep"><h2 class="rc-h"><span class="rc-prep-q">On the prep list</span></h2>
+    ${xs
+      .map(
+        (x) =>
+          `<div class="rc-prow"><div class="txt"><b>${esc(x.item)}</b><div class="sub">For ${esc(x.label || 'next shift')}${x.details ? ' · ' + esc(x.details) : ''}</div></div><button class="btn go sm" data-prepdone="${esc(x.id)}" data-on="0">Mark done</button></div>`
+      )
+      .join('')}</section>`;
+}
 function recCostCard(r) {
   if (!mgr()) return '';
   if (!recCost) return `<div class="rc-cost"><span class="sub">Loading costs…</span></div>`;
@@ -3985,6 +4018,7 @@ function viewRecipe(r, o) {
       ${prep && r.ing.some((l) => splitAmt(l)[0]) ? `<div class="rc-scale"><span class="sub">Batch</span><div class="seg">${[0.5, 1, 2, 3].map((k) => `<button data-recscale="${k}" aria-pressed="${k === recScale}">${k === 0.5 ? '½' : k}×</button>`).join('')}</div></div>` : ''}
       ${ing ? `<section><h2 class="rc-h">Ingredients${prep && recScale !== 1 ? ` <span class="pill">${recScale === 0.5 ? '½' : recScale}× batch</span>` : ''}</h2><ul class="rc-ing">${ing}</ul></section>` : ''}
       ${steps ? `<section><h2 class="rc-h">${prep ? 'Method' : 'Build'}</h2><ol class="rc-steps">${steps}</ol>${n > 1 ? '<p class="sub rc-hint">Tap a step to tick it off.</p>' : ''}</section>` : ''}
+      ${recPrepCard(r)}
       ${r.notes ? `<section class="rc-note"><h2 class="rc-h">Good to know</h2><p>${linkify(esc(r.notes)).replace(/\n/g, '<br>')}</p></section>` : ''}
       <footer class="rc-foot"><span class="rc-branch" aria-hidden="true"></span>Peregrine Coffee Roasters</footer>
     </article>
@@ -5427,6 +5461,16 @@ document.addEventListener('click', async (e) => {
     act('delRecipe', { id: r.id, orig: r.name });
     return;
   }
+  if (d.prepfill) {
+    const inp = $('form[data-form=prep] input[name=item]');
+    if (inp) {
+      inp.value = d.prepfill;
+      document.querySelectorAll('.pchip').forEach((c) => c.classList.toggle('on', c === b));
+      const det = $('form[data-form=prep] input[name=details]');
+      if (det) det.focus();
+    }
+    return;
+  }
   if (d.recback !== undefined) {
     recSel = '';
     recScale = 1;
@@ -5447,6 +5491,15 @@ document.addEventListener('click', async (e) => {
   }
   if (d.recstep !== undefined) {
     b.classList.toggle('on'); // ticked steps live on screen only; leaving the recipe clears them
+    const all = [...document.querySelectorAll('.rc-step')],
+      card = $('#rc-prep');
+    if (card) {
+      const ready = all.length > 0 && all.every((x) => x.classList.contains('on'));
+      card.classList.toggle('ready', ready);
+      const q = card.querySelector('.rc-prep-q');
+      if (q) q.textContent = ready ? 'All done — tick it off the prep list?' : 'On the prep list';
+      if (ready) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
     return;
   }
   if (d.prepok !== undefined) {
@@ -6958,10 +7011,18 @@ document.addEventListener('submit', async (e) => {
       by: data.me.name,
       at: new Date().toISOString(),
       doneAt: '',
+      recipe: (recipeFor('', v('item')) || {}).name || '',
       mine: false,
     });
     render();
-    act('addPrep', { item: v('item'), details: v('details'), when: v('when'), notify }).then((r) => {
+    const rec = recipeFor('', v('item'));
+    act('addPrep', {
+      item: v('item'),
+      details: v('details'),
+      when: v('when'),
+      notify,
+      recipe: rec ? rec.name : '',
+    }).then((r) => {
       if (r && r.result) {
         const x = r.result;
         toast(
