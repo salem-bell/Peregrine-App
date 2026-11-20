@@ -3748,3 +3748,73 @@ body.navhide main {
 .whobar .whotxt {
   flex: 1;
 }
+
+/* clock-in types: "Clocking in for…" */
+.ctgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+.ctbtn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  min-height: 72px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ctbtn b {
+  font: 400 1.25rem/1.1 var(--head);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.ctbtn small {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.ctbtn.first {
+  border: 2px solid var(--accent);
+  background: var(--accent-soft);
+}
+.ctextra .ctchecks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 6px 0;
+}
+.ctextra {
+  display: grid;
+  gap: 4px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.ctextra .chip input {
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  flex: none;
+}
+.ctextra .chip {
+  width: auto;
+  color: var(--ink);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper);
+  font-size: 0.9rem;
+}

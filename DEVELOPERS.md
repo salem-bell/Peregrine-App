@@ -102,6 +102,7 @@ chat service is set.
 | `recipes_`, `recipeCosts_`, `saveRecipe`/`showRecipe`/`delRecipe` (in `act_`) | Recipes tab → the recipe book (managers edit it in the app too); managers' costs read from the Menu and Prep COGS sheets (Settings) |
 | `training_`, `level1Results_`, `trainDoc_` | Trainee checklists; filing them as Google Docs |
 | `tests_`, `testTeam_`, `testSees_` | Certification tests (results come from a separate results sheet) |
+| `clockTypeSets_`, `clockTypesFor_`, `clockPayType_` | What each person picks when clocking in (role list + extras on the Users tab) and the payroll type it counts as |
 | `sendShiftReminders`, `clockTick_`, `payrollTick_`, `pushDataTick` | Timed triggers (every 15 min / every minute) |
 | `push_`, `pushPrefs_` | Who gets which notification |
 | `rv_`, `dirty_`, `gen_`, `cachePut_` | Caching |

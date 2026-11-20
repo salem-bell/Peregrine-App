@@ -1267,6 +1267,20 @@ function myNextShift() {
   );
 }
 
+/* ----- clock-in types: what someone is clocking in for (Barista, Lead, Training…) ----- */
+/** Big buttons, one per type; attrs(t) gives each button's data attributes. */
+const ctPicker = (types, attrs) =>
+  `<div class="ctgrid">${types
+    .map(
+      (t, i) =>
+        `<button class="ctbtn ${i === 0 ? 'first' : ''}" ${attrs(t)}><b>${esc(t)}</b>${i === 0 ? '<small>Usual shift</small>' : ''}</button>`
+    )
+    .join('')}</div>`;
+function clockTypeSheet() {
+  return `<div class="sheet" role="dialog" aria-label="What are you clocking in for?"><div class="sheet-in"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="margin:0">Clocking in for…</h1><button class="btn sm" data-closesheet>Cancel</button></div>
+    <p class="sub">Pick the kind of shift you're working.</p>
+    ${ctPicker(data.clockTypes || [], (t) => `data-clock="in" data-ctype="${esc(t)}"`)}</div></div>`;
+}
 function clockCard() {
   const o = data.open,
     next = myNextShift();
@@ -1274,7 +1288,7 @@ function clockCard() {
     const s = (data.shifts || []).find((x) => x.id === o.shift);
     const w = wageOf(data.me.name),
       h = (Date.now() - new Date(o.in)) / 36e5;
-    return `<div class="card clock on"><div class="row"><div class="txt"><b>Clocked in · ${timeOf(o.in)}</b><div class="sub">${s ? 'Shift ' + t12(s.start) + '–' + t12(s.end) : 'Not on the schedule'}${o.inPlace && o.inPlace !== 'at the shop' ? ' · ' + esc(o.inPlace) : ''}</div></div><button class="btn warn" data-clock="out">Clock out</button></div>
+    return `<div class="card clock on"><div class="row"><div class="txt"><b>Clocked in${o.as ? ' as ' + esc(o.as) : ''} · ${timeOf(o.in)}</b><div class="sub">${s ? 'Shift ' + t12(s.start) + '–' + t12(s.end) : 'Not on the schedule'}${o.inPlace && o.inPlace !== 'at the shop' ? ' · ' + esc(o.inPlace) : ''}</div></div><button class="btn warn" data-clock="out">Clock out</button></div>
       <div class="row clockrun"><div class="txt"><span class="runclock" data-clocksince="${esc(o.in)}">${elapsed(o.in)}</span><div class="sub">on the clock${w ? ` · about <span data-paysince="${esc(o.in)}" data-pw="${w}">${money(h * w, true)}</span> so far` : ''}</div></div><button class="btn sm" data-more="time">My time ›</button></div></div>`;
   }
   const soon = next && next.date === T();
@@ -2153,7 +2167,7 @@ function viewTime() {
       p && !p.out && !run ? ['warn', 'No clock-out'] : null,
       p && p.inPlace && /^away/.test(p.inPlace) ? ['mute', 'Clocked in ' + p.inPlace] : null,
       p && p.edited ? ['mute', 'Edited by ' + first(p.edited)] : null,
-      p && p.type ? ['mute', p.type] : null,
+      p && (p.as || p.type) ? ['mute', p.as || p.type] : null,
     ].filter(Boolean);
     const inner = `<div class="txt"><b>${shortDay(l.date)}</b><div class="sub">${s ? 'Scheduled ' + t12(s.start) + '–' + t12(s.end) : ''}${s && p ? ' · ' : ''}${p ? 'Worked ' + timeOf(p.in) + '–' + (p.out ? timeOf(p.out) : run ? 'now' : '…') + (p.out || run ? ' (' + hrs(((p.out ? new Date(p.out) : new Date()) - new Date(p.in)) / 6e4) + ')' : '') : ''}${p && p.note ? ' · ' + esc(p.note) : ''}</div>${flags.length ? `<div style="margin-top:4px">${flags.map(([c, t]) => `<span class="pill ${c}">${esc(t)}</span>`).join(' ')}</div>` : ''}</div>`;
     return canEdit
@@ -2252,6 +2266,7 @@ function punchSheet() {
       <label class="f">Who<select name="name">${(data.users || []).map((u) => `<option ${u.name === s.name ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select></label>
       <label class="f">Date<input name="date" type="date" value="${esc(p ? p.date : s.date)}"></label>
       <div class="two"><label class="f">In<input name="in" type="time" value="${esc(p && p.in ? hmOf(p.in) : s.start || '')}"></label><label class="f">Out<input name="out" type="time" value="${esc(p && p.out ? hmOf(p.out) : s.end || '')}"></label></div>
+      ${p && p.as ? `<p class="sub" style="margin:0">Clocked in as <b>${esc(p.as)}</b>.</p>` : ''}
       ${(data.shiftTypes || []).length ? `<label class="f">Shift type (for payroll)<select name="type">${data.shiftTypes.map((t, i) => `<option value="${esc(t)}" ${(p && p.type ? p.type === t : i === 0) ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></label>` : ''}
       <label class="f">Note<input name="note" maxlength="200" value="${esc(p ? p.note : '')}" placeholder="e.g. Forgot to clock out"></label>
       <div class="btns"><button class="btn go">Save</button>${p ? `<button type="button" class="btn" data-delpunch="${esc(p.id)}">Delete</button>` : ''}</div></form></div></div>`;
@@ -4420,6 +4435,23 @@ const back = (to) =>
   !to && wide()
     ? ''
     : `<button class="btn sm" data-more="${to || ''}" style="margin-bottom:6px">‹ ${to ? (to === 'settings' ? 'Settings' : 'Back') : 'More'}</button>`; // desktop: the sidebar is the menu
+/** Team › Edit: the clock-in types this person gets on top of their role's list. */
+function ctExtraField(u) {
+  const sets = data.clockSets || {},
+    base = sets[u.role] || sets.Staff || [],
+    known = [...new Set([].concat(sets.Staff || [], sets.Lead || [], sets.Manager || [], u.extra || []))],
+    can = known.filter((t) => base.indexOf(t) < 0); // extras typed in before show here as boxes too
+  return `<div class="f ctextra"><span>Clock-in types</span>
+      <span class="sub">As ${esc(u.role.toLowerCase())}: ${esc(base.join(', '))}. Tick any extra ones ${esc(first(u.name))} can also pick.</span>
+      <div class="ctchecks">${can
+        .map(
+          (t) =>
+            `<label class="chip"><input type="checkbox" name="extra" value="${esc(t)}" ${(u.extra || []).indexOf(t) >= 0 ? 'checked' : ''}> ${esc(t)}</label>`
+        )
+        .join('')}</div>
+      <input name="extraother" maxlength="120" placeholder="Something else? e.g. Roasting, Catering (commas between)">
+    </div>`;
+}
 function viewTeam() {
   const us = (data.users || []).slice().sort((a, b) => b.active - a.active || a.name.localeCompare(b.name));
   const added = justAdded && us.find((u) => u.name === justAdded),
@@ -4446,6 +4478,7 @@ function viewTeam() {
       <label class="f">Role<select name="role">${['Staff', 'Lead', 'Manager', 'Shop'].map((r) => `<option value="${r}" ${u && u.role === r ? 'selected' : ''}>${r === 'Shop' ? 'Shop iPad (shared device)' : r}</option>`).join('')}</select></label>
       <div class="two"><label class="f">Phone${u ? '' : ' (optional)'}<input name="phone" type="tel" maxlength="40" value="${esc(u ? u.phone : '')}"></label><label class="f">Email${u ? '' : ' (optional)'}<input name="email" type="email" maxlength="120" value="${esc(u ? u.email : '')}"></label></div>
       ${u ? '' : '<p class="sub" style="margin:0">Leave these blank and they\'ll add them from their invite link. Their code is always the last 4 digits of their phone.</p>'}
+      ${u && data.clockSets && u.role !== 'Shop' ? ctExtraField(u) : ''}
       <label class="f">Hourly wage ($) – only managers see this<input name="wage" inputmode="decimal" maxlength="8" value="${u && u.wage ? Number(u.wage).toFixed(2) : ''}" placeholder="e.g. 15.50"></label>
       <div class="btns"><button class="btn go">${u ? 'Save' : 'Add to the team'}</button>${u ? '<button type="button" class="btn" data-canceledit>Cancel</button>' : ''}</div></form>`;
   const row = (u) =>
@@ -4786,14 +4819,19 @@ setInterval(() => {
   if (idle > KIOSK_SLEEP_MS) return setAsleep(true);
   if (idle > KIOSK_HOME_MS && (tab !== 'today' || sheet || viewer || chat.open || moreView)) kioskHome();
 }, 5000);
+const kioskTypes = (id) => (data.clockTypesBy || {})[id] || [];
 function kioskSheet() {
   const p = (data.people || []).find((x) => x.id === sheet.id);
   if (!p) return '';
+  const types = kioskTypes(p.id);
+  if (!onClockSince(p.name) && types.length > 1 && !sheet.type)
+    return `<div class="sheet" role="dialog" aria-label="What are you clocking in for?"><div class="sheet-in kiosk"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="margin:0">${esc(p.name)}</h1><button class="btn sm" data-closesheet>Cancel</button></div>
+    <p class="sub">Clocking <b>in</b> for…</p>${ctPicker(types, (t) => `data-ktype="${esc(t)}"`)}</div></div>`;
   const since = onClockSince(p.name),
     dots = [0, 1, 2, 3].map((i) => `<span class="${i < sheet.code.length ? 'on' : ''}"></span>`).join(''),
     keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'];
   return `<div class="sheet" role="dialog" aria-label="Clock ${since ? 'out' : 'in'}"><div class="sheet-in kiosk"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="margin:0">${esc(p.name)}</h1><button class="btn sm" data-closesheet>Cancel</button></div>
-    <p class="sub">${since ? 'Clocking <b>out</b> · in since ' + timeOf(since) : 'Clocking <b>in</b>'} · type your code</p>
+    <p class="sub">${since ? 'Clocking <b>out</b> · in since ' + timeOf(since) : 'Clocking <b>in</b>' + (sheet.type ? ' as <b>' + esc(sheet.type) + '</b>' + (types.length > 1 ? ' <button class="linkbtn" data-ktype="">change</button>' : '') : '')} · type your code</p>
     <div class="kdots" aria-live="polite">${dots}</div>${sheet.err ? `<p class="kerr" role="alert">${esc(sheet.err)}</p>` : ''}
     <div class="kpad">${keys.map((k) => (k ? `<button data-kpad="${k === '⌫' ? 'del' : k}" ${sheet.busy ? 'disabled' : ''} aria-label="${k === '⌫' ? 'Delete' : k}">${k}</button>` : '<span></span>')).join('')}</div>
     ${sheet.busy ? `<p class="sub" style="text-align:center">Clocking ${since ? 'out' : 'in'}…</p>` : ''}</div></div>`;
@@ -4813,7 +4851,11 @@ async function kioskGo() {
     got = await post({
       fn: 'api',
       token: TOKEN,
-      p: Object.assign({ action: 'kioskClock', who: k.id, code: k.code, have: haveNow() }, pos),
+      p: Object.assign(
+        { action: 'kioskClock', who: k.id, code: k.code, have: haveNow() },
+        k.type ? { type: k.type } : {},
+        pos
+      ),
     });
   } catch (e) {
     err = String(e.message || e);
@@ -5226,35 +5268,37 @@ function render() {
           ? shiftSheet()
           : sheet.kind === 'publish'
             ? publishSheet()
-            : sheet.kind === 'punch'
-              ? punchSheet()
-              : sheet.kind === 'editchat'
-                ? editChatSheet()
-                : sheet.kind === 'loc'
-                  ? locSheet()
-                  : sheet.kind === 'preppop'
-                    ? prepPopSheet()
-                    : sheet.kind === 'testacc'
-                      ? testAccSheet()
-                      : sheet.kind === 'reqedit'
-                        ? reqEditSheet()
-                        : sheet.kind === 'availedit'
-                          ? availEditSheet()
-                          : sheet.kind === 'trainnew'
-                            ? trainNewSheet()
-                            : sheet.kind === 'trainnote'
-                              ? trainNoteSheet()
-                              : sheet.kind === 'kiosk'
-                                ? kioskSheet()
-                                : sheet.kind === 'kioskdone'
-                                  ? kioskDoneSheet()
-                                  : sheet.kind === 'kpick'
-                                    ? kpickSheet()
-                                    : sheet.kind === 'prepcount'
-                                      ? prepCountSheet()
-                                      : sheet.kind === 'who'
-                                        ? whoSheet()
-                                        : pickSheet(sheet.kind)
+            : sheet.kind === 'clocktype'
+              ? clockTypeSheet()
+              : sheet.kind === 'punch'
+                ? punchSheet()
+                : sheet.kind === 'editchat'
+                  ? editChatSheet()
+                  : sheet.kind === 'loc'
+                    ? locSheet()
+                    : sheet.kind === 'preppop'
+                      ? prepPopSheet()
+                      : sheet.kind === 'testacc'
+                        ? testAccSheet()
+                        : sheet.kind === 'reqedit'
+                          ? reqEditSheet()
+                          : sheet.kind === 'availedit'
+                            ? availEditSheet()
+                            : sheet.kind === 'trainnew'
+                              ? trainNewSheet()
+                              : sheet.kind === 'trainnote'
+                                ? trainNoteSheet()
+                                : sheet.kind === 'kiosk'
+                                  ? kioskSheet()
+                                  : sheet.kind === 'kioskdone'
+                                    ? kioskDoneSheet()
+                                    : sheet.kind === 'kpick'
+                                      ? kpickSheet()
+                                      : sheet.kind === 'prepcount'
+                                        ? prepCountSheet()
+                                        : sheet.kind === 'who'
+                                          ? whoSheet()
+                                          : pickSheet(sheet.kind)
         : '';
   if (ovHtml !== lastOvHtml) {
     $('#overlay').innerHTML = ovHtml;
@@ -5842,12 +5886,29 @@ document.addEventListener('click', async (e) => {
   }
   if (!data) return;
   if (d.clock) {
-    b.disabled = true;
-    b.textContent = d.clock === 'in' ? 'Clocking in…' : 'Clocking out…';
+    const types = data.clockTypes || [];
+    // clocking in: ask what for, unless there's only one choice (or the server is too old to know)
+    if (d.clock === 'in' && d.ctype === undefined && types.length > 1) {
+      sheet = { kind: 'clocktype' };
+      render();
+      return;
+    }
+    const type = d.clock === 'in' ? d.ctype || (types.length === 1 ? types[0] : '') : '';
+    if (sheet && sheet.kind === 'clocktype') {
+      sheet = null;
+      render();
+    }
+    const cb = $('[data-clock]') || b;
+    cb.disabled = true;
+    cb.textContent = d.clock === 'in' ? 'Clocking in…' : 'Clocking out…';
     const pos = await getPos();
-    act(d.clock === 'in' ? 'clockIn' : 'clockOut', pos).then((r) => {
+    act(d.clock === 'in' ? 'clockIn' : 'clockOut', type ? Object.assign({ type }, pos) : pos).then((r) => {
       if (r)
-        toast(d.clock === 'in' ? 'Clocked in · ' + timeOf(new Date().toISOString()) : 'Clocked out · have a good one');
+        toast(
+          d.clock === 'in'
+            ? 'Clocked in' + (type ? ' as ' + type : '') + ' · ' + timeOf(new Date().toISOString())
+            : 'Clocked out · have a good one'
+        );
     });
     return;
   }
@@ -5894,8 +5955,16 @@ document.addEventListener('click', async (e) => {
     render();
     return;
   }
+  if (d.ktype !== undefined && sheet && sheet.kind === 'kiosk') {
+    sheet.type = d.ktype;
+    sheet.code = '';
+    sheet.err = '';
+    render();
+    return;
+  }
   if (d.kiosk) {
-    sheet = { kind: 'kiosk', id: d.kiosk, code: '', err: '' };
+    const ts = kioskTypes(d.kiosk);
+    sheet = { kind: 'kiosk', id: d.kiosk, code: '', err: '', type: ts.length === 1 ? ts[0] : '' };
     render();
     return;
   }
@@ -7157,6 +7226,13 @@ document.addEventListener('submit', async (e) => {
       return;
     }
     const p = { name: v('name'), role: v('role'), phone: v('phone'), email: v('email'), wage: v('wage') };
+    if (f.querySelector('.ctextra'))
+      p.extra = [...f.querySelectorAll('input[name=extra]:checked')]
+        .map((x) => x.value)
+        .concat(v('extraother').split(','))
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .join(', ');
     if (f.dataset.id) {
       editUser = null;
       act('editUser', Object.assign({ id: f.dataset.id }, p)).then((r) => {

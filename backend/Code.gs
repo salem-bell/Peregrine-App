@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '5.05';
+const VERSION = '5.06';
 const ROLES = ['Manager', 'Lead', 'Staff', 'Shop']; // Shop: the shared counter iPad – lists, messages, resources, schedule, clock-in screen
 // Everything the Shop iPad may change. Anything else is refused on the server, whatever the app sends.
 const SHOP_ACTIONS_ = ['check', 'read', 'addPrep', 'donePrep', 'delPrep', 'kioskClock', 'pinChat'];
@@ -35,6 +35,7 @@ const TABS = {
     'Schedule order',
     'Notifications (blank = all on)',
     'Last active',
+    'Extra clock-in types (comma list)',
   ],
   Checklists: ['List', 'Task', 'Order', 'Active', 'Notes', 'Days (blank = every day)', 'Section'],
   'Checklist log': ['Date', 'List', 'Task', 'Done by', 'Done at'],
@@ -64,6 +65,7 @@ const TABS = {
     'Note',
     'Edited by',
     'Shift type (blank = Regular Shift)',
+    'Clocked in as',
   ],
   Channels: ['ID', 'Name', 'Kind', 'Members (user IDs; blank = everyone)', 'Who sees it', 'Created by', 'Created'],
   Messages: [
@@ -243,6 +245,22 @@ const SETTINGS = [
     'Shift types',
     'Regular Shift, Training, Meeting, Admin',
     "Kinds of shift for payroll, separated by commas – the first is the usual one. They must match the Shift Type list in the payroll template (Setup tab). Managers set a punch's type when fixing it in the app.",
+  ],
+  [
+    'Clock-in types for staff',
+    'Barista, Training, Meeting',
+    'What staff pick from when they clock in, separated by commas. The first is the usual one.',
+  ],
+  ['Clock-in types for leads', 'Lead, Admin, Training, Meeting', 'What leads pick from when they clock in.'],
+  [
+    'Clock-in types for managers',
+    'Manager, Admin, Training, Meeting',
+    'What managers pick from when they clock in. A manager can give anyone extra types in the app (Team › Edit).',
+  ],
+  [
+    'Clock-in types for payroll',
+    'Barista = Regular Shift, Lead = Regular Shift, Manager = Regular Shift',
+    'Which payroll shift type (from Shift types) each clock-in type counts as. A type not listed here goes to payroll as itself if it is one of the Shift types, otherwise as the first Shift type.',
   ],
   [
     'Payroll template',
@@ -1179,6 +1197,17 @@ function state_(ss, me, slim, have) {
     out.lateAfter = Number(setting_(ss, 'Late after (minutes)')) || 5;
     out.overAfter = overAfter_(ss);
     out.shiftTypes = shiftTypes_(ss);
+    out.clockTypes = clockTypesFor_(
+      ss,
+      users.find((r) => String(r[6]) === me.id)
+    ); // what I pick from when I clock in
+    out.clockSets = clockTypeSets_(ss); // the lists per role (for managers' Team screen)
+    if (isShop) {
+      out.clockTypesBy = {};
+      users
+        .filter((r) => truthy_(r[3]) && r[6] && !isShop_(r))
+        .forEach((r) => (out.clockTypesBy[String(r[6])] = clockTypesFor_(ss, r)));
+    }
     out.geo = /\d/.test(setting_(ss, 'Shop location (lat, lng)'));
     out.punches = punchesFor_(rv_(ss, 'Time clock', 2500), me, first, '9999', tz); // only the newest rows of the Time clock are read
     out.open =
@@ -1294,6 +1323,7 @@ function state_(ss, me, slim, have) {
         wage: Number(r[10]) || 0,
         onSchedule: onSched_(r),
         order: Number(r[12]) || 0,
+        extra: splitList_(r[15]),
       }));
     // Pay period + each person's own wage, so everyone can see their hours and estimated pay (never anyone else's wage)
     out.period = {
@@ -1368,6 +1398,7 @@ function punchesFor_(rows, me, first, last, tz) {
       note: String(r[8] || ''),
       edited: String(r[9] || ''),
       type: String(r[10] || ''),
+      as: String(r[11] || ''), // what they clocked in as (Barista, Lead, Training…)
     }))
     .filter((x) => x.date >= first && x.date <= last)
     .sort((a, b) => String(a.in).localeCompare(String(b.in)));
@@ -1737,6 +1768,17 @@ function act_(ss, me, p, touched) {
       sh.getRange(row, 1, 1, 2).setValues([[newName, role]]);
       sh.getRange(row, 5, 1, 2).setValues([[clean_(p.phone, 40), clean_(p.email, 120)]]);
       if (p.wage !== undefined) sh.getRange(row, 11).setValue(wage_(p.wage));
+      if (p.extra !== undefined) {
+        if (sh.getLastColumn() < 16) buildTab_(ss, 'Users');
+        sh.getRange(row, 16).setValue(
+          clean_(
+            splitList_(String(p.extra).slice(0, 300))
+              .map((x) => x.slice(0, 40))
+              .join(', '),
+            300
+          )
+        );
+      }
       if (newName !== name) {
         // keep the schedule pointing at the same person
         [
@@ -2324,7 +2366,29 @@ function act_(ss, me, p, touched) {
       if (v.some((r) => String(r[1]).trim() === me.name && openPunch_(r))) throw new Error("You're already clocked in");
       const now = new Date(),
         shiftId = matchShift_(ss, me.name, now, tz);
-      put_(sh, [nextId_(sh, 'p'), me.name, today, now, '', shiftId, place_(ss, p.lat, p.lng), '', '', '']);
+      // what they're clocking in for: must be one of their own choices (an older app sends none)
+      let as = String(p.type || '').trim();
+      if (as) {
+        const u = vals_(ss.getSheetByName('Users')).find((r) => String(r[0]).trim() === me.name),
+          ok = clockTypesFor_(ss, u).find((x) => x.toLowerCase() === as.toLowerCase());
+        if (!ok) throw new Error('Pick what you are clocking in for');
+        as = ok;
+      }
+      if (sh.getLastColumn() < 12) buildTab_(ss, 'Time clock');
+      put_(sh, [
+        nextId_(sh, 'p'),
+        me.name,
+        today,
+        now,
+        '',
+        shiftId,
+        place_(ss, p.lat, p.lng),
+        '',
+        '',
+        '',
+        as ? clockPayType_(ss, as) : '',
+        as,
+      ]);
       return;
     }
     case 'kioskClock': {
@@ -2351,8 +2415,19 @@ function act_(ss, me, p, touched) {
         did = p.want === 'in' || p.want === 'out' ? p.want : isIn ? 'out' : 'in';
       if (did === 'in' && isIn) throw new Error(first_(person.name) + ' is already clocked in');
       if (did === 'out' && !isIn) throw new Error(first_(person.name) + " isn't clocked in");
-      act_(ss, person, { action: did === 'in' ? 'clockIn' : 'clockOut', lat: p.lat, lng: p.lng }, touched);
-      audit(person.name + ' clocked ' + did + ' on the shop iPad');
+      act_(
+        ss,
+        person,
+        { action: did === 'in' ? 'clockIn' : 'clockOut', lat: p.lat, lng: p.lng, type: p.type },
+        touched
+      );
+      audit(
+        person.name +
+          ' clocked ' +
+          did +
+          (did === 'in' && p.type ? ' as ' + clean_(p.type, 40) : '') +
+          ' on the shop iPad'
+      );
       return { name: person.name, did, at: new Date().toISOString() };
     }
     case 'clockOut': {
@@ -5155,6 +5230,46 @@ function join_(invite, phone, email) {
      with Setup's start date set, the Timesheet filled from the punches and the Daily Tip Pool left blank for tips.
    Uses the pay period settings (Pay period, Pay period starts on).
    ============================================================ */
+/* ----- clock-in types: what someone is clocking in for (Barista, Lead, Training…) ----- */
+const CT_DEFAULTS_ = {
+  Staff: 'Barista, Training, Meeting',
+  Lead: 'Lead, Admin, Training, Meeting',
+  Manager: 'Manager, Admin, Training, Meeting',
+};
+function clockTypeSets_(ss) {
+  const one = (label, role) => {
+    const t = splitList_(setting_(ss, label));
+    return t.length ? t : splitList_(CT_DEFAULTS_[role]);
+  };
+  return {
+    Staff: one('Clock-in types for staff', 'Staff'),
+    Lead: one('Clock-in types for leads', 'Lead'),
+    Manager: one('Clock-in types for managers', 'Manager'),
+  };
+}
+/** Everything one person may clock in as: their role's list, then the extras a manager gave them. */
+function clockTypesFor_(ss, u) {
+  if (!u || isShop_(u)) return [];
+  const base = clockTypeSets_(ss)[role_(u[1])] || clockTypeSets_(ss).Staff,
+    out = base.slice();
+  splitList_(u[15]).forEach((x) => {
+    if (!out.some((y) => y.toLowerCase() === x.toLowerCase())) out.push(x);
+  });
+  return out;
+}
+/** The payroll shift type a clock-in type counts as (blank = the usual payroll type). */
+function clockPayType_(ss, label) {
+  const k = String(label || '')
+    .trim()
+    .toLowerCase();
+  if (!k) return '';
+  const m = String(setting_(ss, 'Clock-in types for payroll') || CT_DEFAULTS_PAY_)
+    .split(',')
+    .map((x) => x.split('=').map((y) => y.trim()))
+    .find((x) => x.length === 2 && x[0].toLowerCase() === k);
+  return punchType_(ss, m ? m[1] : label);
+}
+const CT_DEFAULTS_PAY_ = 'Barista = Regular Shift, Lead = Regular Shift, Manager = Regular Shift';
 function shiftTypes_(ss) {
   const t = splitList_(setting_(ss, 'Shift types'));
   return t.length ? t : ['Regular Shift', 'Training', 'Meeting', 'Admin'];
