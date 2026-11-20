@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '5.03';
+const VERSION = '5.04';
 const ROLES = ['Manager', 'Lead', 'Staff', 'Shop']; // Shop: the shared counter iPad – lists, messages, resources, schedule, clock-in screen
 // Everything the Shop iPad may change. Anything else is refused on the server, whatever the app sends.
 const SHOP_ACTIONS_ = ['check', 'read', 'addPrep', 'donePrep', 'delPrep', 'kioskClock', 'pinChat'];
@@ -135,6 +135,22 @@ const TABS = {
     'Email ID',
   ],
   'Sales import': ['Received', 'Subject', 'File', 'Result', 'Report (first 45,000 characters)', 'Email ID'],
+  // The in-app recipe book. One row per recipe; ingredients and steps one per line in the cell (Alt/Option+Enter).
+  Recipes: [
+    'Recipe',
+    'Type (Drink or Prep)',
+    'Category',
+    'Size or yield',
+    'Serve in / store in',
+    'Keeps for (prep)',
+    'Ingredients (one per line; a line ending in : is a heading)',
+    'Steps (one per line; start a line with ! for a warning)',
+    'Good to know',
+    'Order',
+    'Active',
+    'Who sees it',
+    'COGS name (blank = same as Recipe; several with |)',
+  ],
 };
 
 const SETTINGS = [
@@ -248,6 +264,16 @@ const SETTINGS = [
     'Inventory tabs',
     'Coffee, In-house, Costco, Paper goods, Other',
     'The tabs in that sheet that hold items (same columns: Item, Category, Vendor, Unit, On hand, Par, Case size, Counted on…).',
+  ],
+  [
+    'Menu COGS sheet',
+    'https://docs.google.com/spreadsheets/d/1GapugLoPkofJLd2PdmkbnYVFbT_uo_StxbdcNeWGQfg/edit',
+    "Optional. The Menu COGS Calculator. Managers see each drink recipe's price, cost and COGS % from its Menu Summary tab.",
+  ],
+  [
+    'Prep COGS sheet',
+    'https://docs.google.com/spreadsheets/d/1xq43EDG04bjDTijyl9M_ttMAQD4ro5SJNxVW9hQPJPE/edit',
+    "Optional. The Prep COGS Calculator. Managers see each prep recipe's batch cost and cost per fl oz from its Summary tab.",
   ],
   [
     'Push service address',
@@ -444,6 +470,14 @@ function buildTab_(ss, name) {
     text(6);
   }
   if (name === 'Links') list(5, ['', 'Drive']);
+  if (name === 'Recipes') {
+    list(2, ['Drink', 'Prep']);
+    box(11);
+    list(12, ['Everyone', 'Leads and managers', 'Managers']);
+    sh.getRange(2, 7, 999, 3).setWrap(true).setVerticalAlignment('top');
+    sh.setColumnWidth(7, 280);
+    sh.setColumnWidth(8, 380);
+  }
   if (name === 'Channels') {
     list(3, ['channel', 'group', 'dm']);
     list(5, ['Everyone', 'Leads and managers', 'Managers']);
@@ -551,6 +585,39 @@ function examples_(name) {
           'Lead (Level III)',
           'Leads and managers',
           5,
+        ],
+      ];
+    case 'Recipes':
+      return [
+        [
+          'Vanilla Latte',
+          'Drink',
+          'Flavored Lattes',
+          '12oz hot · 16oz iced',
+          'Latte mug / iced cup',
+          '',
+          'Espresso shot\n32g vanilla syrup\n10oz milk',
+          'Pump the syrup into the cup\nPull the shot over the syrup\nSteam the milk to 145–155F (iced: cold milk over ice)',
+          'Syrup grams are the same hot or iced.',
+          1,
+          true,
+          'Everyone',
+          'Vanilla Latte (12oz)',
+        ],
+        [
+          'Simple Syrup',
+          'Prep',
+          'Syrups',
+          '½ gal',
+          '36oz bottles',
+          '2 weeks, fridge',
+          '1,300g white sugar\n550g warm water\n500g cold water',
+          "Add the sugar to the blender, then the warm water\nBlend on low\nAdd the cold water and keep blending\n!Stir as needed so the blade doesn't burn out",
+          '',
+          2,
+          true,
+          'Everyone',
+          '',
         ],
       ];
     case 'Links':
@@ -699,6 +766,7 @@ function doPost(e) {
     if (body.fn === 'photo') return json_(photo_(body.token, body.id));
     if (body.fn === 'file') return json_(file_(body.token, body.id));
     if (body.fn === 'inventory') return json_(inventory_(body.token, body.counts));
+    if (body.fn === 'recipeCosts') return json_(recipeCosts_(body.token));
     if (body.fn === 'tests') {
       const ss = SpreadsheetApp.getActive(),
         me = who_(ss, body.token);
@@ -897,10 +965,11 @@ const SECTIONS_ = {
   chat: ['Channels', 'Messages', 'Chat reads', 'Users', 'Settings'],
   reqs: ['Requests'],
   links: ['Links'],
+  recipes: ['Recipes'],
   team: ['Users', 'Settings'],
   train: ['Training items', 'Trainees', 'Training log'],
 };
-const SLIM_SKIP_ = ['lists', 'news', 'clock', 'prep', 'chat', 'links'];
+const SLIM_SKIP_ = ['lists', 'news', 'clock', 'prep', 'chat', 'links', 'recipes'];
 function secVersion_(name, me, today) {
   return [VERSION, name, me.id, me.role, today, Math.floor(Date.now() / 9e5), gen_('*')]
     .concat(SECTIONS_[name].map(gen_))
@@ -1196,6 +1265,13 @@ function state_(ss, me, slim, have) {
         order: Number(r[3]) || 0,
       }))
       .sort((a, b) => a.order - b.order);
+  }
+
+  // Recipe book (everyone, by "Who sees it"); managers also get each row number and the tab's link to edit it
+  if (want('recipes')) {
+    out.recipes = recipes_(ss, isMgr, isLead);
+    out.recipeSheet =
+      isMgr && ss.getSheetByName('Recipes') ? ss.getUrl() + '#gid=' + ss.getSheetByName('Recipes').getSheetId() : '';
   }
 
   // Training checklists – leads and managers only
@@ -3422,6 +3498,98 @@ function inventory_(token, counts) {
   try {
     const t = JSON.stringify(out);
     if (t.length < 95000) cache.put(ck, t, 60);
+  } catch (e) {}
+  return out;
+}
+
+/* ----- recipes: the in-app recipe book (Recipes tab) and, for managers, costs from the COGS calculators ----- */
+const lines_ = (v) =>
+  String(v || '')
+    .split(/\r?\n/)
+    .map((x) => x.replace(/^\s*(?:[-•*·]|\d+[.)])\s+/, '').trim()) // bullets or numbers typed by hand are dropped; the app numbers steps itself
+    .filter(Boolean);
+function recipes_(ss, isMgr, isLead) {
+  if (!ss.getSheetByName('Recipes')) return [];
+  const can = (w) => (/^manager/i.test(w) ? isMgr : /lead/i.test(w) ? isLead : true);
+  return rv_(ss, 'Recipes')
+    .map((r, i) => ({ r, row: i + 2 }))
+    .filter(({ r }) => String(r[0]).trim() && (r[10] === '' || truthy_(r[10])) && can(String(r[11] || 'Everyone')))
+    .map(({ r, row }) => {
+      const o = {
+        id: 'R' + row,
+        name: String(r[0]).trim(),
+        type: /^prep/i.test(String(r[1]).trim()) ? 'Prep' : 'Drink',
+        cat: String(r[2] || '').trim(),
+        size: String(r[3] || '').trim(),
+        serve: String(r[4] || '').trim(),
+        keeps: String(r[5] || '').trim(),
+        ing: lines_(r[6]),
+        steps: lines_(r[7]),
+        notes: String(r[8] || '').trim(),
+        order: Number(r[9]) || 0,
+      };
+      if (isMgr) {
+        o.row = row;
+        o.cogs = String(r[12] || '').trim();
+      }
+      return o;
+    })
+    .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+}
+/** Managers only: the Menu Summary and prep Summary rows of the COGS calculators, matched to recipes in the app. Cached 10 minutes. */
+function recipeCosts_(token) {
+  const ss = SpreadsheetApp.getActive(),
+    me = who_(ss, token);
+  if (me.role !== 'Manager') throw new Error('Only managers see recipe costs');
+  const cache = CacheService.getScriptCache(),
+    ck = 'RCOST:' + gen_('Settings'),
+    hit = cache.get(ck);
+  if (hit)
+    try {
+      return JSON.parse(hit);
+    } catch (e) {}
+  const num = (v) => (typeof v === 'number' ? v : Number(String(v).replace(/[$,%\s]/g, '')));
+  const table = (label, tab, cols) => {
+    const id = driveId_(setting_(ss, label));
+    if (!id) return { rows: [], err: '' };
+    try {
+      const sh = SpreadsheetApp.openById(id).getSheetByName(tab);
+      if (!sh) return { rows: [], err: 'No "' + tab + '" tab in the ' + label };
+      const v = sh.getRange(1, 1, sh.getLastRow(), cols).getValues(),
+        h = v.findIndex((r) => /^(category|recipe)$/i.test(String(r[0]).trim())); // the header row (the title rows above it are skipped)
+      return { rows: v.slice(h + 1).filter((r) => String(r[0]).trim() && String(r[1]).trim()), err: '' };
+    } catch (e) {
+      return { rows: [], err: "Can't open the " + label + ': ' + e.message };
+    }
+  };
+  const m = table('Menu COGS sheet', 'Menu Summary', 6),
+    p = table('Prep COGS sheet', 'Summary', 4);
+  const ok = (x) => isFinite(x) && x !== '';
+  const out = {
+    ok: true,
+    menu: m.rows.map((r) => ({
+      cat: String(r[0]).trim(),
+      item: String(r[1]).trim(),
+      price: ok(num(r[2])) ? num(r[2]) : null,
+      cost: ok(num(r[3])) ? num(r[3]) : null,
+      pct: ok(num(r[4])) ? (typeof r[4] === 'number' ? r[4] * 100 : num(r[4])) : null,
+      status: /^#/.test(String(r[5])) ? '' : String(r[5] || '').trim(),
+    })),
+    prep: p.rows
+      .filter((r) => !/^(category|recipe)$/i.test(String(r[0]).trim()))
+      .map((r) => ({
+        item: String(r[0]).trim(),
+        batch: ok(num(r[1])) ? num(r[1]) : null,
+        yieldOz: ok(num(r[2])) ? num(r[2]) : null,
+        perOz: ok(num(r[3])) ? num(r[3]) : null,
+      })),
+    errs: [m.err, p.err].filter(Boolean),
+  };
+  // the Prep Summary's first column header is "Recipe", so its header row is found the same way; the Menu Summary's is "Category"
+  out.prep = out.prep.filter((x) => x.item && x.batch !== null);
+  try {
+    const t = JSON.stringify(out);
+    if (t.length < 95000) cache.put(ck, t, 600);
   } catch (e) {}
   return out;
 }

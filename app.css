@@ -3188,6 +3188,7 @@ body.navhide main {
   letter-spacing: 0.35em;
   text-transform: uppercase;
   color: #d9a441;
+  padding-left: 0.35em; /* balances the spacing after the last letter, so the word sits under the bird */
 }
 #sleep .sl-tap {
   margin-top: 26px;
@@ -3323,4 +3324,376 @@ body.navhide main {
 }
 .pc .btns {
   justify-content: center;
+}
+
+/* ---------- Recipe book ---------- */
+.rb-hero {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 2px 0 14px;
+  padding: 18px 18px 18px 16px;
+  border-radius: 16px;
+  background: var(--bar);
+  color: var(--on-bar);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+.rb-hero h1 {
+  margin: 2px 0 0;
+  color: var(--on-bar);
+  font: 400 1.9rem/1 var(--head);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.rb-eye {
+  font-size: 0.72rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+.rb-sub {
+  margin-top: 6px;
+  font-size: 0.85rem;
+  opacity: 0.75;
+}
+.rb-mark {
+  flex: none;
+  width: 44px;
+  height: 72px;
+  background: var(--gold);
+  -webkit-mask: url('brand/branch.png') center/contain no-repeat;
+  mask: url('brand/branch.png') center/contain no-repeat;
+}
+.rb-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.rb-tools .seg {
+  margin: 0;
+}
+.rb-search {
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+}
+.rb-none {
+  padding: 14px 4px;
+}
+.rb-cat h2 {
+  margin-top: 18px;
+}
+.rb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+.rb-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 78px;
+  padding: 12px 12px 11px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--teal);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.rb-cat[data-kind='Prep'] .rb-card {
+  border-left-color: var(--gold);
+}
+.rb-card b {
+  font: 400 1.08rem/1.15 var(--head);
+  letter-spacing: 0.02em;
+}
+.rb-card.has-pct b {
+  padding-right: 38px;
+}
+.rb-card small {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+.rb-card[hidden],
+.rb-cat[hidden] {
+  display: none;
+}
+.rb-pct {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--ok-soft);
+  color: var(--ok);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+.rb-pct.over {
+  background: var(--soft);
+  color: var(--warn);
+}
+
+/* one recipe, as a Peregrine recipe card */
+.rc {
+  max-width: 760px;
+  margin: 0 auto 12px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.rc-head {
+  padding: 18px 20px 16px;
+  background: var(--bar);
+  color: var(--on-bar);
+  border-bottom: 4px solid var(--teal);
+}
+.rc.prep .rc-head {
+  border-bottom-color: var(--gold);
+}
+.rc-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.72rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+.rc-brand img {
+  height: 18px;
+}
+.rc-title {
+  margin: 8px 0 0;
+  color: var(--on-bar);
+  font: 400 2.1rem/1.02 var(--head);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.rc-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+.rc-meta span {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.1);
+  font-size: 0.9rem;
+}
+.rc-meta small {
+  font-size: 0.66rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+.rc section {
+  padding: 4px 20px 10px;
+}
+.rc-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 16px 0 8px;
+  font: 400 1rem/1 var(--head);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.rc.prep .rc-h {
+  color: var(--gold-text);
+}
+.rc-ing {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.rc-ing li {
+  display: grid;
+  grid-template-columns: minmax(64px, max-content) 1fr;
+  gap: 14px;
+  align-items: baseline;
+  padding: 9px 0;
+  border-bottom: 1px dashed var(--line);
+  font-size: 1.05rem;
+}
+.rc-ing li:last-child {
+  border-bottom: 0;
+}
+.rc-ing .amt {
+  min-width: 64px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.rc-ing li.rc-sub {
+  display: block;
+  padding: 12px 0 4px;
+  border-bottom: 0;
+  font-size: 0.78rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.rc-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.rc-steps li {
+  margin: 0 0 8px;
+}
+.rc-step,
+.rc-warn {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+  color: var(--ink);
+  text-align: left;
+  font: inherit;
+  font-size: 1.05rem;
+  cursor: pointer;
+}
+.rc-step p,
+.rc-warn p {
+  margin: 2px 0 0;
+  line-height: 1.4;
+}
+.rc-steps .n {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--teal);
+  color: #fff;
+  font: 400 1rem/1 var(--head);
+}
+.rc.prep .rc-steps .n {
+  background: var(--gold);
+}
+.rc-step.on {
+  opacity: 0.5;
+}
+.rc-step.on p {
+  text-decoration: line-through;
+}
+.rc-step.on .n {
+  background: var(--ok) !important;
+}
+.rc-warn {
+  border-color: var(--warn);
+  background: var(--soft);
+  cursor: default;
+}
+.rc-warn .n {
+  background: var(--warn) !important;
+}
+.rc-warn p {
+  font-weight: 600;
+}
+.rc-hint {
+  margin: 2px 0 0;
+}
+.rc-note p {
+  margin: 0;
+  padding: 12px 14px;
+  border-left: 4px solid var(--gold);
+  border-radius: 0 10px 10px 0;
+  background: var(--soft);
+  line-height: 1.45;
+}
+.rc-scale {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 20px 0;
+}
+.rc-scale .seg {
+  margin: 0;
+}
+.rc-cost {
+  margin: 14px 20px 0;
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+}
+.rc-crow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  align-items: center;
+  padding: 4px 0;
+}
+.rc-crow i {
+  flex-basis: 100%;
+  font-style: normal;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.rc-crow span {
+  display: flex;
+  flex-direction: column;
+}
+.rc-crow small {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.rc-crow .over b,
+.rc-crow .over small {
+  color: var(--warn);
+}
+.rc-foot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 12px;
+  border-top: 1px solid var(--line);
+  font-size: 0.7rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.rc-branch {
+  width: 12px;
+  height: 20px;
+  background: var(--gold);
+  -webkit-mask: url('brand/branch.png') center/contain no-repeat;
+  mask: url('brand/branch.png') center/contain no-repeat;
+}
+@media (min-width: 700px) {
+  .rc-title {
+    font-size: 2.6rem;
+  }
+  .rc-ing li,
+  .rc-step,
+  .rc-warn {
+    font-size: 1.15rem;
+  }
 }

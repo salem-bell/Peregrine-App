@@ -86,6 +86,7 @@ chat service is set.
 | `chat` · `live chat` · `chat photos` · `chat PDFs` | `viewChat`, `viewConversation`, drafts, links, multi-select delete |
 | `push notifications` · `reminders` | `viewPush`, `viewReminders` |
 | `announcements` · `requests` · `resources` · `training` · `tests` · `team` | One screen each |
+| `recipes` | The recipe book: `viewRecipes` (menu), `viewRecipe` (one recipe card), batch scaler, manager costs (`loadRecCost`) |
 | `render()` | Top-level draw, form-preserving redraws |
 | `events` | All the click / submit / input handlers |
 
@@ -98,6 +99,7 @@ chat service is set.
 | `state_`, `SECTIONS_` | What each person gets back |
 | `act_` | Every change the app can make |
 | `channels_`, `chat_`, `chat*_` | Chat (sheet fallback + live chat glue) |
+| `recipes_`, `recipeCosts_` | Recipes tab → the recipe book; managers' costs read from the Menu and Prep COGS sheets (Settings) |
 | `training_`, `level1Results_`, `trainDoc_` | Trainee checklists; filing them as Google Docs |
 | `tests_`, `testTeam_`, `testSees_` | Certification tests (results come from a separate results sheet) |
 | `sendShiftReminders`, `clockTick_`, `payrollTick_`, `pushDataTick` | Timed triggers (every 15 min / every minute) |

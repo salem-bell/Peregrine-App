@@ -425,6 +425,7 @@ const SECTION_FIELDS = {
   chat: ['chat', 'channels'],
   reqs: ['requests'],
   links: ['links'],
+  recipes: ['recipes', 'recipeSheet'],
   team: ['users', 'pay', 'period', 'myPay'],
   train: ['training'],
 };
@@ -1675,7 +1676,7 @@ function prepRow(x) {
   const on = !!x.doneAt,
     canDel = x.by === data.me.name || lead();
   return `<div class="row ${on ? 'done' : ''}"><button class="chk ${on ? 'on' : ''}" data-prepdone="${esc(x.id)}" data-on="${on ? 1 : 0}" aria-label="${on ? 'Undo' : 'Done'}: ${esc(x.item)}">${on ? '✓' : ''}</button>
-    <div class="txt"><b>${esc(x.item)}</b>${x.mine && !on ? ' <span class="pill warn">Your shift</span>' : ''}${x.details ? `<div class="sub">${esc(x.details)}</div>` : ''}
+    <div class="txt"><b>${esc(x.item)}</b>${x.mine && !on ? ' <span class="pill warn">Your shift</span>' : ''}${((r) => (r ? ` <button class="lnk" data-recipe="${esc(r.id)}">Recipe ›</button>` : ''))(recipeFor(x.item))}${x.details ? `<div class="sub">${esc(x.details)}</div>` : ''}
       <div class="sub">For ${esc(x.label || 'next shift')}${x.for.length ? ' · ' + x.for.map((n) => esc(first(n))).join(', ') : ''} · from ${esc(first(x.by))} ${ago(x.at)}</div>
       ${on ? `<div class="sub">Done by ${esc(first(x.doneBy))} · ${timeOf(x.doneAt)}</div>` : ''}</div>
     ${canDel ? `<button class="btn sm" data-prepdel="${esc(x.id)}" aria-label="Remove">✕</button>` : ''}</div>`;
@@ -3675,6 +3676,261 @@ function viewRequests() {
     <p class="sub">Regular times you can't work go under <button class="lnk" data-more="avail">Availability</button>.</p>`;
 }
 
+/* ----- recipes: the in-app recipe book (Recipes tab in the sheet; costs for managers from the COGS calculators) ----- */
+let recSel = '',
+  recKind = load('pt-reckind') || 'Drink',
+  recScale = 1,
+  recCost = null,
+  recCostBusy = false,
+  wakeLock = null;
+const RECIPES = () => data.recipes || [];
+const rnorm = (s) =>
+  String(s || '')
+    .toLowerCase()
+    .replace(/[’‘]/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+const rbase = (s) =>
+  rnorm(s)
+    .replace(/\s*\([^)]*\)\s*/g, ' ')
+    .trim();
+const recById = (id) => RECIPES().find((r) => r.id === id);
+// "2,000g coffee" → ["2,000g", "coffee"]; "Espresso shot" → ["", "Espresso shot"]
+const AMT_RE =
+  /^([~≈]?\s*(?:about\s+)?[\d½¼¾⅓⅔⅛][\d.,/½¼¾⅓⅔⅛]*(?:\s*[-–]\s*[\d.,/½¼¾⅓⅔⅛]+)?\s*(?:fl\.?\s?oz|kg|g|ml|l|oz|lb|gal|qt|quarts?|cups?|tsp|tbsp|drops?|shakes?|pumps?|shots?|sticks?|packs?|bottles?)?\.?)(?=\s|$)\s*(.*)$/i;
+const splitAmt = (line) => {
+  const m = String(line).match(AMT_RE);
+  return m && m[2] ? [m[1].trim(), m[2]] : ['', line];
+};
+const FRAC = { '½': 0.5, '¼': 0.25, '¾': 0.75, '⅓': 1 / 3, '⅔': 2 / 3, '⅛': 0.125 };
+/** Multiply the numbers in an amount ("2,000g" ×2 → "4,000g", "½ gal" ×3 → "1.5 gal"). */
+function scaleAmt(a, k) {
+  if (k === 1 || !a) return a;
+  return a.replace(/(\d[\d,]*(?:\.\d+)?(?:\s*\/\s*\d+)?|\d*[½¼¾⅓⅔⅛])/g, (t) => {
+    let v;
+    if (/\//.test(t)) {
+      const [x, y] = t.split('/').map((z) => Number(z.replace(/,/g, '')));
+      v = x / y;
+    } else {
+      const f = t.slice(-1) in FRAC ? FRAC[t.slice(-1)] : 0;
+      v = (Number((f ? t.slice(0, -1) : t).replace(/,/g, '')) || 0) + f;
+    }
+    v *= k;
+    return v >= 100
+      ? Math.round(v).toLocaleString('en-US')
+      : v >= 10
+        ? String(Math.round(v * 10) / 10)
+        : String(Math.round(v * 100) / 100);
+  });
+}
+const rmoney = (n, d) => (n == null ? '—' : '$' + Number(n).toFixed(d == null ? 2 : d));
+async function loadRecCost(force) {
+  if (!mgr() || recCostBusy || (!force && recCost && Date.now() - recCost.at < 600000)) return;
+  recCostBusy = true;
+  try {
+    recCost = await post({ fn: 'recipeCosts', token: TOKEN });
+    recCost.at = Date.now();
+  } catch (e) {
+    recCost = { menu: [], prep: [], errs: [String(e.message || e)], at: Date.now() };
+  }
+  recCostBusy = false;
+  if (recSel || isRecView()) render();
+}
+/** The COGS rows for a recipe: names in its COGS column, else the same name (sizes in brackets ignored). */
+function recCosts(r) {
+  if (!recCost) return null;
+  const pool = r.type === 'Prep' ? recCost.prep || [] : recCost.menu || [],
+    names = r.cogs ? r.cogs.split('|').map(rnorm).filter(Boolean) : [rnorm(r.name)];
+  let hits = pool.filter((x) => names.indexOf(rnorm(x.item)) >= 0);
+  if (!hits.length && !r.cogs) hits = pool.filter((x) => rbase(x.item) === rnorm(r.name));
+  return hits;
+}
+/** Where the recipe book opens: the shop iPad's recipe tab, or More › Recipes. */
+function recHome() {
+  if (shop()) {
+    const g = resGroups().find((x) => /recipe/i.test(x));
+    return g ? ['res:' + g, ''] : ['recipes', ''];
+  }
+  return ['more', 'recipes'];
+}
+const isRecView = () =>
+  (tab === 'more' && moreView === 'recipes') ||
+  tab === 'recipes' ||
+  (/^res:/.test(tab) && /recipe/i.test(tab) && RECIPES().length > 0);
+function openRecipe(id) {
+  const r = recById(id);
+  if (!r) return;
+  if (!isRecView()) {
+    const [t, mv] = recHome();
+    tab = t;
+    moreView = mv;
+    sheet = null;
+    stopChat();
+  }
+  recSel = id;
+  recKind = r.type;
+  recScale = 1;
+  window.scrollTo(0, 0);
+  render();
+  loadRecCost();
+}
+/** A prep item's recipe, when its name says which ("Batch cold brew" → Cold Brew). */
+function recipeFor(text) {
+  const t = rnorm(text);
+  if (!t) return null;
+  return RECIPES().find((r) => r.type === 'Prep' && rbase(r.name).length >= 4 && t.indexOf(rbase(r.name)) >= 0) || null;
+}
+/** Keep the screen on while a recipe is open (someone is following it with their hands full). */
+function syncWake() {
+  const want = !!recSel && isRecView() && !document.hidden;
+  try {
+    if (want && !wakeLock && navigator.wakeLock)
+      navigator.wakeLock
+        .request('screen')
+        .then((l) => {
+          wakeLock = l;
+          l.addEventListener('release', () => (wakeLock = null));
+        })
+        .catch(() => {});
+    if (!want && wakeLock) {
+      wakeLock.release().catch(() => {});
+      wakeLock = null;
+    }
+  } catch (_) {}
+}
+document.addEventListener('visibilitychange', syncWake);
+function viewRecipes(o) {
+  o = o || {};
+  const rs = RECIPES();
+  if (recSel && recById(recSel)) return viewRecipe(recById(recSel), o);
+  recSel = '';
+  if (mgr()) loadRecCost();
+  const head = `${o.back || ''}<div class="rb-hero"><div class="rb-mark" aria-hidden="true"></div><div><div class="rb-eye">Peregrine Coffee Roasters</div><h1>${esc(o.title && !/^recipes?$/i.test(o.title) ? o.title : 'Recipe Book')}</h1><div class="rb-sub">${rs.filter((r) => r.type === 'Drink').length} drinks · ${rs.filter((r) => r.type === 'Prep').length} prep</div></div></div>`;
+  const docs = (o.docs || []).length ? `<h2>Documents</h2><div class="card">${o.docs.map(resRow).join('')}</div>` : '';
+  if (!rs.length)
+    return `${head}<div class="card"><div class="empty">${
+      Number(data.version) < 5.04
+        ? "The recipe book needs the server update (Code.gs 5.04) in this location's sheet."
+        : mgr()
+          ? 'No recipes yet. Add them on the <b>Recipes</b> tab in the sheet, one row per recipe.'
+          : 'No recipes yet.'
+    }</div>${mgr() && data.recipeSheet ? `<div class="btns" style="padding:0 14px 14px"><a class="btn" href="${esc(data.recipeSheet)}" target="_blank" rel="noopener">Open the Recipes tab ↗</a></div>` : ''}</div>${docs}`;
+  const kinds = ['Drink', 'Prep'].filter((k) => rs.some((r) => r.type === k));
+  if (kinds.indexOf(recKind) < 0) recKind = kinds[0];
+  const pct = (r) => {
+    const h = mgr() && r.type === 'Drink' && recCosts(r);
+    const x = h && h.find((y) => y.pct != null);
+    return x ? `<span class="rb-pct ${/over/i.test(x.status) ? 'over' : ''}">${Math.round(x.pct)}%</span>` : '';
+  };
+  const card = (r) =>
+    `<button class="rb-card${pct(r) ? ' has-pct' : ''}" data-recipe="${esc(r.id)}" data-kind="${r.type}" data-q="${esc(rnorm([r.name, r.cat, r.ing.join(' ')].join(' ')))}"><b>${esc(r.name)}</b>${pct(r)}<small>${esc(r.size || r.serve || '')}</small></button>`;
+  const sections = kinds
+    .map((k) => {
+      const cats = [...new Set(rs.filter((r) => r.type === k).map((r) => r.cat || 'Other'))];
+      return cats
+        .map(
+          (c) =>
+            `<section class="rb-cat" data-kind="${k}" ${k === recKind ? '' : 'hidden'}><h2>${esc(c)}</h2><div class="rb-grid">${rs
+              .filter((r) => r.type === k && (r.cat || 'Other') === c)
+              .map(card)
+              .join('')}</div></section>`
+        )
+        .join('');
+    })
+    .join('');
+  return `${head}
+    <div class="rb-tools">${kinds.length > 1 ? `<div class="seg" role="tablist">${kinds.map((k) => `<button data-reckind="${k}" aria-pressed="${k === recKind}">${k === 'Drink' ? 'Drinks' : 'Prep'}</button>`).join('')}</div>` : ''}
+    <input type="search" class="rb-search" data-recsearch placeholder="Search recipes or ingredients" autocomplete="off" aria-label="Search recipes"></div>
+    <div class="rb-none sub" hidden>No recipe matches that.</div>
+    ${sections}${docs}
+    ${mgr() ? `<p class="sub">Recipes come from the Recipes tab in the sheet${data.recipeSheet ? ` (<a href="${esc(data.recipeSheet)}" target="_blank" rel="noopener">open it</a>)` : ''}. Edits show up here within a few minutes.${recCost && recCost.errs && recCost.errs.length ? ' Costs: ' + esc(recCost.errs.join(' · ')) : ''}</p>` : ''}`;
+}
+function recCostCard(r) {
+  if (!mgr()) return '';
+  if (!recCost) return `<div class="rc-cost"><span class="sub">Loading costs…</span></div>`;
+  const hits = recCosts(r);
+  if (!hits.length)
+    return `<div class="rc-cost"><span class="sub">Not found in the ${r.type === 'Prep' ? 'Prep' : 'Menu'} COGS sheet${r.cogs ? ' under “' + esc(r.cogs) + '”' : ''}. Put its name from that sheet in the COGS name column.</span></div>`;
+  if (r.type === 'Prep')
+    return `<div class="rc-cost">${hits
+      .map(
+        (x) =>
+          `<div class="rc-crow"><span><b>${rmoney(x.batch == null ? null : x.batch * recScale)}</b><small>batch${recScale !== 1 ? ' ×' + recScale : ''}</small></span><span><b>${rmoney(x.perOz, 3)}</b><small>per fl oz</small></span><span><b>${x.yieldOz == null ? '—' : Math.round(x.yieldOz * recScale)}</b><small>fl oz</small></span></div>`
+      )
+      .join('')}</div>`;
+  return `<div class="rc-cost">${hits
+    .map(
+      (x) =>
+        `<div class="rc-crow">${hits.length > 1 ? `<i>${esc(x.item)}</i>` : ''}<span><b>${rmoney(x.cost)}</b><small>cost</small></span><span><b>${rmoney(x.price)}</b><small>price</small></span><span class="${/over/i.test(x.status) ? 'over' : ''}"><b>${x.pct == null ? '—' : Math.round(x.pct * 10) / 10 + '%'}</b><small>${esc(x.status || 'COGS')}</small></span></div>`
+    )
+    .join('')}</div>`;
+}
+function viewRecipe(r, o) {
+  if (mgr()) loadRecCost();
+  const prep = r.type === 'Prep';
+  const chips = [
+    r.size && ['Yield', r.size].map(esc),
+    r.serve && [prep ? 'Store in' : 'Serve in', r.serve].map(esc),
+    r.keeps && ['Keeps', r.keeps].map(esc),
+  ].filter(Boolean);
+  const ing = r.ing
+    .map((l) => {
+      if (/:\s*$/.test(l)) return `<li class="rc-sub">${esc(l.replace(/:\s*$/, ''))}</li>`;
+      const [a, t] = splitAmt(l);
+      // a measured amount in brackets scales too: "milk (3 gal)" ×2 → "milk (6 gal)"; "(~2-inch)" is left alone
+      const t2 =
+        prep && recScale !== 1
+          ? t.replace(
+              /\(([~≈]?\s*[\d½¼¾⅓⅔⅛][\d.,/½¼¾⅓⅔⅛]*\s*(?:fl\.?\s?oz|gal|qt|quarts?|oz|lb|kg|g|ml|l)\b[^)]*)\)/gi,
+              (m, x) => '(' + scaleAmt(x, recScale) + ')'
+            )
+          : t;
+      return `<li><b class="amt">${esc(prep ? scaleAmt(a, recScale) : a)}</b><span>${esc(t2)}</span></li>`;
+    })
+    .join('');
+  let n = 0;
+  const steps = r.steps
+    .map((l) =>
+      /^!/.test(l)
+        ? `<li class="rc-warn"><span class="n" aria-hidden="true">!</span><p>${esc(l.replace(/^!\s*/, ''))}</p></li>`
+        : `<li><button class="rc-step" data-recstep><span class="n">${++n}</span><p>${esc(l)}</p></button></li>`
+    )
+    .join('');
+  return `<button class="btn sm" data-recback style="margin-bottom:8px">‹ ${esc(o && o.title && !/^recipes?$/i.test(o.title) ? o.title : 'Recipes')}</button>
+    <article class="rc ${prep ? 'prep' : 'drink'}">
+      <header class="rc-head"><div class="rc-brand"><img src="brand/bird-gold.png" alt=""><span>Peregrine${r.cat ? ' · ' + esc(r.cat) : ''}</span></div>
+        <h1 class="rc-title">${esc(r.name)}</h1>
+        ${chips.length ? `<div class="rc-meta">${chips.map(([k, v]) => `<span><small>${k}</small>${v}</span>`).join('')}</div>` : ''}
+      </header>
+      ${recCostCard(r)}
+      ${prep && r.ing.some((l) => splitAmt(l)[0]) ? `<div class="rc-scale"><span class="sub">Batch</span><div class="seg">${[0.5, 1, 2, 3].map((k) => `<button data-recscale="${k}" aria-pressed="${k === recScale}">${k === 0.5 ? '½' : k}×</button>`).join('')}</div></div>` : ''}
+      ${ing ? `<section><h2 class="rc-h">Ingredients${prep && recScale !== 1 ? ` <span class="pill">${recScale === 0.5 ? '½' : recScale}× batch</span>` : ''}</h2><ul class="rc-ing">${ing}</ul></section>` : ''}
+      ${steps ? `<section><h2 class="rc-h">${prep ? 'Method' : 'Build'}</h2><ol class="rc-steps">${steps}</ol>${n > 1 ? '<p class="sub rc-hint">Tap a step to tick it off.</p>' : ''}</section>` : ''}
+      ${r.notes ? `<section class="rc-note"><h2 class="rc-h">Good to know</h2><p>${linkify(esc(r.notes)).replace(/\n/g, '<br>')}</p></section>` : ''}
+      <footer class="rc-foot"><span class="rc-branch" aria-hidden="true"></span>Peregrine Coffee Roasters</footer>
+    </article>
+    ${mgr() && data.recipeSheet && r.row ? `<div class="btns"><a class="btn" href="${esc(data.recipeSheet)}&range=A${r.row}" target="_blank" rel="noopener">Edit in the sheet ↗</a></div>` : ''}`;
+}
+document.addEventListener('input', (e) => {
+  const q = e.target.closest && e.target.closest('[data-recsearch]');
+  if (!q) return;
+  const t = rnorm(q.value),
+    root = q.closest('#main') || document;
+  let any = false;
+  root.querySelectorAll('.rb-cat').forEach((sec) => {
+    let shown = 0;
+    sec.querySelectorAll('.rb-card').forEach((c) => {
+      const ok = t ? c.dataset.q.indexOf(t) >= 0 : c.dataset.kind === recKind;
+      c.hidden = !ok;
+      if (ok) shown++;
+    });
+    sec.hidden = t ? !shown : sec.dataset.kind !== recKind;
+    if (shown && !sec.hidden) any = true;
+  });
+  const none = root.querySelector('.rb-none');
+  if (none) none.hidden = any || !t;
+});
+
 /* ----- resources (in-app PDFs) ----- */
 const opensIn = (u) =>
   /\/spreadsheets\//.test(u)
@@ -3809,6 +4065,7 @@ const resRow = (l) =>
 /** Shop iPad: one resource group as its own tab. */
 function viewResGroup(g) {
   const xs = (data.links || []).filter((l) => l.group === g);
+  if (/recipe/i.test(g) && RECIPES().length) return viewRecipes({ title: g, docs: xs });
   return `<h1>${esc(g)}</h1><div class="card">${xs.map(resRow).join('') || '<div class="empty">Nothing here yet.</div>'}</div>`;
 }
 function viewResources() {
@@ -4153,10 +4410,11 @@ function viewMore() {
     time: viewTime,
     news: viewNews,
     resources: viewResources,
+    recipes: () => viewRecipes({ back: back() }),
     training: () => (lead() ? viewTraining() : viewMoreList()),
     team: () => (mgr() ? viewTeam() : viewMoreList()),
   };
-  if (shop() && ['news', 'resources', 'settings'].indexOf(moreView) < 0) moreView = wide() ? 'news' : '';
+  if (shop() && ['news', 'resources', 'settings', 'recipes'].indexOf(moreView) < 0) moreView = wide() ? 'news' : '';
   if (!views[moreView] && wide()) moreView = 'settings'; // desktop has no More list – the sidebar lists everything
   return views[moreView] ? views[moreView]() : viewMoreList();
 }
@@ -4180,7 +4438,8 @@ function viewMoreList() {
       ${item('requests', 'Time off & swaps', '', pill(pendN))}
       ${item('avail', 'Availability', "When you can't work")}
       ${rowBtn('data-tab="tests" class="mobonly"', '<div class="txt"><b>Tests</b><div class="sub">Training & certification</div></div><span>›</span>')}
-      ${item('resources', 'Resources', 'Recipes, guides, handbooks')}
+      ${Number(data.version) >= 5.04 ? item('recipes', 'Recipes', 'Drink builds and prep, step by step') : ''}
+      ${item('resources', 'Resources', 'Guides, handbooks, documents')}
       ${lead() ? item('training', 'Training', 'Trainee checklists and lead resources', pill(((data.training || {}).active || []).length)) : ''}
       ${mgr() ? item('team', 'Team & sign-in codes') : ''}</div>
     <div class="card">${item('settings', 'Settings', 'Notifications, reminders, look, sign out')}</div>
@@ -4287,6 +4546,7 @@ function viewShopHome() {
       ${tile(`data-golist="${PREP}"`, '✎', 'Prep', prepN ? prepN + ' to do' : 'All done', prepN, 40)}
       ${tile('data-tab="inventory"', '▤', 'Inventory', 'Count stock', 0, 225)}
       ${groups.join('')}
+      ${RECIPES().length && !resGroups().some((g) => /recipe/i.test(g)) ? tile('data-tab="recipes"', '❦', 'Recipes', RECIPES().length + ' recipes', 0, 28) : ''}
       ${tile('data-more="news"', '⚑', 'Announcements', '', 0, 0)}
     </div></div>`;
 }
@@ -4382,10 +4642,12 @@ function kpickSheet() {
 }
 /* ---------- shop iPad: back to the home screen after a minute, asleep after five ---------- */
 const KIOSK_HOME_MS = 60000,
-  KIOSK_SLEEP_MS = 5 * 60000;
+  KIOSK_SLEEP_MS = 5 * 60000,
+  KIOSK_RECIPE_MS = 20 * 60000; // an open recipe stays up longer: someone is making it with their hands full
 let kioskIdle = Date.now(),
   asleep = false;
 function kioskHome() {
+  recSel = '';
   sheet = null;
   viewer = null;
   runner = null;
@@ -4419,7 +4681,7 @@ function sleepDrift() {
   // move the logo a little now and then, so the screen doesn't wear in one spot
   const i = $('#sleep .sl-in');
   if (i)
-    i.style.transform = `translate(${Math.round((Math.random() - 0.5) * 30)}vw, ${Math.round((Math.random() - 0.5) * 30)}vh)`;
+    i.style.transform = `translate(${Math.round((Math.random() - 0.5) * 8)}px, ${Math.round((Math.random() - 0.5) * 8)}px)`; // a few pixels: looks centred, still moves
 }
 ['pointerdown', 'keydown', 'wheel', 'touchstart'].forEach((ev) =>
   document.addEventListener(
@@ -4450,6 +4712,7 @@ setInterval(() => {
   if (!shop() || !TOKEN) return asleep && setAsleep(false);
   const idle = Date.now() - kioskIdle;
   if (asleep) return idle % 60000 < 5000 && sleepDrift();
+  if (recSel && isRecView() && idle < KIOSK_RECIPE_MS) return;
   if (idle > KIOSK_SLEEP_MS) return setAsleep(true);
   if (idle > KIOSK_HOME_MS && (tab !== 'today' || sheet || viewer || chat.open || moreView)) kioskHome();
 }, 5000);
@@ -4566,6 +4829,7 @@ const shopTabs = () =>
     ['inventory', 'Inventory', '▤'],
   ]
     .concat(resGroups().map((g, i) => ['res:' + g, g, resIcon(g, i)]))
+    .concat(RECIPES().length && !resGroups().some((g) => /recipe/i.test(g)) ? [['recipes', 'Recipes', '❦']] : [])
     .concat([['more', 'More', '☰']]);
 let navHide = load('pt-navhide') === '1';
 const INV_TAB = ['inventory', 'Inventory', '▤'];
@@ -4615,7 +4879,7 @@ function deskMore() {
     unreadN = (data.announcements || []).filter((a) => !a.read).length;
   const it = (k, n, ic, badge) =>
     `<button data-more="${k}" class="deskonly" ${tab === 'more' && (moreView === k || (k === 'settings' && /^(push|reminders)$/.test(moreView))) ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}${badge ? `<span class="n">${badge}</span>` : ''}</button>`;
-  return `<div class="tabsep deskonly" aria-hidden="true"></div>${it('news', 'Announcements', '⚑', unreadN)}${it('time', mgr() ? 'Time sheets' : 'My time', '⏱')}${it('requests', 'Time off & swaps', '⇄', pendN)}${it('avail', 'Availability', '◷')}${it('resources', 'Resources', '❏')}${lead() ? it('training', 'Training', '✓') : ''}${mgr() ? it('team', 'Team', '☺') : ''}
+  return `<div class="tabsep deskonly" aria-hidden="true"></div>${it('news', 'Announcements', '⚑', unreadN)}${it('time', mgr() ? 'Time sheets' : 'My time', '⏱')}${it('requests', 'Time off & swaps', '⇄', pendN)}${it('avail', 'Availability', '◷')}${Number(data.version) >= 5.04 ? it('recipes', 'Recipes', '❦') : ''}${it('resources', 'Resources', '❏')}${lead() ? it('training', 'Training', '✓') : ''}${mgr() ? it('team', 'Team', '☺') : ''}
     <div class="tabspacer deskonly" aria-hidden="true"></div>${it('settings', 'Settings', '⚙︎')}`;
 }
 function setShop(t) {
@@ -4717,6 +4981,7 @@ document.addEventListener('focusout', (e) => {
 });
 function render() {
   syncBadge();
+  syncWake();
   if (rowDrag) {
     rowDrag.later = true;
     return;
@@ -4804,19 +5069,21 @@ function render() {
   const formSnap = snapForms();
   const mainHtml = /^res:/.test(tab)
     ? viewResGroup(tab.slice(4))
-    : tab === 'inventory'
-      ? viewInventory()
-      : tab === 'tests'
-        ? viewTests()
-        : tab === 'lists'
-          ? viewLists()
-          : tab === 'schedule'
-            ? viewSchedule()
-            : tab === 'chat'
-              ? viewChat()
-              : tab === 'more'
-                ? viewMore()
-                : viewToday();
+    : tab === 'recipes'
+      ? viewRecipes()
+      : tab === 'inventory'
+        ? viewInventory()
+        : tab === 'tests'
+          ? viewTests()
+          : tab === 'lists'
+            ? viewLists()
+            : tab === 'schedule'
+              ? viewSchedule()
+              : tab === 'chat'
+                ? viewChat()
+                : tab === 'more'
+                  ? viewMore()
+                  : viewToday();
   if (mainHtml !== lastMainHtml || !$('#main').firstChild) {
     $('#main').innerHTML = mainHtml;
     lastMainHtml = mainHtml;
@@ -4966,6 +5233,33 @@ document.addEventListener('click', async (e) => {
     return;
   }
   const d = b.dataset;
+  // recipe book
+  if (d.recipe) {
+    openRecipe(d.recipe);
+    return;
+  }
+  if (d.recback !== undefined) {
+    recSel = '';
+    recScale = 1;
+    window.scrollTo(0, 0);
+    render();
+    return;
+  }
+  if (d.reckind) {
+    recKind = d.reckind;
+    save('pt-reckind', recKind);
+    render();
+    return;
+  }
+  if (d.recscale) {
+    recScale = Number(d.recscale) || 1;
+    render();
+    return;
+  }
+  if (d.recstep !== undefined) {
+    b.classList.toggle('on'); // ticked steps live on screen only; leaving the recipe clears them
+    return;
+  }
   if (d.prepok !== undefined) {
     prepSeenAll();
     sheet = null;
@@ -4995,6 +5289,7 @@ document.addEventListener('click', async (e) => {
     save('pt-tab', tab);
     sheet = null;
     viewer = null;
+    recSel = '';
     editUser = null;
     tsPerson = '';
     if (tab === 'more') moreView = '';
@@ -5016,6 +5311,7 @@ document.addEventListener('click', async (e) => {
     tab = 'more';
     moreView = d.more;
     editUser = null;
+    recSel = '';
     if (d.more !== 'time') tsPerson = '';
     if (d.more === 'time' && b.textContent.includes('Back')) tsPerson = '';
     window.scrollTo(0, 0);
