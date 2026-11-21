@@ -3931,7 +3931,6 @@ h1 .lvp{font-size:.62rem;vertical-align:6px}
 .trq{margin:14px 0}.trq>b{display:block;margin-bottom:6px}
 .tropt{all:unset;box-sizing:border-box;display:block;width:100%;cursor:pointer;border:1.5px solid var(--line);border-radius:10px;padding:11px 12px;margin:6px 0;background:var(--card)}
 .tropt.right{border-color:var(--ok);color:var(--ok);font-weight:600}.tropt.wrong{border-color:var(--warn);color:var(--muted);text-decoration:line-through}
-.tric{font-size:1.25rem;width:28px;text-align:center;flex:none}
 .trhit .trw{font:400 .7rem/1 var(--head);letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
 .trhit mark{background:var(--accent-soft);color:inherit;border-radius:3px;padding:0 2px}
 .trcheck{display:flex;gap:10px;align-items:center;font-size:.92rem}.trcheck input{width:22px;height:22px;min-height:0;flex:none;margin:0}
@@ -3940,3 +3939,8 @@ input[type=file]{padding:9px 10px;font-size:.9rem}
 .trperson{align-items:flex-start}.trtests{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0 4px}
 .trdep{margin:10px 0}
 .linkbtn{all:unset;cursor:pointer;color:var(--accent);text-decoration:underline}
+
+/* Peregrine marks in Training */
+.trmark{height:20px;width:auto;flex:none;opacity:.95}
+.trlock{display:flex;gap:10px;align-items:center}
+.tric{width:34px;height:34px;flex:none;border-radius:10px;display:grid;place-items:center;font:400 1.05rem/1 var(--head);color:#fff;background:hsl(var(--hue,188),42%,42%);box-shadow:0 2px 6px rgba(0,0,0,.1);font-size:1.1rem}
