@@ -1323,15 +1323,17 @@ table.grid {
   main {
     margin-left: 220px;
     max-width: none;
-    padding: 22px 28px 40px;
+    /* the 760px reading column comes from the side padding, so every element on every page lines up
+       with it whatever its own margins (% here is of the window width; 220px is the sidebar) */
+    padding: 22px max(28px, calc((100% - 220px - 760px) / 2)) 40px;
+  }
+  body.wide main {
+    padding-left: 28px;
+    padding-right: 28px;
   }
   main > * {
-    max-width: 760px;
-    margin-left: auto;
-    margin-right: auto;
-  }
-  body.wide main > * {
-    max-width: none;
+    margin-left: 0 !important; /* flush with the column: no page-level element sits inset or bleeds out */
+    margin-right: 0 !important;
   }
   .toast {
     bottom: 28px;
