@@ -1314,7 +1314,7 @@ function laborCard() {
   const onRow = (x) => {
     const s = shiftFor(x),
       over = s && cur > mins(s.end) + 10;
-    return `<div class="row"><div class="txt"><b>${esc(x.name)}</b><div class="sub">In ${timeOf(x.in)} · <span data-hsince="${esc(x.in)}">${hrs((now - new Date(x.in)) / 6e4)}</span>${s ? ' · until ' + t12(s.end) : ' · no shift today'}</div></div>${over ? '<span class="pill warn">Past end</span>' : ''}${M ? `<span class="money">${x.wage ? `<span data-psince="${esc(x.in)}" data-pw="${x.wage * k}">${money(((now - new Date(x.in)) / 36e5) * x.wage * k, true)}</span>` : '<span class="sub">no wage</span>'}</span>` : ''}</div>`;
+    return `<div class="row"><div class="txt"><b>${esc(x.name)}</b>${levelPill(x.name)}<div class="sub">In ${timeOf(x.in)} · <span data-hsince="${esc(x.in)}">${hrs((now - new Date(x.in)) / 6e4)}</span>${s ? ' · until ' + t12(s.end) : ' · no shift today'}</div></div>${over ? '<span class="pill warn">Past end</span>' : ''}${M ? `<span class="money">${x.wage ? `<span data-psince="${esc(x.in)}" data-pw="${x.wage * k}">${money(((now - new Date(x.in)) / 36e5) * x.wage * k, true)}</span>` : '<span class="sub">no wage</span>'}</span>` : ''}</div>`;
   };
   const doneLine = F.done.length
     ? `<div class="row"><div class="txt"><b>Clocked out today</b><div class="sub">${F.done.map((x) => `${esc(first(x.name))} ${hrs((new Date(x.out) - new Date(x.in)) / 6e4)}${M && x.wage ? ' · ' + money(x.cost, true) : ''}`).join(' &nbsp;·&nbsp; ')}</div></div></div>`
@@ -1449,8 +1449,9 @@ function viewToday() {
       : '';
   return `<h1>${hi}, ${esc(first(d.me.name))}</h1>${pubHint}${pushHint}${remindHint}${clockCard()}${laborCard()}${salesCard()}${prepCard}
     ${unread.length ? `<div class="card">${unread.slice(0, 3).map(annRow).join('')}</div>` : ''}
+    ${d.trBadge && (d.trBadge.recipes || d.trBadge.sign || d.trBadge.manual) ? `<div class="card">${rowBtn('data-tab="tests"', `<div class="txt"><b>${[d.trBadge.recipes ? '🔔 ' + d.trBadge.recipes + ' recipe change' + (d.trBadge.recipes > 1 ? 's' : '') + ' to read' : '', d.trBadge.sign ? 'A document to sign' : '', d.trBadge.manual ? 'Sign the Employee Manual' : ''].filter(Boolean).join(' · ')}</b><div class="sub">Training</div></div><span>›</span>`)}</div>` : ''}
     ${chatN ? `<div class="card">${rowBtn('data-tab="chat"', `<div class="txt"><b>${chatN} unread message${chatN > 1 ? 's' : ''}</b></div><span>›</span>`)}</div>` : ''}
-    <h2>Working today</h2><div class="card">${today.length ? today.map((s) => `<div class="row ${s.name === d.me.name ? 'mine' : ''}"><div class="txt"><b>${esc(s.name)}</b><div class="sub">${t12(s.start)}–${t12(s.end)}${s.position ? ' · ' + esc(s.position) : ''}</div></div>${mgr() ? clockState(s) : ''}</div>`).join('') : '<div class="empty">Nobody scheduled today.</div>'}</div>
+    <h2>Working today</h2><div class="card">${today.length ? today.map((s) => `<div class="row ${s.name === d.me.name ? 'mine' : ''}"><div class="txt"><b>${esc(s.name)}</b>${levelPill(s.name)}<div class="sub">${t12(s.start)}–${t12(s.end)}${s.position ? ' · ' + esc(s.position) : ''}</div></div>${mgr() ? clockState(s) : ''}</div>`).join('') : '<div class="empty">Nobody scheduled today.</div>'}</div>
     <h2>Checklists</h2><div class="card">${(d.checklists || []).map((c) => rowBtn(`data-golist="${esc(c.list)}"`, `<div class="txt"><b>${esc(c.list)}</b><div class="progress"><i style="width:${c.total ? Math.round((c.done / c.total) * 100) : 0}%"></i></div></div><span class="pill ${c.done === c.total && c.total ? 'ok' : 'mute'}">${c.done}/${c.total}</span>`)).join('') || '<div class="empty">No checklists today.</div>'}</div>
     ${
       pendingReq.length || (att && (att.late || att.no || att.miss || att.over || att.auto))
@@ -1922,7 +1923,7 @@ function viewScheduleBuild(seg) {
         list
           .map((s) => {
             const cf = lead() ? conflicts(s) : [];
-            const inner = `<div class="txt ${s.status === 'removed' ? 'gone' : ''}"><b>${esc(s.name)}</b> ${statusPill(s)}<div class="sub">${t12(s.start)}–${t12(s.end)} · ${hrs(mins(s.end) - mins(s.start))}${s.position ? ' · ' + esc(s.position) : ''}${s.notes ? ' · ' + esc(s.notes) : ''}</div>${cf.length ? `<div style="margin-top:4px">${cf.map(([c, t]) => `<span class="pill ${c}">${esc(t)}</span>`).join(' ')}</div>` : ''}</div>${mgr() ? '<span class="sub">Edit</span>' : ''}`;
+            const inner = `<div class="txt ${s.status === 'removed' ? 'gone' : ''}"><b>${esc(s.name)}</b>${levelPill(s.name)} ${statusPill(s)}<div class="sub">${t12(s.start)}–${t12(s.end)} · ${hrs(mins(s.end) - mins(s.start))}${s.position ? ' · ' + esc(s.position) : ''}${s.notes ? ' · ' + esc(s.notes) : ''}</div>${cf.length ? `<div style="margin-top:4px">${cf.map(([c, t]) => `<span class="pill ${c}">${esc(t)}</span>`).join(' ')}</div>` : ''}</div>${mgr() ? '<span class="sub">Edit</span>' : ''}`;
             return lead()
               ? rowBtn(`data-editshift="${esc(s.id)}" class="${s.name === data.me.name ? 'mine' : ''}"`, inner)
               : `<div class="row ${s.name === data.me.name ? 'mine' : ''}">${inner}</div>`;
@@ -2044,7 +2045,7 @@ function viewScheduleGrid(seg) {
         M && p.id
           ? `<button class="mini" data-onsched="${esc(p.id)}" data-to="${p.hidden ? 1 : 0}" title="${p.hidden ? 'Show on the schedule' : 'Hide from the schedule'}">${p.hidden ? 'Show' : 'Hide'}</button>`
           : '';
-      return `<tr class="${p.name === data.me.name ? 'mine-row' : ''} ${p.hidden ? 'hid' : ''}" ${p.id ? `data-rid="${esc(p.id)}"` : ''}><th scope="row"><div class="who">${handle}<div><b>${esc(p.name)}</b><span class="sub">${esc(p.role || '')}${p.hidden ? ' · hidden' : ''}</span></div>${wageIn}${hideBtn}</div></th>${days.map((d) => cell(p, d)).join('')}<td class="tot">${m2 ? hrs(m2) : ''}${M && m2 ? `<div class="money">${p.wage ? money(L.byPerson[p.name] || 0) : '<span class="sub">no wage</span>'}</div>${L.ot[p.name] ? `<span class="pill warn">OT ${hrs(L.ot[p.name] * 60)}</span>` : ''}` : ''}</td></tr>`;
+      return `<tr class="${p.name === data.me.name ? 'mine-row' : ''} ${p.hidden ? 'hid' : ''}" ${p.id ? `data-rid="${esc(p.id)}"` : ''}><th scope="row"><div class="who">${handle}<div><b>${esc(p.name)}</b>${levelPill(p.name)}<span class="sub">${esc(p.role || '')}${p.hidden ? ' · hidden' : ''}</span></div>${wageIn}${hideBtn}</div></th>${days.map((d) => cell(p, d)).join('')}<td class="tot">${m2 ? hrs(m2) : ''}${M && m2 ? `<div class="money">${p.wage ? money(L.byPerson[p.name] || 0) : '<span class="sub">no wage</span>'}</div>${L.ot[p.name] ? `<span class="pill warn">OT ${hrs(L.ot[p.name] * 60)}</span>` : ''}` : ''}</td></tr>`;
     })
     .join('');
   const total = inWeekLive.reduce((n, s) => n + mins(s.end) - mins(s.start), 0);
@@ -3248,7 +3249,7 @@ function pickSheet(kind) {
   return `<div class="sheet" role="dialog"><div class="sheet-in"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="margin:0">${kind === 'dm' ? 'New message' : kind === 'group' ? 'New group' : 'New channel'}</h1><button class="btn sm" data-closesheet>Close</button></div>
     ${
       kind === 'dm'
-        ? `<div class="card"><button class="row rb" data-newgroup><span class="av grp sm" style="--av:#2B7A8A" aria-hidden="true">+</span><div class="txt"><b>New group</b></div><span>›</span></button>${lead() ? '<button class="row rb" data-newchannel><span class="av ch sm" style="--av:#1E5662" aria-hidden="true">#</span><div class="txt"><b>New channel</b></div><span>›</span></button>' : ''}</div><h2>People</h2><div class="card">${people.map((p) => rowBtn(`data-dm="${esc(p.id)}" data-dmname="${esc(p.name)}"`, `${avatar({ id: p.id, name: p.name }, 36)}<div class="txt"><b>${esc(p.name)}</b>${activeLabel(p.id) ? `<div class="sub">${activeLabel(p.id)}</div>` : ''}</div><span>›</span>`)).join('')}</div>`
+        ? `<div class="card"><button class="row rb" data-newgroup><span class="av grp sm" style="--av:#2B7A8A" aria-hidden="true">+</span><div class="txt"><b>New group</b></div><span>›</span></button>${lead() ? '<button class="row rb" data-newchannel><span class="av ch sm" style="--av:#1E5662" aria-hidden="true">#</span><div class="txt"><b>New channel</b></div><span>›</span></button>' : ''}</div><h2>People</h2><div class="card">${people.map((p) => rowBtn(`data-dm="${esc(p.id)}" data-dmname="${esc(p.name)}"`, `${avatar({ id: p.id, name: p.name }, 36)}<div class="txt"><b>${esc(p.name)}</b>${levelPill(p.name)}${activeLabel(p.id) ? `<div class="sub">${activeLabel(p.id)}</div>` : ''}</div><span>›</span>`)).join('')}</div>`
         : `<form class="stack" data-form="${kind}" style="padding:0"><label class="f">Name<input name="name" maxlength="40" placeholder="${kind === 'group' ? 'e.g. Weekend crew' : 'e.g. Catering'}"></label>
         ${
           kind === 'group'
@@ -4093,7 +4094,7 @@ function viewTraining() {
   const leadLinks = (data.links || []).filter((l) => l.tier !== 'Everyone');
   return `${back()}<h1>Training</h1>
     <div class="btns" style="margin-bottom:10px"><button class="btn go" data-trainnew>Start a trainee checklist</button></div>
-    <h2>In training</h2><div class="card">${T.active.map((x) => rowBtn(`data-trainopen="${esc(x.id)}"`, `<div class="txt"><b>${esc(x.name)}</b><div class="sub">${x.trainer ? 'Trainer: ' + esc(first(x.trainer)) + ' · ' : ''}${x.started ? 'Started ' + shortDay(x.started) : ''}</div>${trBar(x)}${trTest(x, true) ? `<div style="margin-top:6px">${trTest(x, true)}</div>` : ''}</div><span>›</span>`)).join('') || '<div class="empty">Nobody in training. Start a checklist when a new barista begins.</div>'}</div>
+    <h2>In training</h2><div class="card">${T.active.map((x) => rowBtn(`data-trainopen="${esc(x.id)}"`, `<div class="txt"><b>${esc(x.name)}</b>${levelPill(x.name)}<div class="sub">${x.trainer ? 'Trainer: ' + esc(first(x.trainer)) + ' · ' : ''}${x.started ? 'Started ' + shortDay(x.started) : ''}</div>${trBar(x)}${trTest(x, true) ? `<div style="margin-top:6px">${trTest(x, true)}</div>` : ''}</div><span>›</span>`)).join('') || '<div class="empty">Nobody in training. Start a checklist when a new barista begins.</div>'}</div>
     ${T.filed.length ? `<h2>Filed</h2><div class="card">${T.filed.map((x) => `<a class="row" href="${esc(x.filed)}" target="_blank" rel="noopener" style="text-decoration:none"><div class="txt"><b>${esc(x.name)}</b><div class="sub">Filed${x.filedAt ? ' ' + shortDay(ymdOf(new Date(x.filedAt))) : ''}${x.filedBy ? ' by ' + esc(first(x.filedBy)) : ''} · opens in Google Docs</div></div><span>↗</span></a>`).join('')}</div>` : ''}
     ${leadLinks.length ? `<h2>Lead resources</h2><div class="card">${leadLinks.map((l) => (l.file && !/\/spreadsheets\//.test(l.url) ? rowBtn(`data-pdf="${esc(l.id)}"`, `<div class="txt"><b>${esc(l.name)}</b><div class="sub">${l.tier === 'Managers' ? 'Managers · ' : ''}Opens in the app</div></div><span>›</span>`) : `<a class="row" href="${esc(l.url)}" target="_blank" rel="noopener" style="text-decoration:none"><div class="txt"><b>${esc(l.name)}</b>${opensIn(l.url)}</div><span>↗</span></a>`)).join('')}</div>` : ''}
     <p class="sub">Only leads and managers see Training. The skills come from the Training items tab in the sheet.${T.folder ? '' : ' Add a folder in Settings › Training records folder so managers can file finished checklists.'}</p>`;
@@ -4289,38 +4290,542 @@ async function loadTests() {
   }
   if (tab === 'tests') render();
 }
-function viewTests() {
-  if (!tdata || Date.now() - tAt > 60000) loadTests();
-  if (!tdata) return '<h1>Tests</h1><div class="card"><div class="empty">Loading your tests…</div></div>';
-  const ts = tdata.tests || [];
-  const row = (t) => {
-    const st = t.passed
-      ? '<span class="pill ok">Passed</span>'
-      : t.pending
-        ? '<span class="pill mute">Being scored</span>'
-        : t.last
-          ? `<span class="pill warn">${esc(t.last.result || 'Not yet')}${t.last.score !== '' && t.last.score != null ? ' ' + esc(t.last.score) + '/' + esc(t.last.outOf) : ''}</span>`
-          : !t.unlocked
-            ? '<span class="pill mute">Locked</span>'
-            : '';
-    const go = t.unlocked
-      ? t.inApp
-        ? `<button class="btn sm ${t.passed ? '' : 'go'}" data-taketest="${esc(t.level)}">${t.passed ? 'Retake' : t.taken ? 'Try again' : 'Start the test'}</button>`
-        : t.url
-          ? `<a class="btn sm ${t.passed ? '' : 'go'}" href="${esc(t.url)}" target="_blank" rel="noopener">${t.passed ? 'Retake' : 'Take the test'} ↗</a>`
-          : '<span class="sub">Not set up yet – ask a manager.</span>'
-      : '';
-    return `<div class="row" style="display:block"><div style="display:flex;gap:8px;align-items:center"><b style="flex:1">${esc(t.name)}</b>${st}${t.who ? `<button class="btn sm" data-testacc="${esc(t.name)}">Access</button>` : ''}</div>
-      ${t.who ? `<div class="sub">${esc(accSummary(t))}</div>` : ''}
-      <div class="sub">${!t.unlocked ? 'Pass ' + esc(t.need) + ' first' : (t.info ? esc(t.info) + ' · ' : '') + (t.taken ? 'Taken ' + t.taken + ' time' + (t.taken > 1 ? 's' : '') + (t.last && t.last.when ? ' · last ' + ago(t.last.when) : '') : 'Not taken yet')}</div>
-      ${go ? `<div class="btns" style="margin-top:8px">${go}</div>` : ''}</div>`;
-  };
-  return `<h1>Tests</h1>
-    ${tdata.results ? `<div class="card"><div class="row"><div class="txt"><b>Test results</b><div class="sub">Everyone's scores and written answers live in the results sheet.</div></div><a class="btn sm" href="${esc(tdata.results)}" target="_blank" rel="noopener">Open sheet ↗</a></div></div>` : ''}
-    ${tdata.team ? teamProgress(tdata.team) : ''}
-    <h2>${tdata.team ? 'Tests' : 'Certification'}</h2><div class="card">${ts.map(row).join('') || '<div class="empty">No tests set up.</div>'}</div>
-    <p class="sub">Each level unlocks when you pass the one before it. You can retake a test; your best result counts.</p>`;
+/* The training portal (manual, study guides, tests, resources, forms, dashboards) opens right here, signed in with
+   this app's sign-in. The address is kept for the session so the page isn't reloaded every time the app refreshes. */
+/** A small level pill for a name (from the training portal's Staff Levels tab). */
+function levelPill(name) {
+  const L = data && data.levels && data.levels[name];
+  if (!L || !L.code) return '';
+  const t = { T: 'Trainee', L1: 'Level I', L2P: 'Level II · ack', L2: 'Level II', LD: 'Lead', MG: 'Manager' }[L.code] || L.label;
+  return `<span class="lvp lvp-${esc(L.code)}" title="${esc(L.label)}">${esc(t)}</span>${L.iv ? '<span class="lvp lvp-IV" title="Passed Level IV">IV</span>' : ''}`;
 }
+let trainSrc = '',
+  trainUntil = 0;
+/* ===== Training tab =====
+   Study & tests: the test portal (study guides and tests), signed in. Everything else lives here and on this app's
+   server (Training.gs): the Employee Manual, Resources, Forms and the Lead/Manager dashboards. */
+const TRN = { sub: load('pt-trsub') || '', home: null, homeAt: 0, man: null, at: 0, checks: {}, res: null, doc: null, q: '', dash: null, filter: '', busy: '' };
+async function trCall(call, args) {
+  try {
+    return await post({ fn: 'hr', token: TOKEN, call, args: args || {} });
+  } catch (e) {
+    const m = String(e.message || e);
+    if (/^signin/.test(m)) signOut(m.replace(/^signin:\s*/, ''));
+    throw new Error(m);
+  }
+}
+async function trLoadHome(force) {
+  if (TRN.busy === 'home' || (!force && TRN.home && Date.now() - TRN.homeAt < 60000)) return;
+  TRN.busy = 'home';
+  try {
+    TRN.home = await trCall('home');
+    TRN.homeAt = Date.now();
+  } catch (e) {
+    toast(e.message);
+  }
+  TRN.busy = '';
+  if (tab === 'tests') render();
+}
+const trEsc = (s) => esc(s == null ? '' : s);
+function trPillsHtml() {
+  const subs = [['study', 'Study & tests'], ['manual', 'Manual'], ['res', 'Resources'], ['forms', 'Forms']].concat(lead() ? [['dash', 'Dashboard']] : []);
+  const H = TRN.home || {},
+    dot = { manual: H.manual && !H.manual.acked, forms: (H.docs || []).length || (H.food && !H.food.onFile) };
+  return `<div class="trpills">${subs.map(([k, n]) => `<button data-trsub="${k}" class="${TRN.sub === k ? 'on' : ''}">${n}${dot[k] ? '<i></i>' : ''}</button>`).join('')}</div>`;
+}
+function trDiff(a, b) {
+  const A = String(a || '').split('\n'),
+    B = String(b || '').split('\n');
+  return `<div class="trdiff">${A.filter((l) => B.indexOf(l) < 0).map((l) => `<span class="del">− ${trEsc(l)}</span>`).concat(B.map((l) => (A.indexOf(l) < 0 ? `<span class="add">+ ${trEsc(l)}</span>` : trEsc(l)))).join('\n')}</div>`;
+}
+function trAlertHtml() {
+  const al = (TRN.home && TRN.home.alerts) || [];
+  if (!al.length) return '';
+  return `<div class="hint tralert"><b>🔔 ${al.length} recipe change${al.length > 1 ? 's' : ''} since you last checked.</b> Read the new builds before your next shift.
+    ${al.map((c) => `<details><summary>${trEsc(c.recipe)} <span class="pill mute">${trEsc(c.change)} · ${trEsc(c.date)}</span></summary>${c.change === 'Removed' ? '<p class="sub">Taken off the recipe list.</p>' : trDiff(c.before, c.after)}</details>`).join('')}
+    <div class="btns" style="margin-top:8px"><button class="btn sm go" data-tr="recipeok">Got it, I've read them</button></div></div>`;
+}
+function viewTests() {
+  trLoadHome();
+  if (!TRN.sub) TRN.sub = TRN.home && TRN.home.manual && !TRN.home.manual.acked ? 'manual' : 'study';
+  const body = TRN.sub === 'manual' ? trManualView() : TRN.sub === 'res' ? trResView() : TRN.sub === 'forms' ? trFormsView() : TRN.sub === 'dash' && lead() ? trDashView() : trStudyView();
+  setTimeout(trAfter, 0);
+  return `<div class="trhub"><div class="trhead"><h1>Training</h1>${TRN.home && TRN.home.level ? levelPill(data.me.name) : ''}</div>${trPillsHtml()}${trAlertHtml()}${body}</div>`;
+}
+function trStudyView() {
+  if (!tdata || Date.now() - tAt > 60000) loadTests();
+  const H = TRN.home || {};
+  const gate = H.manual && H.manual.gates && !H.manual.acked && !mgr() ? `<div class="hint">🔒 Read and sign the <button class="linkbtn" data-trsub="manual">Employee Manual</button> to unlock the tests.</div>` : '';
+  if (!tdata) return gate + '<div class="card"><div class="empty">Loading…</div></div>';
+  if (!tdata.portal) return gate + '<div class="card"><div class="empty">The study guides and tests aren\'t connected yet. A manager needs to add Settings › Training service secret.</div></div>';
+  if (!trainSrc || Date.now() > trainUntil) {
+    trainSrc = tdata.portal;
+    trainUntil = Date.now() + 10 * 3600e3;
+  }
+  return gate + `<div class="trainframe"><iframe src="${trEsc(trainSrc)}" title="Study guides and tests" allow="clipboard-write"></iframe></div>`;
+}
+/* --- Employee Manual --- */
+function trPages() {
+  const out = [];
+  (TRN.man ? TRN.man.chapters : []).forEach((c, ci) => {
+    c.sections.forEach((s, si) => out.push({ kind: 'sec', id: s.id, ci, si }));
+    if (c.check.length) out.push({ kind: 'check', id: c.id + 'q', ci });
+  });
+  return out;
+}
+async function trLoadManual() {
+  if (TRN.busy === 'man') return;
+  TRN.busy = 'man';
+  try {
+    TRN.man = await trCall('manual');
+    TRN.man.doneSet = {};
+    TRN.man.done.forEach((id) => (TRN.man.doneSet[id] = true));
+    const P = trPages(),
+      i = P.findIndex((p) => !TRN.man.doneSet[p.id]);
+    TRN.at = i < 0 ? 0 : i;
+  } catch (e) {
+    toast(e.message);
+  }
+  TRN.busy = '';
+  if (tab === 'tests') render();
+}
+function trManualView() {
+  if (!TRN.man) {
+    trLoadManual();
+    return '<div class="card"><div class="empty">Opening the manual…</div></div>';
+  }
+  const M = TRN.man,
+    P = trPages(),
+    p = P[TRN.at] || P[0],
+    c = M.chapters[p.ci],
+    st = M.status,
+    n = P.filter((x) => M.doneSet[x.id]).length,
+    pct = Math.round((n / P.length) * 100);
+  const toc = M.chapters.map((ch, ci) => `<option value="${P.findIndex((x) => x.ci === ci)}" ${ci === p.ci ? 'selected' : ''}>${ci + 1}. ${trEsc(ch.title)}${P.filter((x) => x.ci === ci).every((x) => M.doneSet[x.id]) ? ' ✓' : ''}</option>`).join('');
+  let h = `<div class="card"><div class="trprog"><div class="bar"><i style="width:${pct}%"></i></div><span class="sub">${n} of ${P.length}</span></div>
+    <label class="f" style="margin:8px 0 0">Chapter<select data-trchap>${toc}</select></label></div>`;
+  if (st.acked) h += `<div class="hint">✓ You signed this manual ${trEsc(st.acked)}.</div>`;
+  else if (n === P.length || st.complete)
+    h += `<div class="card"><h2 style="margin-top:0">Acknowledgment</h2><p>You've read every section. Sign below to finish.</p>
+      <label class="row" style="gap:10px"><input type="checkbox" id="trackok" style="width:auto;min-height:0"> I have read the Peregrine Employee Manual and agree to follow it.</label>
+      <label class="f">Type your full name to sign<input id="tracknm" placeholder="${trEsc(data.me.name)}" autocomplete="off"></label><div class="btns"><button class="btn go" data-tr="manack">Sign</button></div></div>`;
+  h += `<div class="card trdoc"><div class="trkick">Chapter ${p.ci + 1} of ${M.chapters.length} · ${trEsc(c.title)}</div>`;
+  if (p.kind === 'sec') {
+    const s = c.sections[p.si];
+    h += `<h2>${trEsc(s.title)}</h2>${p.si === 0 && c.intro ? `<p class="sub">${trEsc(c.intro)}</p>` : ''}${s.b.map((b) => (typeof b === 'string' ? b : '')).join('')}
+      <div class="btns trnav"><button class="btn" data-tr="manprev" ${TRN.at === 0 ? 'disabled' : ''}>‹ Back</button><button class="btn go" data-tr="mannext">${M.doneSet[p.id] ? 'Next ›' : 'Done reading ›'}</button></div>`;
+  } else {
+    const ck = TRN.checks[p.id] || (TRN.checks[p.id] = {}),
+      solved = M.doneSet[p.id];
+    h += `<h2>Chapter check</h2><p class="sub">Answer each one correctly to finish the chapter. It isn't graded.</p>` +
+      c.check.map((q, qi) => {
+        const s = ck[qi] || {},
+          ok = solved || s.right;
+        return `<div class="trq"><b>${qi + 1}. ${trEsc(q.p)}</b>${q.o.map((o, oi) => `<button class="tropt ${ok && oi === q.a ? 'right' : s.tried && s.tried[oi] && oi !== q.a ? 'wrong' : ''}" data-tr="ans" data-q="${qi}" data-o="${oi}" ${ok ? 'disabled' : ''}>${trEsc(o)}</button>`).join('')}${ok ? `<div class="sub" style="color:var(--ok,#3d7a47)">✓ ${trEsc(q.why)}</div>` : s.no ? '<div class="sub" style="color:#b5462b">Not quite. Try another answer.</div>' : ''}</div>`;
+      }).join('') +
+      `<div class="btns trnav"><button class="btn" data-tr="manprev">‹ Back</button><button class="btn go" data-tr="mannext" ${solved || c.check.every((_, qi) => ck[qi] && ck[qi].right) ? '' : 'disabled'}>Next ›</button></div>`;
+  }
+  return h + '</div>';
+}
+function trManMark(id) {
+  if (TRN.man.doneSet[id]) return;
+  TRN.man.doneSet[id] = true;
+  trCall('manualStep', { id })
+    .then((r) => {
+      if (r.complete) TRN.man.status.complete = true;
+      if (TRN.home && TRN.home.manual) TRN.home.manual.done = r.done;
+    })
+    .catch((e) => {
+      delete TRN.man.doneSet[id];
+      toast('Not saved – ' + e.message);
+      render();
+    });
+}
+/* --- Resources --- */
+async function trLoadRes() {
+  if (TRN.busy === 'res') return;
+  TRN.busy = 'res';
+  try {
+    TRN.res = await trCall('resources');
+  } catch (e) {
+    toast(e.message);
+  }
+  TRN.busy = '';
+  if (tab === 'tests') render();
+}
+function trResView() {
+  if (!TRN.res) {
+    trLoadRes();
+    return '<div class="card"><div class="empty">Loading resources…</div></div>';
+  }
+  if (TRN.doc) {
+    const r = TRN.res.resources.find((x) => x.id === TRN.doc.id);
+    if (r && r.sections)
+      return `<div class="btns"><button class="btn sm" data-tr="resback">‹ Resources</button></div><div class="card trdoc"><h2 style="margin-top:0">${r.icon} ${trEsc(r.title)}</h2><p class="sub">${trEsc(r.blurb)}</p>
+        ${r.sections.length > 1 ? `<div class="trchips">${r.sections.map((s, i) => `<button class="trchip" data-tr="jump" data-i="${i}">${trEsc(s.title)}</button>`).join('')}</div>` : ''}
+        ${r.sections.map((s, i) => `<section id="trsec${i}"><h3>${trEsc(s.title)}</h3>${s.b.map((b) => (typeof b === 'string' ? b : `<div data-trlive="${trEsc(b.live)}"></div>`)).join('')}</section>`).join('')}</div>`;
+  }
+  return `<div class="trsearch"><input id="trq" type="search" placeholder="Search: a drink, a policy, a cleaning step…" value="${trEsc(TRN.q)}" autocomplete="off"></div><div id="trhits"></div>
+    <div id="trgrid" class="trgrid"><button class="trcard" data-trsub="manual"><span>📖</span><b>Employee Manual</b><small>${TRN.home && TRN.home.manual && TRN.home.manual.acked ? 'Signed' : 'Read and sign it'}</small></button>
+    ${TRN.res.resources.map((r) => `<button class="trcard" ${r.more ? `data-more="${r.more}"` : r.tab ? `data-tab="${r.tab}"` : `data-tr="doc" data-id="${trEsc(r.id)}"`}><span>${r.icon}</span><b>${trEsc(r.title)}${r.who === 'lead' ? ' <i class="pill mute">Leads</i>' : ''}</b><small>${trEsc(r.blurb)}</small></button>`).join('')}</div>`;
+}
+const trStrip = (h) => {
+  const d = document.createElement('div');
+  d.innerHTML = String(h).replace(/<[^>]+>/g, ' ');
+  return (d.textContent || '').replace(/\s+/g, ' ').trim();
+};
+function trIndex() {
+  if (TRN.idx) return TRN.idx;
+  const idx = [];
+  TRN.res.resources.forEach((r) => (r.sections || []).forEach((s, i) => idx.push({ w: r.title, t: s.title, x: s.b.filter((b) => typeof b === 'string').map(trStrip).join(' '), go: { doc: r.id, i } })));
+  Object.keys(TRN.res.sidework || {}).forEach((d) => TRN.res.sidework[d].forEach((t) => idx.push({ w: 'Side Work · ' + d, t: t[0], x: t[1], go: { doc: 'sidework', i: 0 } })));
+  TRN.res.manual.forEach((c) => c.sections.forEach((s) => idx.push({ w: 'Employee Manual · ' + c.title, t: s.title, x: s.b.filter((b) => typeof b === 'string').map(trStrip).join(' '), go: { man: 1 } })));
+  (data.recipes || []).forEach((r) => idx.push({ w: r.type === 'Prep' ? 'Prep Recipe Book' : 'Drink Build Menu', t: r.name, x: [r.cat, r.size, (r.ing || []).join(' '), (r.steps || []).join(' '), r.notes].join(' '), go: { recipe: r.id } }));
+  return (TRN.idx = idx);
+}
+function trSearch() {
+  const box = $('#trhits'),
+    grid = $('#trgrid');
+  if (!box) return;
+  const words = TRN.q.toLowerCase().split(/\s+/).filter(Boolean);
+  if (grid) grid.style.display = words.length ? 'none' : '';
+  if (!words.length) return (box.innerHTML = '');
+  const hits = trIndex()
+    .map((e) => {
+      const hay = (e.t + ' ' + e.x).toLowerCase();
+      if (!words.every((w) => hay.indexOf(w) >= 0)) return null;
+      return { e, s: words.filter((w) => e.t.toLowerCase().indexOf(w) >= 0).length };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.s - a.s)
+    .slice(0, 40);
+  const snip = (t) => {
+    const lo = t.toLowerCase();
+    let at = -1;
+    words.some((w) => (at = lo.indexOf(w)) >= 0);
+    const s = Math.max(0, at - 50);
+    let o = trEsc((s ? '…' : '') + t.slice(s, s + 170) + (s + 170 < t.length ? '…' : ''));
+    words.forEach((w) => w.length > 1 && (o = o.replace(new RegExp('(' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'ig'), '<mark>$1</mark>')));
+    return o;
+  };
+  box.innerHTML = hits.length
+    ? `<div class="card">${hits.map(({ e }) => `<button class="row rb trhit" ${e.go.recipe ? `data-recipe="${trEsc(e.go.recipe)}"` : e.go.man ? 'data-trsub="manual"' : `data-tr="doc" data-id="${trEsc(e.go.doc)}" data-i="${e.go.i}"`}><div class="txt"><div class="trw">${trEsc(e.w)}</div><b>${snip(e.t)}</b><div class="sub">${snip(e.x)}</div></div></button>`).join('')}</div>`
+    : `<p class="sub">Nothing matches. Try fewer or different words.</p>`;
+}
+function trToday() {
+  const d = new Date();
+  return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
+}
+function trAfter() {
+  if (tab !== 'tests') return;
+  if ($('#trq') && $('#trhits') && !$('#trhits').dataset.done) {
+    $('#trhits').dataset.done = '1';
+    trSearch();
+  }
+  // tap-to-check lists, remembered on this phone for the day
+  document.querySelectorAll('.trdoc ul.tick').forEach((ul, ui) => {
+    const key = 'pt-tick-' + (TRN.doc ? TRN.doc.id : 'x') + '-' + ui + '-' + trToday();
+    let st = {};
+    try {
+      st = JSON.parse(load(key) || '{}');
+    } catch (e) {}
+    ul.querySelectorAll('li').forEach((li, i) => {
+      li.classList.toggle('done', !!st[i]);
+      li.dataset.tick = key + '|' + i;
+    });
+  });
+  document.querySelectorAll('[data-trlive]').forEach((el) => {
+    if (el.dataset.ready) return;
+    el.dataset.ready = '1';
+    if (el.dataset.trlive === 'sidework') trSidework(el, '');
+    if (el.dataset.trlive === 'deposit')
+      el.innerHTML = `<div class="card" style="margin:10px 0"><b>Deposit calculator</b><label class="f">Drawer total from Count Bills ($)<input type="number" step="0.01" data-trdep placeholder="242.30"></label><div class="trdepout"></div></div>`;
+  });
+  if (TRN.jump != null) {
+    const s = $('#trsec' + TRN.jump);
+    TRN.jump = null;
+    if (s) s.scrollIntoView();
+  }
+}
+function trSidework(el, day) {
+  const SW = TRN.res.sidework || {},
+    days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
+    now = days[(new Date().getDay() + 6) % 7],
+    cur = day || now;
+  el.innerHTML = `<div class="trchips">${days.map((d) => `<button class="trchip ${d === cur ? 'on' : ''}" data-trday="${d}">${d.slice(0, 3)}${d === now ? ' · today' : ''}</button>`).join('')}</div>
+    <h3>${cur}</h3><ul class="tick">${(SW[cur] || []).map((t) => `<li><b>${trEsc(t[0])}:</b> ${trEsc(t[1])}</li>`).join('')}</ul>`;
+  const key = 'pt-tick-sidework-' + cur + '-' + trToday();
+  let st = {};
+  try {
+    st = JSON.parse(load(key) || '{}');
+  } catch (e) {}
+  el.querySelectorAll('li').forEach((li, i) => {
+    li.classList.toggle('done', !!st[i]);
+    li.dataset.tick = key + '|' + i;
+  });
+}
+/* --- Forms --- */
+function trFormsView() {
+  const H = TRN.home;
+  if (!H) return '<div class="card"><div class="empty">Loading…</div></div>';
+  const F = H.food || {},
+    names = (data.people || []).map((p) => `<option>${trEsc(p.name)}</option>`).join('');
+  let h = '';
+  (H.docs || []).forEach((d) => {
+    h += `<div class="card" style="border-left:4px solid #b5462b"><h2 style="margin-top:0">Please sign: ${trEsc(d.title)}</h2><p class="sub">From ${trEsc(d.by)} · ${trEsc(d.filed)}</p>
+      ${d.fields.map((f) => `<div class="row" style="display:block"><div class="sub">${trEsc(f[0])}</div><div>${trEsc(f[1]).replace(/\n/g, '<br>')}</div></div>`).join('')}
+      <p class="sub">Signing means you received this, not that you agree. You can add your side below.</p>
+      <label class="f">Your comments (optional)<textarea rows="3" data-trcomment="${trEsc(d.id)}"></textarea></label><div class="btns"><button class="btn go" data-tr="sign" data-id="${trEsc(d.id)}">Sign as received</button></div></div>`;
+  });
+  h += `<h2>Food handler certificate</h2><div class="card">` +
+    (F.onFile
+      ? `<div class="row"><div class="txt"><b>On file</b><div class="sub">Uploaded ${trEsc(F.onFile.uploaded)}${F.onFile.expires ? ' · expires ' + trEsc(F.onFile.expires) : ''}</div></div><span class="pill ok">✓</span></div>`
+      : `<p>${F.overdue ? '<span class="pill warn">Overdue</span> ' : `<span class="pill mute">Due ${trEsc(F.due || 'by the end of week 2')}</span> `}Upload your accredited Texas food handler certificate. We pay back the course (up to $${F.max}) on your next paycheck.</p>
+        <label class="f">Certificate (photo or PDF)<input type="file" id="trfc" accept="image/*,application/pdf"></label>
+        <label class="f">Receipt (optional)<input type="file" id="trfr" accept="image/*,application/pdf"></label>
+        <label class="f">Expiration date<input id="trfe" placeholder="MM/DD/YYYY"></label><label class="f">What you paid ($)<input id="trfp" type="number" step="0.01" inputmode="decimal"></label>
+        <div class="btns"><button class="btn go" data-tr="food">Upload</button></div>`) +
+    `</div>`;
+  h += `<h2>Report a concern</h2><div class="card"><p class="sub">Harassment, discrimination, safety, or anything you aren't comfortable raising on shift. Handled as privately as possible; retaliation for reporting in good faith is not allowed.</p>
+    <label class="f">Kind of concern<select id="trck"><option>Harassment</option><option>Sexual harassment</option><option>Discrimination</option><option>Threats or violence</option><option>Safety</option><option>Other</option></select></label>
+    <label class="f">Who was involved<input id="trci"></label><label class="f">When<input id="trcd" placeholder="Date and time, as best you remember"></label><label class="f">Where<input id="trcw"></label>
+    <label class="f">What happened<textarea id="trcx" rows="5"></textarea></label><label class="f">Witnesses<input id="trcv"></label><label class="f">Reported before? To whom?<input id="trcb"></label>
+    <label class="row" style="gap:10px"><input type="checkbox" id="trcm" style="width:auto;min-height:0"> This involves the Manager</label>
+    <div class="hint" id="trcmnote" hidden>Please report this directly to the owner: ${trEsc(H.owner)}. Concerns that involve the Manager aren't submitted through the app.</div>
+    <div class="btns" id="trcgo"><button class="btn go" data-tr="concern">Submit privately</button></div></div>`;
+  if (lead())
+    h += `<h2>Lead report</h2><div class="card"><p class="sub">Repeat conduct or performance (Policy 3), cash over $5 (1), safety or equipment (4), call-offs (13), trainee notes (7). Saved as a PDF in the person's HR folder.</p>
+      <label class="f">Type<select id="trlt"><option>Repeat conduct issue</option><option>Repeat performance issue</option><option>Cash discrepancy over $5</option><option>Safety or equipment incident</option><option>Staff called off or sent home</option><option>Trainee progress</option><option>Guest recovery beyond one item</option><option>Other</option></select></label>
+      <label class="f">About (if it's about one person)<input id="trla" list="trnames"></label><label class="f">Date<input id="trld"></label><label class="f">Policy<input id="trlp" placeholder="e.g. Policy 3"></label>
+      <label class="f">What happened<textarea id="trlw" rows="4"></textarea></label><label class="f">Action taken<textarea id="trlx" rows="3"></textarea></label><div class="btns"><button class="btn go" data-tr="leadreport">File report</button></div></div>`;
+  if (mgr())
+    h += `<h2>Corrective action / write-up</h2><div class="card"><p class="sub">Saved as a PDF in the employee's HR folder. They sign it as received in the app.</p>
+      <label class="f">Employee<input id="trwe" list="trnames"></label>
+      <label class="f">Step<select id="trws"><option>Coaching (documented)</option><option>Documented verbal warning</option><option>Written warning</option><option>Final written warning</option><option>Suspension</option><option>Termination</option></select></label>
+      <label class="f">Date of incident<input id="trwd"></label><label class="f">Policy or standard<input id="trwp"></label><label class="f">What happened<textarea id="trww" rows="4"></textarea></label>
+      <label class="f">Previous steps (dates)<textarea id="trwr" rows="2"></textarea></label><label class="f">What must change<textarea id="trwx" rows="3"></textarea></label>
+      <label class="f">If it happens again<input id="trwc"></label><label class="f">Probation (if any)<input id="trwb"></label><div class="btns"><button class="btn go" data-tr="writeup">Save write-up</button></div></div>`;
+  return h + `<datalist id="trnames">${names}</datalist>`;
+}
+/* --- Dashboard --- */
+async function trLoadDash() {
+  if (TRN.busy === 'dash') return;
+  TRN.busy = 'dash';
+  try {
+    TRN.dash = await trCall('dash');
+    TRN.dashAt = Date.now();
+  } catch (e) {
+    toast(e.message);
+  }
+  TRN.busy = '';
+  if (tab === 'tests') render();
+}
+function trDashView() {
+  if (!TRN.dash || Date.now() - (TRN.dashAt || 0) > 120000) trLoadDash();
+  const D = TRN.dash;
+  if (!D) return '<div class="card"><div class="empty">Loading the team…</div></div>';
+  const T = D.team,
+    groups = {
+      train: T.filter((p) => /^(T|L1)$/.test(p.level.code)),
+      ack: T.filter((p) => p.level.code === 'L2P'),
+      man: T.filter((p) => !p.manual),
+      food: T.filter((p) => !p.food.on && p.food.overdue),
+      rc: T.filter((p) => p.unread),
+    };
+  const stat = (k, n, l) => `<button class="trstat ${TRN.filter === k ? 'on' : ''}" data-trfilter="${k}"><b>${n}</b><span>${l}</span></button>`;
+  const order = { T: 0, L1: 1, L2P: 2, L2: 3, LD: 4, MG: 5 },
+    list = (groups[TRN.filter] || T).slice().sort((a, b) => order[a.level.code] - order[b.level.code] || a.name.localeCompare(b.name));
+  const short = (n) => n.replace(/^Barista\s+/i, '').replace(/\s*\(.*?\)\s*/g, ' ').replace(/\s+-\s+.*$/, '').trim();
+  let h = `<div class="trstats">${stat('train', groups.train.length, 'still training')}${stat('ack', groups.ack.length, 'need a Level II acknowledgment')}${stat('man', groups.man.length, "haven't signed the manual")}${stat('food', groups.food.length, 'overdue food handler')}${stat('rc', groups.rc.length, 'unread recipe changes')}</div>`;
+  h += `<div class="card">${list
+    .map((p) => {
+      const tests = D.tests.map((t) => (p.tests[t] ? `<span class="pill ${p.tests[t].s === 'pass' ? 'ok' : p.tests[t].s === 'wait' ? 'mute' : 'warn'}">${trEsc(short(t))}${p.tests[t].s === 'pass' ? ' ✓' : p.tests[t].s === 'wait' ? ' …' : ' ✗'}</span>` : '')).join(' ');
+      return `<div class="row" style="display:block"><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><b>${trEsc(p.name)}</b>${levelPill(p.name)}${p.manual ? '' : '<span class="pill warn">Manual unsigned</span>'}${p.unread ? `<span class="pill mute">🔔 ${p.unread}</span>` : ''}</div>
+        <div style="margin-top:4px">${tests || '<span class="sub">No tests yet</span>'}</div>
+        <div class="sub" style="margin-top:4px">Food handler: ${p.food.on ? 'on file' + (D.manager && p.food.amount ? ' · $' + p.food.amount.toFixed(2) : '') : (p.food.overdue ? '<b style="color:#b5462b">overdue</b>' : 'due') + (p.food.due ? ' ' + trEsc(p.food.due) : '')}${p.prof ? ' · Level II acknowledged by ' + trEsc(first(p.prof)) : ''}</div>
+        ${p.level.code === 'L2P' ? `<div class="btns" style="margin-top:6px"><button class="btn sm go" data-tr="ackprof" data-who="${trEsc(p.name)}">Acknowledge Level II proficiency</button></div>` : ''}</div>`;
+    })
+    .join('')}</div>`;
+  if (D.changes.length) h += `<h2>Recent recipe changes</h2><div class="card">${D.changes.map((c) => `<div class="row"><div class="txt"><b>${trEsc(c.recipe)}</b><div class="sub">${trEsc(c.change)} · ${trEsc(c.date)}</div></div></div>`).join('')}</div>`;
+  if (D.manager) {
+    h += `<h2>HR records</h2><div class="card">${D.hrFolder ? `<div class="row"><div class="txt"><b>HR folder</b></div><a class="btn sm" href="${trEsc(D.hrFolder)}" target="_blank" rel="noopener">Open ↗</a></div>` : ''}${D.hr.map((x) => `<div class="row"><div class="txt"><b>${trEsc(x.type)}</b><div class="sub">${trEsc(x.about)} · by ${trEsc(x.by)} · ${trEsc(x.date)} · ${trEsc(x.status)}</div></div>${x.link ? `<a class="btn sm" href="${trEsc(x.link)}" target="_blank" rel="noopener">PDF ↗</a>` : ''}</div>`).join('') || '<div class="empty">Nothing filed yet.</div>'}</div>`;
+    h += `<h2>Reimbursements</h2><div class="card">${D.reimb.map((x) => `<div class="row"><div class="txt"><b>${trEsc(x.name)} · $${x.amount.toFixed(2)}</b><div class="sub">${trEsc(x.type)} · pay period from ${trEsc(x.period)} · ${trEsc(x.status)}</div></div>${x.status === 'Queued' ? `<button class="btn sm" data-tr="void" data-id="${trEsc(x.id)}">Void</button>` : x.link ? `<a class="btn sm" href="${trEsc(x.link)}" target="_blank" rel="noopener">Payroll ↗</a>` : ''}</div>`).join('') || '<div class="empty">None yet.</div>'}</div>`;
+  }
+  return h;
+}
+function trFile(inp) {
+  return new Promise((ok) => {
+    const f = inp && inp.files && inp.files[0];
+    if (!f) return ok(null);
+    const r = new FileReader();
+    r.onload = () => ok({ name: f.name, type: f.type, data: String(r.result).split(',')[1] });
+    r.readAsDataURL(f);
+  });
+}
+const trv = (id) => ($('#' + id) ? $('#' + id).value : '');
+document.addEventListener('input', (e) => {
+  if (e.target.id === 'trq') {
+    TRN.q = e.target.value;
+    trSearch();
+  }
+  if (e.target.dataset && e.target.dataset.trdep !== undefined) {
+    const t = parseFloat(e.target.value),
+      out = e.target.closest('.card').querySelector('.trdepout');
+    if (!(t >= 0)) return (out.innerHTML = '');
+    const r = Math.round(t),
+      dep = r - 200;
+    out.innerHTML =
+      dep < 0
+        ? `<p><b>No deposit.</b> The drawer is $${(200 - t).toFixed(2)} under $200. Recount first. ${200 - t > 5 ? 'Over $5: log it and tell the manager the same day.' : '$5 or less: note the amount, date, shift and cashier with the deposit.'}</p>`
+        : `<p><b>Deposit: $${dep}.</b> Rounds to $${r}. Pull $${dep} and leave $${(t - dep).toFixed(2)} in the drawer.</p>`;
+  }
+});
+document.addEventListener('change', (e) => {
+  if (e.target.matches && e.target.matches('[data-trchap]')) {
+    TRN.at = Number(e.target.value) || 0;
+    render();
+    window.scrollTo(0, 0);
+  }
+  if (e.target.id === 'trcm') {
+    $('#trcmnote').hidden = !e.target.checked;
+    $('#trcgo').hidden = e.target.checked;
+  }
+});
+document.addEventListener('click', async (e) => {
+  const li = e.target.closest && e.target.closest('li[data-tick]');
+  if (li) {
+    const [key, i] = li.dataset.tick.split('|');
+    let st = {};
+    try {
+      st = JSON.parse(load(key) || '{}');
+    } catch (x) {}
+    st[i] = !st[i];
+    save(key, JSON.stringify(st));
+    li.classList.toggle('done', !!st[i]);
+    return;
+  }
+  const b = e.target.closest && e.target.closest('[data-trsub], [data-tr], [data-trfilter], [data-trday]');
+  if (!b) return;
+  const d = b.dataset;
+  if (d.trsub) {
+    TRN.sub = d.trsub;
+    TRN.doc = null;
+    save('pt-trsub', TRN.sub);
+    if (tab !== 'tests') tab = 'tests';
+    window.scrollTo(0, 0);
+    return render();
+  }
+  if (d.trfilter) {
+    TRN.filter = TRN.filter === d.trfilter ? '' : d.trfilter;
+    return render();
+  }
+  if (d.trday) return trSidework(b.closest('[data-trlive]'), d.trday);
+  const a = d.tr;
+  try {
+    if (a === 'recipeok') {
+      b.disabled = true;
+      await trCall('recipeAck', { ids: TRN.home.alerts.map((c) => c.id) });
+      TRN.home.alerts = [];
+      if (data.trBadge) data.trBadge.recipes = 0;
+      toast('Thanks!');
+    } else if (a === 'manprev') {
+      TRN.at = Math.max(0, TRN.at - 1);
+      window.scrollTo(0, 0);
+    } else if (a === 'mannext') {
+      const P = trPages(),
+        p = P[TRN.at];
+      if (p.kind === 'sec') trManMark(p.id);
+      if (TRN.at < P.length - 1) TRN.at++;
+      window.scrollTo(0, 0);
+    } else if (a === 'ans') {
+      const P = trPages(),
+        p = P[TRN.at],
+        q = TRN.man.chapters[p.ci].check[+d.q],
+        ck = TRN.checks[p.id],
+        s = ck[d.q] || (ck[d.q] = { tried: {} });
+      s.tried[d.o] = true;
+      if (+d.o === q.a) {
+        s.right = true;
+        s.no = false;
+      } else s.no = true;
+      if (TRN.man.chapters[p.ci].check.every((_, qi) => ck[qi] && ck[qi].right)) trManMark(p.id);
+    } else if (a === 'manack') {
+      b.disabled = true;
+      const r = await trCall('manualAck', { agree: $('#trackok').checked, signature: trv('tracknm') });
+      TRN.man.status.acked = r.acked;
+      if (TRN.home) TRN.home.manual.acked = r.acked;
+      if (data.trBadge) data.trBadge.manual = 0;
+      toast('Signed. Thank you!');
+    } else if (a === 'doc') {
+      TRN.doc = { id: d.id };
+      TRN.sub = 'res';
+      TRN.jump = d.i ? Number(d.i) : null;
+      window.scrollTo(0, 0);
+    } else if (a === 'resback') {
+      TRN.doc = null;
+    } else if (a === 'jump') {
+      const s = $('#trsec' + d.i);
+      if (s) s.scrollIntoView({ behavior: 'smooth' });
+      return;
+    } else if (a === 'sign') {
+      if (!confirm('Sign this as received?')) return;
+      b.disabled = true;
+      await trCall('sign', { id: d.id, comment: ($('[data-trcomment="' + d.id + '"]') || {}).value || '' });
+      toast('Signed.');
+      await trLoadHome(true);
+    } else if (a === 'food') {
+      if (!$('#trfc').files.length) return toast('Attach your certificate');
+      b.disabled = true;
+      b.textContent = 'Uploading…';
+      const [f, r] = await Promise.all([trFile($('#trfc')), trFile($('#trfr'))]);
+      const out = await trCall('food', { file: f, receipt: r, expires: trv('trfe'), cost: trv('trfp') });
+      toast(out.amount ? '$' + out.amount.toFixed(2) + ' will be on payroll for ' + out.period : 'Uploaded. Thank you!');
+      await trLoadHome(true);
+    } else if (a === 'concern') {
+      if (!trv('trcx').trim()) return toast('Describe what happened');
+      if (!confirm('Submit this report privately?')) return;
+      b.disabled = true;
+      const r = await trCall('form', { type: 'concern', data: { kind: trv('trck'), involved: trv('trci'), date: trv('trcd'), where: trv('trcw'), details: trv('trcx'), witnesses: trv('trcv'), before: trv('trcb'), involvesManager: $('#trcm').checked } });
+      alert(r.msg);
+      if (r.ok) ['trci', 'trcd', 'trcw', 'trcx', 'trcv', 'trcb'].forEach((i) => ($('#' + i).value = ''));
+      b.disabled = false;
+      return;
+    } else if (a === 'leadreport') {
+      b.disabled = true;
+      const r = await trCall('form', { type: 'leadreport', data: { category: trv('trlt'), about: trv('trla'), date: trv('trld'), policy: trv('trlp'), details: trv('trlw'), action: trv('trlx') } });
+      toast(r.msg);
+      ['trla', 'trld', 'trlp', 'trlw', 'trlx'].forEach((i) => ($('#' + i).value = ''));
+      b.disabled = false;
+      return;
+    } else if (a === 'writeup') {
+      if (!confirm('Save this write-up to ' + trv('trwe') + "'s HR folder?")) return;
+      b.disabled = true;
+      const r = await trCall('form', { type: 'corrective', data: { employee: trv('trwe'), step: trv('trws'), date: trv('trwd'), policy: trv('trwp'), details: trv('trww'), prior: trv('trwr'), expect: trv('trwx'), consequence: trv('trwc'), probation: trv('trwb') } });
+      toast(r.msg);
+      ['trwe', 'trwd', 'trwp', 'trww', 'trwr', 'trwx', 'trwc', 'trwb'].forEach((i) => ($('#' + i).value = ''));
+      b.disabled = false;
+      return;
+    } else if (a === 'ackprof') {
+      const note = prompt('Acknowledge ' + d.who + "'s Level II proficiency? This makes them eligible for the raise.\n\nWhat did you observe? (optional)", '');
+      if (note === null) return;
+      b.disabled = true;
+      await trCall('ackProf', { who: d.who, note });
+      toast('Acknowledged');
+      TRN.dash = null;
+    } else if (a === 'void') {
+      if (!confirm("Void this reimbursement so it doesn't go on payroll?")) return;
+      await trCall('voidReimb', { id: d.id });
+      TRN.dash = null;
+    } else return;
+  } catch (err) {
+    b.disabled = false;
+    if (a === 'food') b.textContent = 'Upload';
+    toast(err.message);
+    return;
+  }
+  render();
+});
+
 /* Managers: who has passed which test. ✓ passed · … waiting to be scored · ✗ taken, not passed yet · – not taken. */
 let tpFilter = '';
 function teamProgress(T) {
@@ -4528,7 +5033,7 @@ function viewTeam() {
     <div class="card" data-reorder>${lineup()
       .map(
         (u) =>
-          `<div class="row" data-rid="${esc(u.id)}"><span class="handle" data-rowdrag aria-label="Drag to reorder ${esc(u.name)}">⠿</span><div class="txt ${shown(u) ? '' : 'muted'}"><b>${esc(u.name)}</b><div class="sub">${esc(u.role)}${shown(u) ? '' : ' · hidden from the schedule'}</div></div><button class="btn sm" data-onsched="${esc(u.id)}" data-to="${shown(u) ? 0 : 1}">${shown(u) ? 'Hide' : 'Show'}</button></div>`
+          `<div class="row" data-rid="${esc(u.id)}"><span class="handle" data-rowdrag aria-label="Drag to reorder ${esc(u.name)}">⠿</span><div class="txt ${shown(u) ? '' : 'muted'}"><b>${esc(u.name)}</b>${levelPill(u.name)}<div class="sub">${esc(u.role)}${shown(u) ? '' : ' · hidden from the schedule'}</div></div><button class="btn sm" data-onsched="${esc(u.id)}" data-to="${shown(u) ? 0 : 1}">${shown(u) ? 'Hide' : 'Show'}</button></div>`
       )
       .join('')}</div>
     <h2>Add someone</h2><div class="card">${form(null)}</div>
@@ -4572,7 +5077,7 @@ function viewMoreList() {
       ${item('time', mgr() ? 'Time sheets' : 'My time', mgr() ? 'Labor by day, week or pay period' : 'Your hours and estimated pay')}
       ${item('requests', 'Time off & swaps', '', pill(pendN))}
       ${item('avail', 'Availability', "When you can't work")}
-      ${rowBtn('data-tab="tests" class="mobonly"', '<div class="txt"><b>Tests</b><div class="sub">Training & certification</div></div><span>›</span>')}
+      ${rowBtn('data-tab="tests" class="mobonly"', '<div class="txt"><b>Training</b><div class="sub">Manual, study guides, tests, resources and forms</div></div><span>›</span>')}
       ${Number(data.version) >= 5.04 ? item('recipes', 'Recipes', 'Drink builds and prep, step by step') : ''}
       ${item('resources', 'Resources', 'Guides, handbooks, documents')}
       ${lead() ? item('training', 'Training', 'Trainee checklists and lead resources', pill(((data.training || {}).active || []).length)) : ''}
@@ -4978,7 +5483,7 @@ function viewShopSchedule() {
         ? xs
             .map(
               (s) =>
-                `<div class="row"><div class="txt"><b>${esc(s.name)}</b>${s.position ? `<div class="sub">${esc(s.position)}</div>` : ''}</div><span class="sub">${t12(s.start)}–${t12(s.end)}</span></div>`
+                `<div class="row"><div class="txt"><b>${esc(s.name)}</b>${levelPill(s.name)}${s.position ? `<div class="sub">${esc(s.position)}</div>` : ''}</div><span class="sub">${t12(s.start)}–${t12(s.end)}</span></div>`
             )
             .join('')
         : '<div class="empty">No one scheduled</div>'
@@ -5024,7 +5529,7 @@ const TABS = [
   ['chat', 'Chat', '✉︎'],
   ['today', 'Today', '☀︎', 'home'],
   ['lists', 'Lists', '✓'],
-  ['tests', 'Tests', '✎', 'deskonly'],
+  ['tests', 'Training', '✎', 'deskonly'],
   ['more', 'More', '☰'],
 ];
 let lastView = '';
@@ -5209,6 +5714,7 @@ function render() {
     more:
       (mgr() ? (data.requests || []).filter((q) => q.status === 'Pending' && q.from !== data.me.name).length : 0) +
       (data.announcements || []).filter((a) => !a.read).length,
+    tests: data.trBadge ? (data.trBadge.manual || 0) + (data.trBadge.recipes || 0) + (data.trBadge.sign || 0) : 0,
   };
   $('#tabs').hidden = false;
   if (shop() && !shopTabs().some((t) => t[0] === tab)) tab = 'today';
