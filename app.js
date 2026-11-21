@@ -4328,10 +4328,10 @@ async function trLoadHome(force) {
 }
 const trEsc = (s) => esc(s == null ? '' : s);
 function trPillsHtml() {
-  const subs = [['study', 'Study & tests'], ['manual', 'Manual'], ['res', 'Resources'], ['forms', 'Forms']].concat(lead() ? [['dash', 'Dashboard']] : []);
+  const subs = [['study', 'Study & tests'], ['manual', 'Manual'], ['res', 'Resources'], ['forms', 'Forms']].concat(lead() ? [['dash', 'Team']] : []);
   const H = TRN.home || {},
-    dot = { manual: H.manual && !H.manual.acked, forms: (H.docs || []).length || (H.food && !H.food.onFile) };
-  return `<div class="trpills">${subs.map(([k, n]) => `<button data-trsub="${k}" class="${TRN.sub === k ? 'on' : ''}">${n}${dot[k] ? '<i></i>' : ''}</button>`).join('')}</div>`;
+    n = { manual: H.manual && !H.manual.acked ? 1 : 0, forms: (H.docs || []).length + (H.food && !H.food.onFile ? 1 : 0) };
+  return `<div class="seg trseg">${subs.map(([k, l]) => `<button data-trsub="${k}" aria-pressed="${TRN.sub === k}">${l}${n[k] ? ' ' + n[k] : ''}</button>`).join('')}</div>`;
 }
 function trDiff(a, b) {
   const A = String(a || '').split('\n'),
@@ -4341,16 +4341,16 @@ function trDiff(a, b) {
 function trAlertHtml() {
   const al = (TRN.home && TRN.home.alerts) || [];
   if (!al.length) return '';
-  return `<div class="hint tralert"><b>🔔 ${al.length} recipe change${al.length > 1 ? 's' : ''} since you last checked.</b> Read the new builds before your next shift.
-    ${al.map((c) => `<details><summary>${trEsc(c.recipe)} <span class="pill mute">${trEsc(c.change)} · ${trEsc(c.date)}</span></summary>${c.change === 'Removed' ? '<p class="sub">Taken off the recipe list.</p>' : trDiff(c.before, c.after)}</details>`).join('')}
-    <div class="btns" style="margin-top:8px"><button class="btn sm go" data-tr="recipeok">Got it, I've read them</button></div></div>`;
+  return `<h2>Recipe changes</h2><div class="card tralert"><div class="row"><div class="txt"><b>🔔 ${al.length} recipe change${al.length > 1 ? 's' : ''} since you last checked</b><div class="sub">Read the new builds before your next shift. Tap one to see what changed.</div></div></div>
+    ${al.map((c) => `<details class="row"><summary><b>${trEsc(c.recipe)}</b> <span class="pill mute">${trEsc(c.change)}</span><div class="sub">${trEsc(c.type)} · ${trEsc(c.date)}</div></summary>${c.change === 'Removed' ? '<p class="sub">Taken off the recipe list.</p>' : trDiff(c.before, c.after)}</details>`).join('')}
+    <div class="row"><div class="txt"></div><button class="btn sm go" data-tr="recipeok">Got it</button></div></div>`;
 }
 function viewTests() {
   trLoadHome();
   if (!TRN.sub) TRN.sub = TRN.home && TRN.home.manual && !TRN.home.manual.acked ? 'manual' : 'study';
   const body = TRN.sub === 'manual' ? trManualView() : TRN.sub === 'res' ? trResView() : TRN.sub === 'forms' ? trFormsView() : TRN.sub === 'dash' && lead() ? trDashView() : trStudyView();
   setTimeout(trAfter, 0);
-  return `<div class="trhub"><div class="trhead"><h1>Training</h1>${TRN.home && TRN.home.level ? levelPill(data.me.name) : ''}</div>${trPillsHtml()}${trAlertHtml()}${body}</div>`;
+  return `<div class="trhub"><h1>Training ${levelPill(data.me.name)}</h1>${trPillsHtml()}${trAlertHtml()}${body}</div>`;
 }
 function trStudyView() {
   if (!tdata || Date.now() - tAt > 60000) loadTests();
@@ -4402,22 +4402,21 @@ function trManualView() {
     n = P.filter((x) => M.doneSet[x.id]).length,
     pct = Math.round((n / P.length) * 100);
   const toc = M.chapters.map((ch, ci) => `<option value="${P.findIndex((x) => x.ci === ci)}" ${ci === p.ci ? 'selected' : ''}>${ci + 1}. ${trEsc(ch.title)}${P.filter((x) => x.ci === ci).every((x) => M.doneSet[x.id]) ? ' ✓' : ''}</option>`).join('');
-  let h = `<div class="card"><div class="trprog"><div class="bar"><i style="width:${pct}%"></i></div><span class="sub">${n} of ${P.length}</span></div>
-    <label class="f" style="margin:8px 0 0">Chapter<select data-trchap>${toc}</select></label></div>`;
-  if (st.acked) h += `<div class="hint">✓ You signed this manual ${trEsc(st.acked)}.</div>`;
-  else if (n === P.length || st.complete)
-    h += `<div class="card"><h2 style="margin-top:0">Acknowledgment</h2><p>You've read every section. Sign below to finish.</p>
-      <label class="row" style="gap:10px"><input type="checkbox" id="trackok" style="width:auto;min-height:0"> I have read the Peregrine Employee Manual and agree to follow it.</label>
-      <label class="f">Type your full name to sign<input id="tracknm" placeholder="${trEsc(data.me.name)}" autocomplete="off"></label><div class="btns"><button class="btn go" data-tr="manack">Sign</button></div></div>`;
-  h += `<div class="card trdoc"><div class="trkick">Chapter ${p.ci + 1} of ${M.chapters.length} · ${trEsc(c.title)}</div>`;
+  let h = `<h2>Employee Manual</h2><div class="card"><div class="row"><div class="txt"><b>${st.acked ? 'Signed ' + trEsc(st.acked) : n === P.length ? 'Ready to sign' : n + ' of ' + P.length + ' done'}</b><div class="progress" style="margin-top:8px"><i style="width:${pct}%"></i></div></div>${st.acked ? '<span class="pill ok">Signed</span>' : ''}</div>
+    <form class="stack" onsubmit="return false"><label class="f">Chapter<select data-trchap>${toc}</select></label></form></div>`;
+  if (!st.acked && (n === P.length || st.complete))
+    h += `<h2>Acknowledgment</h2><div class="card"><form class="stack" onsubmit="return false"><div>You've read every section. Sign below to finish.</div>
+      <label class="trcheck"><input type="checkbox" id="trackok"> I have read the Peregrine Employee Manual and agree to follow it.</label>
+      <label class="f">Type your full name to sign<input id="tracknm" placeholder="${trEsc(data.me.name)}" autocomplete="off"></label><button class="btn go" data-tr="manack">Sign</button></form></div>`;
+  h += `<h2>Chapter ${p.ci + 1} · ${trEsc(c.title)}</h2><div class="card trdoc"><div class="trbody">`;
   if (p.kind === 'sec') {
     const s = c.sections[p.si];
-    h += `<h2>${trEsc(s.title)}</h2>${p.si === 0 && c.intro ? `<p class="sub">${trEsc(c.intro)}</p>` : ''}${s.b.map((b) => (typeof b === 'string' ? b : '')).join('')}
+    h += `<div class="trtitle">${trEsc(s.title)}</div>${p.si === 0 && c.intro ? `<p class="sub">${trEsc(c.intro)}</p>` : ''}${s.b.map((b) => (typeof b === 'string' ? b : '')).join('')}
       <div class="btns trnav"><button class="btn" data-tr="manprev" ${TRN.at === 0 ? 'disabled' : ''}>‹ Back</button><button class="btn go" data-tr="mannext">${M.doneSet[p.id] ? 'Next ›' : 'Done reading ›'}</button></div>`;
   } else {
     const ck = TRN.checks[p.id] || (TRN.checks[p.id] = {}),
       solved = M.doneSet[p.id];
-    h += `<h2>Chapter check</h2><p class="sub">Answer each one correctly to finish the chapter. It isn't graded.</p>` +
+    h += `<div class="trtitle">Chapter check</div><p class="sub">Answer each one correctly to finish the chapter. It isn't graded.</p>` +
       c.check.map((q, qi) => {
         const s = ck[qi] || {},
           ok = solved || s.right;
@@ -4425,7 +4424,7 @@ function trManualView() {
       }).join('') +
       `<div class="btns trnav"><button class="btn" data-tr="manprev">‹ Back</button><button class="btn go" data-tr="mannext" ${solved || c.check.every((_, qi) => ck[qi] && ck[qi].right) ? '' : 'disabled'}>Next ›</button></div>`;
   }
-  return h + '</div>';
+  return h + '</div></div>';
 }
 function trManMark(id) {
   if (TRN.man.doneSet[id]) return;
@@ -4461,13 +4460,13 @@ function trResView() {
   if (TRN.doc) {
     const r = TRN.res.resources.find((x) => x.id === TRN.doc.id);
     if (r && r.sections)
-      return `<div class="btns"><button class="btn sm" data-tr="resback">‹ Resources</button></div><div class="card trdoc"><h2 style="margin-top:0">${r.icon} ${trEsc(r.title)}</h2><p class="sub">${trEsc(r.blurb)}</p>
-        ${r.sections.length > 1 ? `<div class="trchips">${r.sections.map((s, i) => `<button class="trchip" data-tr="jump" data-i="${i}">${trEsc(s.title)}</button>`).join('')}</div>` : ''}
-        ${r.sections.map((s, i) => `<section id="trsec${i}"><h3>${trEsc(s.title)}</h3>${s.b.map((b) => (typeof b === 'string' ? b : `<div data-trlive="${trEsc(b.live)}"></div>`)).join('')}</section>`).join('')}</div>`;
+      return `<div class="btns" style="margin-bottom:4px"><button class="btn sm" data-tr="resback">‹ Resources</button></div><h2>${trEsc(r.title)}</h2>
+        ${r.sections.map((s, i) => `<div class="card trdoc" id="trsec${i}"><div class="trbody">${r.sections.length > 1 ? `<div class="trtitle">${trEsc(s.title)}</div>` : ''}${s.b.map((b) => (typeof b === 'string' ? b : `<div data-trlive="${trEsc(b.live)}"></div>`)).join('')}</div></div>`).join('')}`;
   }
-  return `<div class="trsearch"><input id="trq" type="search" placeholder="Search: a drink, a policy, a cleaning step…" value="${trEsc(TRN.q)}" autocomplete="off"></div><div id="trhits"></div>
-    <div id="trgrid" class="trgrid"><button class="trcard" data-trsub="manual"><span>📖</span><b>Employee Manual</b><small>${TRN.home && TRN.home.manual && TRN.home.manual.acked ? 'Signed' : 'Read and sign it'}</small></button>
-    ${TRN.res.resources.map((r) => `<button class="trcard" ${r.more ? `data-more="${r.more}"` : r.tab ? `data-tab="${r.tab}"` : `data-tr="doc" data-id="${trEsc(r.id)}"`}><span>${r.icon}</span><b>${trEsc(r.title)}${r.who === 'lead' ? ' <i class="pill mute">Leads</i>' : ''}</b><small>${trEsc(r.blurb)}</small></button>`).join('')}</div>`;
+  const item = (attrs, ic, t, sub) => rowBtn(attrs, `<span class="tric" aria-hidden="true">${ic}</span><div class="txt"><b>${t}</b><div class="sub">${sub}</div></div><span>›</span>`);
+  return `<input class="search" id="trq" type="search" placeholder="Search a drink, a policy, a cleaning step…" value="${trEsc(TRN.q)}" autocomplete="off" aria-label="Search resources"><div id="trhits"></div>
+    <div id="trgrid"><h2>Library</h2><div class="card">${item('data-trsub="manual"', '📖', 'Employee Manual', TRN.home && TRN.home.manual && TRN.home.manual.acked ? 'Signed' : 'Read and sign it')}
+    ${TRN.res.resources.map((r) => item(r.more ? `data-more="${r.more}"` : r.tab ? `data-tab="${r.tab}"` : `data-tr="doc" data-id="${trEsc(r.id)}"`, r.icon, trEsc(r.title) + (r.who === 'lead' ? ' <span class="pill mute">Leads</span>' : ''), trEsc(r.blurb))).join('')}</div></div>`;
 }
 const trStrip = (h) => {
   const d = document.createElement('div');
@@ -4539,7 +4538,7 @@ function trAfter() {
     el.dataset.ready = '1';
     if (el.dataset.trlive === 'sidework') trSidework(el, '');
     if (el.dataset.trlive === 'deposit')
-      el.innerHTML = `<div class="card" style="margin:10px 0"><b>Deposit calculator</b><label class="f">Drawer total from Count Bills ($)<input type="number" step="0.01" data-trdep placeholder="242.30"></label><div class="trdepout"></div></div>`;
+      el.innerHTML = `<div class="hint trdep"><b>Deposit calculator</b><label class="f" style="margin-top:8px">Drawer total from Count Bills ($)<input type="number" step="0.01" inputmode="decimal" data-trdep placeholder="242.30"></label><div class="trdepout"></div></div>`;
   });
   if (TRN.jump != null) {
     const s = $('#trsec' + TRN.jump);
@@ -4552,8 +4551,8 @@ function trSidework(el, day) {
     days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
     now = days[(new Date().getDay() + 6) % 7],
     cur = day || now;
-  el.innerHTML = `<div class="trchips">${days.map((d) => `<button class="trchip ${d === cur ? 'on' : ''}" data-trday="${d}">${d.slice(0, 3)}${d === now ? ' · today' : ''}</button>`).join('')}</div>
-    <h3>${cur}</h3><ul class="tick">${(SW[cur] || []).map((t) => `<li><b>${trEsc(t[0])}:</b> ${trEsc(t[1])}</li>`).join('')}</ul>`;
+  el.innerHTML = `<div class="seg">${days.map((d) => `<button data-trday="${d}" aria-pressed="${d === cur}">${d.slice(0, 3)}${d === now ? '•' : ''}</button>`).join('')}</div>
+    <div class="trtitle">${cur}${cur === now ? ' · today' : ''}</div><ul class="tick">${(SW[cur] || []).map((t) => `<li><span><b>${trEsc(t[0])}</b><br><span class="sub">${trEsc(t[1])}</span></span></li>`).join('')}</ul>`;
   const key = 'pt-tick-sidework-' + cur + '-' + trToday();
   let st = {};
   try {
@@ -4569,42 +4568,44 @@ function trFormsView() {
   const H = TRN.home;
   if (!H) return '<div class="card"><div class="empty">Loading…</div></div>';
   const F = H.food || {},
-    names = (data.people || []).map((p) => `<option>${trEsc(p.name)}</option>`).join('');
+    names = (data.people || []).map((p) => `<option value="${trEsc(p.name)}">`).join(''),
+    f = (label, inner) => `<label class="f">${label}${inner}</label>`;
   let h = '';
-  (H.docs || []).forEach((d) => {
-    h += `<div class="card" style="border-left:4px solid #b5462b"><h2 style="margin-top:0">Please sign: ${trEsc(d.title)}</h2><p class="sub">From ${trEsc(d.by)} · ${trEsc(d.filed)}</p>
-      ${d.fields.map((f) => `<div class="row" style="display:block"><div class="sub">${trEsc(f[0])}</div><div>${trEsc(f[1]).replace(/\n/g, '<br>')}</div></div>`).join('')}
-      <p class="sub">Signing means you received this, not that you agree. You can add your side below.</p>
-      <label class="f">Your comments (optional)<textarea rows="3" data-trcomment="${trEsc(d.id)}"></textarea></label><div class="btns"><button class="btn go" data-tr="sign" data-id="${trEsc(d.id)}">Sign as received</button></div></div>`;
-  });
-  h += `<h2>Food handler certificate</h2><div class="card">` +
-    (F.onFile
-      ? `<div class="row"><div class="txt"><b>On file</b><div class="sub">Uploaded ${trEsc(F.onFile.uploaded)}${F.onFile.expires ? ' · expires ' + trEsc(F.onFile.expires) : ''}</div></div><span class="pill ok">✓</span></div>`
-      : `<p>${F.overdue ? '<span class="pill warn">Overdue</span> ' : `<span class="pill mute">Due ${trEsc(F.due || 'by the end of week 2')}</span> `}Upload your accredited Texas food handler certificate. We pay back the course (up to $${F.max}) on your next paycheck.</p>
-        <label class="f">Certificate (photo or PDF)<input type="file" id="trfc" accept="image/*,application/pdf"></label>
-        <label class="f">Receipt (optional)<input type="file" id="trfr" accept="image/*,application/pdf"></label>
-        <label class="f">Expiration date<input id="trfe" placeholder="MM/DD/YYYY"></label><label class="f">What you paid ($)<input id="trfp" type="number" step="0.01" inputmode="decimal"></label>
-        <div class="btns"><button class="btn go" data-tr="food">Upload</button></div>`) +
-    `</div>`;
-  h += `<h2>Report a concern</h2><div class="card"><p class="sub">Harassment, discrimination, safety, or anything you aren't comfortable raising on shift. Handled as privately as possible; retaliation for reporting in good faith is not allowed.</p>
-    <label class="f">Kind of concern<select id="trck"><option>Harassment</option><option>Sexual harassment</option><option>Discrimination</option><option>Threats or violence</option><option>Safety</option><option>Other</option></select></label>
-    <label class="f">Who was involved<input id="trci"></label><label class="f">When<input id="trcd" placeholder="Date and time, as best you remember"></label><label class="f">Where<input id="trcw"></label>
-    <label class="f">What happened<textarea id="trcx" rows="5"></textarea></label><label class="f">Witnesses<input id="trcv"></label><label class="f">Reported before? To whom?<input id="trcb"></label>
-    <label class="row" style="gap:10px"><input type="checkbox" id="trcm" style="width:auto;min-height:0"> This involves the Manager</label>
-    <div class="hint" id="trcmnote" hidden>Please report this directly to the owner: ${trEsc(H.owner)}. Concerns that involve the Manager aren't submitted through the app.</div>
-    <div class="btns" id="trcgo"><button class="btn go" data-tr="concern">Submit privately</button></div></div>`;
+  if ((H.docs || []).length) {
+    h += '<h2>Waiting for your signature</h2>';
+    H.docs.forEach((d) => {
+      h += `<div class="card"><div class="row"><div class="txt"><b>${trEsc(d.title)}</b><div class="sub">From ${trEsc(d.by)} · ${trEsc(d.filed)}</div></div><span class="pill warn">Sign</span></div>
+        ${d.fields.map((x) => `<div class="row"><div class="txt"><div class="sub">${trEsc(x[0])}</div><div>${trEsc(x[1]).replace(/\n/g, '<br>')}</div></div></div>`).join('')}
+        <form class="stack" onsubmit="return false"><div class="sub">Signing means you received this, not that you agree. You can add your side below.</div>
+        ${f('Your comments (optional)', `<textarea rows="3" data-trcomment="${trEsc(d.id)}"></textarea>`)}<button class="btn go" data-tr="sign" data-id="${trEsc(d.id)}">Sign as received</button></form></div>`;
+    });
+  }
+  h += '<h2>Food handler certificate</h2><div class="card">';
+  h += F.onFile
+    ? `<div class="row"><div class="txt"><b>Certificate on file</b><div class="sub">Uploaded ${trEsc(F.onFile.uploaded)}${F.onFile.expires ? ' · expires ' + trEsc(F.onFile.expires) : ''}</div></div><span class="pill ok">Done</span></div>`
+    : `<div class="row"><div class="txt"><b>Upload your certificate</b><div class="sub">An accredited Texas food handler certificate. We pay back the course (up to $${F.max}) on your next paycheck.</div></div><span class="pill ${F.overdue ? 'warn' : 'mute'}">${F.overdue ? 'Overdue' : 'Due ' + trEsc(F.due || 'week 2')}</span></div>
+      <form class="stack" onsubmit="return false">${f('Certificate (photo or PDF)', '<input type="file" id="trfc" accept="image/*,application/pdf">')}${f('Receipt (optional)', '<input type="file" id="trfr" accept="image/*,application/pdf">')}
+      <div class="trtwo">${f('Expiration date', '<input id="trfe" placeholder="MM/DD/YYYY">')}${f('What you paid ($)', '<input id="trfp" type="number" step="0.01" inputmode="decimal" placeholder="7.00">')}</div>
+      <button class="btn go" data-tr="food">Upload</button></form>`;
+  h += '</div>';
+  h += `<h2>Report a concern</h2><div class="card"><div class="row"><div class="txt"><b>Confidential</b><div class="sub">Harassment, discrimination, safety, or anything you aren't comfortable raising on shift. Handled as privately as possible. Retaliation for reporting in good faith is not allowed.</div></div></div>
+    <form class="stack" onsubmit="return false">${f('Kind of concern', '<select id="trck"><option>Harassment</option><option>Sexual harassment</option><option>Discrimination</option><option>Threats or violence</option><option>Safety</option><option>Other</option></select>')}
+    ${f('Who was involved', '<input id="trci">')}<div class="trtwo">${f('When', '<input id="trcd" placeholder="Date and time">')}${f('Where', '<input id="trcw">')}</div>
+    ${f('What happened', '<textarea id="trcx" rows="5"></textarea>')}${f('Witnesses', '<input id="trcv">')}${f('Reported before? To whom?', '<input id="trcb">')}
+    <label class="trcheck"><input type="checkbox" id="trcm"> This involves the Manager</label>
+    <div class="hint" id="trcmnote" hidden style="margin:0">Please report this directly to the owner: ${trEsc(H.owner)}. Concerns that involve the Manager aren't submitted through the app.</div>
+    <button class="btn go" data-tr="concern" id="trcgo">Submit privately</button></form></div>`;
   if (lead())
-    h += `<h2>Lead report</h2><div class="card"><p class="sub">Repeat conduct or performance (Policy 3), cash over $5 (1), safety or equipment (4), call-offs (13), trainee notes (7). Saved as a PDF in the person's HR folder.</p>
-      <label class="f">Type<select id="trlt"><option>Repeat conduct issue</option><option>Repeat performance issue</option><option>Cash discrepancy over $5</option><option>Safety or equipment incident</option><option>Staff called off or sent home</option><option>Trainee progress</option><option>Guest recovery beyond one item</option><option>Other</option></select></label>
-      <label class="f">About (if it's about one person)<input id="trla" list="trnames"></label><label class="f">Date<input id="trld"></label><label class="f">Policy<input id="trlp" placeholder="e.g. Policy 3"></label>
-      <label class="f">What happened<textarea id="trlw" rows="4"></textarea></label><label class="f">Action taken<textarea id="trlx" rows="3"></textarea></label><div class="btns"><button class="btn go" data-tr="leadreport">File report</button></div></div>`;
+    h += `<h2>Lead report</h2><div class="card"><div class="row"><div class="txt"><div class="sub">Repeat conduct or performance (Policy 3), cash over $5 (1), safety or equipment (4), call-offs (13), trainee notes (7). Saved as a PDF in the person's HR folder.</div></div></div>
+      <form class="stack" onsubmit="return false">${f('Type', '<select id="trlt"><option>Repeat conduct issue</option><option>Repeat performance issue</option><option>Cash discrepancy over $5</option><option>Safety or equipment incident</option><option>Staff called off or sent home</option><option>Trainee progress</option><option>Guest recovery beyond one item</option><option>Other</option></select>')}
+      <div class="trtwo">${f('About (one person, if any)', '<input id="trla" list="trnames">')}${f('Date', '<input id="trld">')}</div>${f('Policy', '<input id="trlp" placeholder="e.g. Policy 3">')}
+      ${f('What happened', '<textarea id="trlw" rows="4"></textarea>')}${f('Action taken', '<textarea id="trlx" rows="3"></textarea>')}<button class="btn go" data-tr="leadreport">File report</button></form></div>`;
   if (mgr())
-    h += `<h2>Corrective action / write-up</h2><div class="card"><p class="sub">Saved as a PDF in the employee's HR folder. They sign it as received in the app.</p>
-      <label class="f">Employee<input id="trwe" list="trnames"></label>
-      <label class="f">Step<select id="trws"><option>Coaching (documented)</option><option>Documented verbal warning</option><option>Written warning</option><option>Final written warning</option><option>Suspension</option><option>Termination</option></select></label>
-      <label class="f">Date of incident<input id="trwd"></label><label class="f">Policy or standard<input id="trwp"></label><label class="f">What happened<textarea id="trww" rows="4"></textarea></label>
-      <label class="f">Previous steps (dates)<textarea id="trwr" rows="2"></textarea></label><label class="f">What must change<textarea id="trwx" rows="3"></textarea></label>
-      <label class="f">If it happens again<input id="trwc"></label><label class="f">Probation (if any)<input id="trwb"></label><div class="btns"><button class="btn go" data-tr="writeup">Save write-up</button></div></div>`;
+    h += `<h2>Corrective action / write-up</h2><div class="card"><div class="row"><div class="txt"><div class="sub">Saved as a PDF in the employee's HR folder. They sign it as received in the app.</div></div></div>
+      <form class="stack" onsubmit="return false"><div class="trtwo">${f('Employee', '<input id="trwe" list="trnames">')}${f('Step', '<select id="trws"><option>Coaching (documented)</option><option>Documented verbal warning</option><option>Written warning</option><option>Final written warning</option><option>Suspension</option><option>Termination</option></select>')}</div>
+      <div class="trtwo">${f('Date of incident', '<input id="trwd">')}${f('Policy or standard', '<input id="trwp">')}</div>${f('What happened', '<textarea id="trww" rows="4"></textarea>')}
+      ${f('Previous steps (dates)', '<textarea id="trwr" rows="2"></textarea>')}${f('What must change', '<textarea id="trwx" rows="3"></textarea>')}
+      <div class="trtwo">${f('If it happens again', '<input id="trwc">')}${f('Probation (if any)', '<input id="trwb">')}</div><button class="btn go" data-tr="writeup">Save write-up</button></form></div>`;
   return h + `<datalist id="trnames">${names}</datalist>`;
 }
 /* --- Dashboard --- */
@@ -4632,24 +4633,32 @@ function trDashView() {
       food: T.filter((p) => !p.food.on && p.food.overdue),
       rc: T.filter((p) => p.unread),
     };
-  const stat = (k, n, l) => `<button class="trstat ${TRN.filter === k ? 'on' : ''}" data-trfilter="${k}"><b>${n}</b><span>${l}</span></button>`;
+  const stat = (k, l) => rowBtn(`data-trfilter="${k}"`, `<div class="txt"><b>${l}</b></div><span class="pill ${TRN.filter === k ? 'ok' : groups[k].length ? '' : 'mute'}">${groups[k].length}</span><span>${TRN.filter === k ? '✕' : '›'}</span>`);
   const order = { T: 0, L1: 1, L2P: 2, L2: 3, LD: 4, MG: 5 },
     list = (groups[TRN.filter] || T).slice().sort((a, b) => order[a.level.code] - order[b.level.code] || a.name.localeCompare(b.name));
-  const short = (n) => n.replace(/^Barista\s+/i, '').replace(/\s*\(.*?\)\s*/g, ' ').replace(/\s+-\s+.*$/, '').trim();
-  let h = `<div class="trstats">${stat('train', groups.train.length, 'still training')}${stat('ack', groups.ack.length, 'need a Level II acknowledgment')}${stat('man', groups.man.length, "haven't signed the manual")}${stat('food', groups.food.length, 'overdue food handler')}${stat('rc', groups.rc.length, 'unread recipe changes')}</div>`;
-  h += `<div class="card">${list
-    .map((p) => {
-      const tests = D.tests.map((t) => (p.tests[t] ? `<span class="pill ${p.tests[t].s === 'pass' ? 'ok' : p.tests[t].s === 'wait' ? 'mute' : 'warn'}">${trEsc(short(t))}${p.tests[t].s === 'pass' ? ' ✓' : p.tests[t].s === 'wait' ? ' …' : ' ✗'}</span>` : '')).join(' ');
-      return `<div class="row" style="display:block"><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><b>${trEsc(p.name)}</b>${levelPill(p.name)}${p.manual ? '' : '<span class="pill warn">Manual unsigned</span>'}${p.unread ? `<span class="pill mute">🔔 ${p.unread}</span>` : ''}</div>
-        <div style="margin-top:4px">${tests || '<span class="sub">No tests yet</span>'}</div>
-        <div class="sub" style="margin-top:4px">Food handler: ${p.food.on ? 'on file' + (D.manager && p.food.amount ? ' · $' + p.food.amount.toFixed(2) : '') : (p.food.overdue ? '<b style="color:#b5462b">overdue</b>' : 'due') + (p.food.due ? ' ' + trEsc(p.food.due) : '')}${p.prof ? ' · Level II acknowledged by ' + trEsc(first(p.prof)) : ''}</div>
-        ${p.level.code === 'L2P' ? `<div class="btns" style="margin-top:6px"><button class="btn sm go" data-tr="ackprof" data-who="${trEsc(p.name)}">Acknowledge Level II proficiency</button></div>` : ''}</div>`;
-    })
-    .join('')}</div>`;
-  if (D.changes.length) h += `<h2>Recent recipe changes</h2><div class="card">${D.changes.map((c) => `<div class="row"><div class="txt"><b>${trEsc(c.recipe)}</b><div class="sub">${trEsc(c.change)} · ${trEsc(c.date)}</div></div></div>`).join('')}</div>`;
+  const short = (n) => n.replace(/^Barista\s+/i, '').replace(/\s*\(.*?\)\s*/g, ' ').replace(/\s+[–-]\s+.*$/, '').trim();
+  const names = { train: 'Still training', ack: 'Need a Level II acknowledgment', man: "Haven't signed the manual", food: 'Overdue food handler', rc: 'Unread recipe changes' };
+  let h = `<h2>Needs attention</h2><div class="card">${Object.keys(names).map((k) => stat(k, names[k])).join('')}</div>`;
+  h += `<h2>${TRN.filter ? trEsc(names[TRN.filter]) : 'Team'}</h2><div class="card">${
+    list
+      .map((p) => {
+        const tests = D.tests.map((t) => (p.tests[t] ? `<span class="pill ${p.tests[t].s === 'pass' ? 'ok' : p.tests[t].s === 'wait' ? 'mute' : 'warn'}">${trEsc(short(t))}</span>` : '')).filter(Boolean).join(' ');
+        const food = p.food.on ? 'Food handler on file' + (D.manager && p.food.amount ? ' · $' + p.food.amount.toFixed(2) : '') : 'Food handler ' + (p.food.overdue ? 'overdue' : 'due') + (p.food.due ? ' ' + trEsc(p.food.due) : '');
+        return `<div class="row trperson"><div class="txt"><b>${trEsc(p.name)}</b>${levelPill(p.name)}
+          <div class="trtests">${tests || '<span class="sub">No tests yet</span>'}</div>
+          <div class="sub">${p.manual ? 'Manual signed' : '<span style="color:var(--warn)">Manual not signed</span>'} · ${p.food.overdue && !p.food.on ? `<span style="color:var(--warn)">${food}</span>` : food}${p.unread ? ' · 🔔 ' + p.unread + ' unread' : ''}${p.prof ? ' · Level II acknowledged by ' + trEsc(first(p.prof)) : ''}</div></div>
+          ${p.level.code === 'L2P' ? `<button class="btn sm go" data-tr="ackprof" data-who="${trEsc(p.name)}">Acknowledge</button>` : ''}</div>`;
+      })
+      .join('') || '<div class="empty">Nobody here.</div>'
+  }</div>`;
+  if (D.changes.length) h += `<h2>Recent recipe changes</h2><div class="card">${D.changes.map((c) => `<div class="row"><div class="txt"><b>${trEsc(c.recipe)}</b><div class="sub">${trEsc(c.type)} · ${trEsc(c.date)}</div></div><span class="pill mute">${trEsc(c.change)}</span></div>`).join('')}</div>`;
   if (D.manager) {
-    h += `<h2>HR records</h2><div class="card">${D.hrFolder ? `<div class="row"><div class="txt"><b>HR folder</b></div><a class="btn sm" href="${trEsc(D.hrFolder)}" target="_blank" rel="noopener">Open ↗</a></div>` : ''}${D.hr.map((x) => `<div class="row"><div class="txt"><b>${trEsc(x.type)}</b><div class="sub">${trEsc(x.about)} · by ${trEsc(x.by)} · ${trEsc(x.date)} · ${trEsc(x.status)}</div></div>${x.link ? `<a class="btn sm" href="${trEsc(x.link)}" target="_blank" rel="noopener">PDF ↗</a>` : ''}</div>`).join('') || '<div class="empty">Nothing filed yet.</div>'}</div>`;
-    h += `<h2>Reimbursements</h2><div class="card">${D.reimb.map((x) => `<div class="row"><div class="txt"><b>${trEsc(x.name)} · $${x.amount.toFixed(2)}</b><div class="sub">${trEsc(x.type)} · pay period from ${trEsc(x.period)} · ${trEsc(x.status)}</div></div>${x.status === 'Queued' ? `<button class="btn sm" data-tr="void" data-id="${trEsc(x.id)}">Void</button>` : x.link ? `<a class="btn sm" href="${trEsc(x.link)}" target="_blank" rel="noopener">Payroll ↗</a>` : ''}</div>`).join('') || '<div class="empty">None yet.</div>'}</div>`;
+    h += `<h2>HR records</h2><div class="card">${D.hrFolder ? `<a class="row rb" href="${trEsc(D.hrFolder)}" target="_blank" rel="noopener" style="text-decoration:none"><div class="txt"><b>Open the HR folder</b><div class="sub">Every PDF, filed by person</div></div><span>↗</span></a>` : ''}${
+      D.hr.map((x) => `<div class="row"><div class="txt"><b>${trEsc(x.type)}</b><div class="sub">${trEsc(x.about)} · by ${trEsc(first(x.by))} · ${trEsc(x.date)}</div></div>${x.link ? `<a class="btn sm" href="${trEsc(x.link)}" target="_blank" rel="noopener">PDF</a>` : `<span class="pill mute">${trEsc(x.status)}</span>`}</div>`).join('') || '<div class="empty">Nothing filed yet.</div>'
+    }</div>`;
+    h += `<h2>Reimbursements</h2><div class="card">${
+      D.reimb.map((x) => `<div class="row"><div class="txt"><b>${trEsc(x.name)} · $${x.amount.toFixed(2)}</b><div class="sub">${trEsc(x.type)} · pay period from ${trEsc(x.period)}</div></div>${x.status === 'Queued' ? `<span class="pill mute">Queued</span><button class="btn sm" data-tr="void" data-id="${trEsc(x.id)}">Void</button>` : x.link ? `<a class="btn sm" href="${trEsc(x.link)}" target="_blank" rel="noopener">Payroll</a>` : `<span class="pill mute">${trEsc(x.status)}</span>`}</div>`).join('') || '<div class="empty">None yet.</div>'
+    }</div>`;
   }
   return h;
 }
@@ -4670,7 +4679,7 @@ document.addEventListener('input', (e) => {
   }
   if (e.target.dataset && e.target.dataset.trdep !== undefined) {
     const t = parseFloat(e.target.value),
-      out = e.target.closest('.card').querySelector('.trdepout');
+      out = e.target.closest('.trdep').querySelector('.trdepout');
     if (!(t >= 0)) return (out.innerHTML = '');
     const r = Math.round(t),
       dep = r - 200;
