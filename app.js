@@ -420,14 +420,14 @@ const SECTION_FIELDS = {
   lists: ['checklists', 'history'],
   news: ['announcements'],
   sched: ['shifts', 'unpublished', 'positions', 'presets', 'availability'],
-  clock: ['lateAfter', 'overAfter', 'shiftTypes', 'geo', 'punches', 'open', 'floor'],
+  clock: ['lateAfter', 'overAfter', 'shiftTypes', 'geo', 'punches', 'open', 'floor', 'handoffs', 'handoffRequired', 'clockTypes', 'clockSets', 'onClock'],
   prep: ['prep'],
   chat: ['chat', 'channels'],
   reqs: ['requests'],
   links: ['links'],
   recipes: ['recipes', 'recipeSheet'],
-  team: ['users', 'pay', 'period', 'myPay'],
-  train: ['training'],
+  team: ['users', 'pay', 'period', 'myPay', 'levels', 'trBadge', 'sales'],
+  train: ['training', 'myTraining'],
 };
 const haveNow = () => (data && data.v && data.me ? data.v : undefined);
 let HIST = { key: '', from: '', shifts: [], punches: [] },
@@ -1401,6 +1401,9 @@ setInterval(() => {
 
 function viewToday() {
   if (shop()) return viewShopHome();
+  if (HO.open) return viewHandoff();
+  if (SRCH.open) return viewSearch();
+  if (!TRN.home) trLoadHome();
   const d = data,
     today = shiftsOn(T()).filter(live),
     next = myNextShift();
@@ -1447,9 +1450,10 @@ function viewToday() {
       ? `<div class="hint"><b>Get notifications on this ${deviceKind()}.</b> ${pushNeedsHome() ? 'On iPhone, add the app to your Home Screen first, then turn them on.' : 'New messages, schedule changes and prep for your shift.'}
       <div class="btns" style="margin-top:8px">${pushNeedsHome() ? '<button class="btn sm go" data-more="push">Show me how</button>' : '<button class="btn sm go" data-pushon>Turn on</button>'}<button class="btn sm" data-nopush>Not now</button></div></div>`
       : '';
-  return `<h1>${hi}, ${esc(first(d.me.name))}</h1>${pubHint}${pushHint}${remindHint}${clockCard()}${laborCard()}${salesCard()}${prepCard}
+  return `<h1>${hi}, ${esc(first(d.me.name))}</h1>
+    <button class="gsbar" data-gsopen aria-label="Search everything"><span aria-hidden="true">⌕</span>Search recipes, checklists, people…</button>
+    ${pubHint}${pushHint}${remindHint}${clockCard()}${handoffCard()}${forYouCard()}${laborCard()}${salesCard()}${prepCard}
     ${unread.length ? `<div class="card">${unread.slice(0, 3).map(annRow).join('')}</div>` : ''}
-    ${d.trBadge && (d.trBadge.recipes || d.trBadge.sign || d.trBadge.manual) ? `<div class="card">${rowBtn('data-tab="tests"', `<div class="txt"><b>${[d.trBadge.recipes ? d.trBadge.recipes + ' recipe change' + (d.trBadge.recipes > 1 ? 's' : '') + ' to read' : '', d.trBadge.sign ? 'A document to sign' : '', d.trBadge.manual ? 'Sign the Employee Manual' : ''].filter(Boolean).join(' · ')}</b><div class="sub">Training</div></div><span>›</span>`).replace('<div class="txt">', '<img class="trmark" src="brand/bird-gold.png" alt=""><div class="txt">')}</div>` : ''}
     ${chatN ? `<div class="card">${rowBtn('data-tab="chat"', `<div class="txt"><b>${chatN} unread message${chatN > 1 ? 's' : ''}</b></div><span>›</span>`)}</div>` : ''}
     <h2>Working today</h2><div class="card">${today.length ? today.map((s) => `<div class="row ${s.name === d.me.name ? 'mine' : ''}"><div class="txt"><b>${esc(s.name)}</b>${levelPill(s.name)}<div class="sub">${t12(s.start)}–${t12(s.end)}${s.position ? ' · ' + esc(s.position) : ''}</div></div>${mgr() ? clockState(s) : ''}</div>`).join('') : '<div class="empty">Nobody scheduled today.</div>'}</div>
     <h2>Checklists</h2><div class="card">${(d.checklists || []).map((c) => rowBtn(`data-golist="${esc(c.list)}"`, `<div class="txt"><b>${esc(c.list)}</b><div class="progress"><i style="width:${c.total ? Math.round((c.done / c.total) * 100) : 0}%"></i></div></div><span class="pill ${c.done === c.total && c.total ? 'ok' : 'mute'}">${c.done}/${c.total}</span>`)).join('') || '<div class="empty">No checklists today.</div>'}</div>
@@ -4301,6 +4305,183 @@ function levelPill(name) {
 }
 let trainSrc = '',
   trainUntil = 0;
+/* ===== Drop 1: Today inbox, search everywhere, shift handoff ===== */
+/** Where this person is: 'new' (trainee, Level I, or manual not signed), 'staff', or 'lead'. Decides the bottom bar. */
+function stage() {
+  if (!data || !data.me) return 'staff';
+  if (lead()) return 'lead';
+  const L = data.levels && data.levels[data.me.name],
+    c = L ? L.code : 'T';
+  return /^(T|L1)$/.test(c) || (data.trBadge && data.trBadge.manual) ? 'new' : 'staff';
+}
+const SRCH = { open: false, q: '' };
+const HO = { open: false, low: '', prepped: '', issues: '', note: '', nothing: false, busy: false };
+/** Everything someone might look for, from what the app already has on this phone. */
+function searchIndex() {
+  const idx = [];
+  (data.recipes || []).forEach((r) => idx.push({ w: r.type === 'Prep' ? 'Prep recipe' : 'Drink', t: r.name, x: [r.cat, r.size, (r.ing || []).join(' '), (r.steps || []).join(' '), r.notes].join(' '), a: `data-recipe="${esc(r.id)}"` }));
+  (data.checklists || []).forEach((c) => (c.items || []).forEach((it) => idx.push({ w: 'Checklist · ' + c.list, t: it.task, x: [it.section, it.notes].join(' '), a: `data-golist="${esc(c.list)}"` })));
+  (data.people || []).filter((p) => p.id !== data.meId).forEach((p) => idx.push({ w: 'Message', t: p.name, x: p.role, a: `data-dm="${esc(p.id)}" data-dmname="${esc(p.name)}"` }));
+  (data.announcements || []).forEach((a) => idx.push({ w: 'Announcement', t: a.title, x: a.message, a: 'data-more="news"' }));
+  (data.links || []).forEach((l) => idx.push({ w: 'Document', t: l.name, x: l.tier || '', a: `data-tr="doclink" data-id="${esc(l.id)}"` }));
+  [['Time off & swaps', 'requests', 'request time off swap cover'], ['Availability', 'avail', 'availability days'], [mgr() ? 'Time sheets' : 'My time', 'time', 'hours pay timecard punches'], ['Reminders', 'reminders', 'notifications email shift reminders']].forEach(([t, k, x]) => idx.push({ w: 'App', t, x, a: `data-more="${k}"` }));
+  if (TRN.res) {
+    TRN.res.resources.forEach((r) => (r.sections || []).forEach((s, i) => idx.push({ w: r.title, t: s.title, x: s.b.filter((b) => typeof b === 'string').map(trStrip).join(' '), a: `data-tr="doc" data-id="${esc(r.id)}" data-i="${i}"` })));
+    TRN.res.manual.forEach((c) => c.sections.forEach((s) => idx.push({ w: 'Employee Manual', t: s.title, x: s.b.filter((b) => typeof b === 'string').map(trStrip).join(' '), a: 'data-trsub="manual"' })));
+  }
+  return idx;
+}
+function runSearch() {
+  const box = $('#gshits');
+  if (!box) return;
+  const words = SRCH.q.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return (box.innerHTML = '<p class="sub" style="margin:10px 4px">Recipes, checklist steps, people, announcements, documents, the manual and resources.</p>');
+  const hits = searchIndex()
+    .map((e) => {
+      const hay = (e.t + ' ' + e.x).toLowerCase();
+      return words.every((w) => hay.indexOf(w) >= 0) ? { e, s: words.filter((w) => e.t.toLowerCase().indexOf(w) >= 0).length } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.s - a.s)
+    .slice(0, 50);
+  const snip = (t) => {
+    const lo = String(t).toLowerCase();
+    let at = -1;
+    words.some((w) => (at = lo.indexOf(w)) >= 0);
+    const s = Math.max(0, at - 40);
+    let o = esc((s ? '…' : '') + String(t).slice(s, s + 140) + (s + 140 < String(t).length ? '…' : ''));
+    words.forEach((w) => w.length > 1 && (o = o.replace(new RegExp('(' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'ig'), '<mark>$1</mark>')));
+    return o;
+  };
+  box.innerHTML = hits.length
+    ? `<div class="card">${hits.map(({ e }) => `<button class="row rb trhit" ${e.a} data-gsclose><div class="txt"><div class="trw">${esc(e.w)}</div><b>${snip(e.t)}</b>${e.x ? `<div class="sub">${snip(e.x)}</div>` : ''}</div><span>›</span></button>`).join('')}</div>`
+    : '<p class="sub" style="margin:10px 4px">Nothing matches. Try fewer or different words.</p>';
+}
+function viewSearch() {
+  if (!TRN.res && !lead()) trLoadRes();
+  else if (!TRN.res) trLoadRes();
+  setTimeout(() => {
+    const i = $('#gsq');
+    if (i && document.activeElement !== i) i.focus();
+    runSearch();
+  }, 0);
+  return `<div class="btns" style="margin-bottom:8px"><button class="btn sm" data-gsclose>‹ Back</button></div><h1>Search</h1>
+    <input class="search" id="gsq" type="search" placeholder="Search everything" value="${esc(SRCH.q)}" autocomplete="off" aria-label="Search everything"><div id="gshits"></div>`;
+}
+/** The handoff the person leaves when they clock out. */
+function viewHandoff() {
+  const f = (id, label, ph, rows) => `<label class="f">${label}<textarea id="${id}" rows="${rows || 2}" placeholder="${ph}">${esc(HO[id.slice(2)] || '')}</textarea></label>`;
+  return `<div class="btns" style="margin-bottom:8px"><button class="btn sm" data-hocancel>‹ Back</button></div><h1>Shift handoff</h1>
+    <p class="sub" style="margin:-4px 4px 10px">The next shift sees this on Today. Then you're clocked out.</p>
+    <div class="card"><form class="stack" onsubmit="return false">
+      ${f('holow', 'Ran out or running low', 'e.g. oat milk, 12oz lids, almond croissants')}
+      ${f('hoprepped', 'Prepped', 'e.g. chai concentrate, 2 iced teas, matcha')}
+      ${f('hoissues', 'Equipment or issues', 'e.g. group 3 dripping, dish machine slow to drain')}
+      ${f('honote', 'Anything else the next shift should know', '', 3)}
+      <label class="trcheck"><input type="checkbox" id="honothing" ${HO.nothing ? 'checked' : ''}> Nothing to hand off</label>
+      <button class="btn go" data-hosubmit ${HO.busy ? 'disabled' : ''}>${HO.busy ? 'Clocking out…' : 'Save handoff and clock out'}</button></form></div>`;
+}
+/** Handoffs from the last day the person hasn't read yet. */
+function handoffCard() {
+  const hs = (data.handoffs || []).filter((h) => !h.read);
+  if (!hs.length) return '';
+  const part = (l, v) => (v ? `<div class="row"><div class="txt"><div class="sub">${l}</div><div>${esc(v).replace(/\n/g, '<br>')}</div></div></div>` : '');
+  return `<h2>Shift handoff</h2>${hs
+    .map((h) => `<div class="card"><div class="row"><img class="trmark" src="brand/bird-gold.png" alt=""><div class="txt"><b>From ${esc(first(h.name))}</b><div class="sub">${timeOf(h.at)}</div></div><button class="btn sm go" data-horead="${esc(h.id)}">Got it</button></div>
+      ${part('Ran out or running low', h.low)}${part('Prepped', h.prepped)}${part('Equipment or issues', h.issues)}${part('Note', h.note)}</div>`)
+    .join('')}`;
+}
+/** One list of what needs this person, most urgent first. */
+function forYouCard() {
+  const d = data,
+    b = d.trBadge || {},
+    items = [];
+  const L = d.levels && d.levels[d.me.name],
+    code = L ? L.code : '';
+  const add = (attrs, title, sub, tone) => items.push(rowBtn(attrs, `<span class="fydot ${tone || ''}" aria-hidden="true"></span><div class="txt"><b>${title}</b>${sub ? `<div class="sub">${sub}</div>` : ''}</div><span>›</span>`));
+  if (b.sign) add('data-tab="tests" data-trsub="forms"', 'A document to sign', 'Training › Forms', 'warn');
+  if (b.manual) add('data-tab="tests" data-trsub="manual"', 'Read and sign the Employee Manual', 'It unlocks the tests', 'warn');
+  if (b.food) add('data-tab="tests" data-trsub="forms"', /overdue/.test(b.food) ? 'Food handler certificate is overdue' : 'Upload your food handler certificate', /overdue/.test(b.food) ? 'Upload it in Training › Forms' : 'Due ' + esc(b.food.replace(/^due /, '')), /overdue/.test(b.food) ? 'warn' : '');
+  if (b.recipes) add('data-tab="tests" data-trsub="skills"', b.recipes + ' recipe change' + (b.recipes > 1 ? 's' : '') + ' to read', 'Before your next shift', '');
+  const mustAck = (d.announcements || []).filter((a) => !a.read && a.mustAck);
+  if (mustAck.length) add('data-more="news"', mustAck.length + ' announcement' + (mustAck.length > 1 ? 's' : '') + ' to acknowledge', esc(mustAck[0].title), 'warn');
+  if (!lead()) {
+    if (code === 'T') add('data-tab="tests" data-trsub="study"', 'Next: the Level I study guide and test', 'Within your first 4 shifts', '');
+    else if (code === 'L1') add('data-tab="tests" data-trsub="study"', 'Next: Level II and Coffee Knowledge', 'Study guides first, then the tests', '');
+    else if (code === 'L2P') items.push(`<div class="row"><span class="fydot" aria-hidden="true"></span><div class="txt"><b>Level II passed</b><div class="sub">A Lead or Manager acknowledges your proficiency on shift for the raise</div></div></div>`);
+  }
+  if (lead() && TRN.dash) {
+    const ack = TRN.dash.team.filter((p) => p.level.code === 'L2P').length;
+    if (ack) add('data-tab="tests" data-trsub="dash"', ack + ' waiting on a Level II acknowledgment', 'Training › Team', '');
+  }
+  const swaps = (d.requests || []).filter((q) => q.status === 'Pending' && q.from !== d.me.name && (mgr() || (q.type !== 'Time off' && String(q.details || '').indexOf(d.me.name) >= 0)));
+  if (swaps.length) add('data-more="requests"', swaps.length + ' request' + (swaps.length > 1 ? 's' : '') + ' waiting on you', mgr() ? 'To approve' : 'Swaps and covers that name you', '');
+  return items.length ? `<h2>For you</h2><div class="card">${items.join('')}</div>` : '';
+}
+document.addEventListener('input', (e) => {
+  if (e.target.id === 'gsq') {
+    SRCH.q = e.target.value;
+    runSearch();
+  }
+  if (/^ho(low|prepped|issues|note)$/.test(e.target.id || '')) HO[e.target.id.slice(2)] = e.target.value;
+});
+document.addEventListener('change', (e) => {
+  if (e.target.id === 'honothing') HO.nothing = e.target.checked;
+});
+document.addEventListener(
+  'click',
+  async (e) => {
+    const b = e.target.closest && e.target.closest('[data-gsopen], [data-gsclose], [data-hocancel], [data-hosubmit], [data-horead], [data-clock="out"]');
+    if (!b) return;
+    const d = b.dataset;
+    if (d.clock === 'out' && data && data.handoffRequired && !HO.done) {
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      HO.open = true;
+      tab = 'today';
+      window.scrollTo(0, 0);
+      return render();
+    }
+    if (d.gsopen !== undefined) {
+      SRCH.open = true;
+      tab = 'today';
+      window.scrollTo(0, 0);
+      return render();
+    }
+    if (d.gsclose !== undefined) {
+      SRCH.open = false;
+      if (b.id || b.classList.contains('btn')) return render();
+      setTimeout(render, 0); // a result: let its own handler run, then close search
+      return;
+    }
+    if (d.hocancel !== undefined) {
+      HO.open = false;
+      return render();
+    }
+    if (d.horead) {
+      const h = (data.handoffs || []).find((x) => x.id === d.horead);
+      if (h) h.read = true;
+      render();
+      act('readHandoff', { id: d.horead });
+      return;
+    }
+    if (d.hosubmit !== undefined) {
+      if (!(HO.low || HO.prepped || HO.issues || HO.note).trim() && !HO.nothing) return toast('Fill in at least one part, or tick "Nothing to hand off"');
+      HO.busy = true;
+      render();
+      const pos = await getPos();
+      const r = await act('clockOut', Object.assign({ handoff: { low: HO.low, prepped: HO.prepped, issues: HO.issues, note: HO.note, nothing: HO.nothing } }, pos));
+      HO.busy = false;
+      if (r) {
+        Object.assign(HO, { open: false, low: '', prepped: '', issues: '', note: '', nothing: false });
+        toast('Handoff saved · clocked out · have a good one');
+      }
+      render();
+    }
+  },
+  true
+);
+
 /* ===== Training tab =====
    Study & tests: the test portal (study guides and tests), signed in. Everything else lives here and on this app's
    server (Training.gs): the Employee Manual, Resources, Forms and the Lead/Manager dashboards. */
@@ -5115,6 +5296,7 @@ function viewMoreList() {
       ${item('avail', 'Availability', "When you can't work")}
       ${rowBtn('data-tab="tests" class="mobonly"', '<div class="txt"><b>Training</b><div class="sub">Manual, study guides, tests, resources and forms</div></div><span>›</span>')}
       ${Number(data.version) >= 5.04 ? item('recipes', 'Recipes', 'Drink builds and prep, step by step') : ''}
+      ${lead() ? `<span class="mobonly">${rowBtn('data-tab="inventory"', '<div class="txt"><b>Inventory</b><div class="sub">Count and reorder</div></div><span>›</span>')}</span>` : ''}
       ${shop() ? item('resources', 'Resources', 'Guides, handbooks, documents') : ''}
 
       ${mgr() ? item('team', 'Team & sign-in codes') : ''}</div>
@@ -5559,7 +5741,15 @@ const shopTabs = () =>
     .concat([['more', 'More', '☰']]);
 let navHide = load('pt-navhide') === '1';
 const INV_TAB = ['inventory', 'Inventory', '▤'];
-const mainTabs = () => (lead() ? TABS.slice(0, 4).concat([INV_TAB], TABS.slice(4)) : TABS); // leads and managers count inventory
+/* The bottom bar adapts: new people get Training, everyone else gets Recipes; leads get Training (with Team) and
+   keep Inventory on wide screens and in More. */
+const mainTabs = () => {
+  const st = stage(),
+    base = [['schedule', 'Schedule', '▦'], ['chat', 'Chat', '✉︎'], ['today', 'Today', '☀︎', 'home'], ['lists', 'Lists', '✓']];
+  if (st === 'staff') return base.concat([['recipes', 'Recipes', '❦'], ['tests', 'Training', '✎', 'deskonly'], ['more', 'More', '☰']]);
+  if (st === 'lead') return base.concat([['tests', 'Training', '✎'], INV_TAB.concat(['deskonly']), ['more', 'More', '☰']]);
+  return base.concat([['tests', 'Training', '✎'], ['more', 'More', '☰']]);
+};
 const TABS = [
   ['schedule', 'Schedule', '▦'],
   ['chat', 'Chat', '✉︎'],
