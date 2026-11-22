@@ -4482,12 +4482,13 @@ function trResView() {
     const r = TRN.res.resources.find((x) => x.id === TRN.doc.id);
     if (r && r.sections)
       return `<div class="btns" style="margin-bottom:4px"><button class="btn sm" data-tr="resback">‹ Resources</button></div><h2>${trEsc(r.title)}</h2>
-        ${r.sections.map((s, i) => `<div class="card trdoc" id="trsec${i}"><div class="trbody">${r.sections.length > 1 ? `<div class="trtitle">${trEsc(s.title)}</div>` : ''}${s.b.map((b) => (typeof b === 'string' ? b : `<div data-trlive="${trEsc(b.live)}"></div>`)).join('')}</div></div>`).join('')}`;
+        ${r.sections.map((s, i) => `<div class="card trdoc" id="trsec${i}"><div class="trbody">${r.sections.length > 1 ? `<div class="trtitle">${trEsc(s.title)}</div>` : ''}${s.b.map((b) => (typeof b === 'string' ? b : b.live === 'list' ? `<div class="btns" style="margin:12px 0"><button class="btn go" data-golist="${trEsc(b.list)}">Open the ${trEsc(b.list)} checklist ›</button></div>` : `<div data-trlive="${trEsc(b.live)}"></div>`)).join('')}</div></div>`).join('')}`;
   }
   const item = (attrs, ic, t, sub, hue) => rowBtn(attrs, `<span class="tric" style="--hue:${hue}" aria-hidden="true">${ic}︎</span><div class="txt"><b>${t}</b><div class="sub">${sub}</div></div><span>›</span>`);
   return `<input class="search" id="trq" type="search" placeholder="Search a drink, a policy, a cleaning step…" value="${trEsc(TRN.q)}" autocomplete="off" aria-label="Search resources"><div id="trhits"></div>
     <div id="trgrid"><h2>Library</h2><div class="card">${item('data-trsub="manual"', '❏', 'Employee Manual', TRN.home && TRN.home.manual && TRN.home.manual.acked ? 'Signed' : 'Read and sign it', 188)}
-    ${TRN.res.resources.map((r, i) => item(r.more ? `data-more="${r.more}"` : r.tab ? `data-tab="${r.tab}"` : `data-tr="doc" data-id="${trEsc(r.id)}"`, trEsc(r.icon), trEsc(r.title) + (r.who === 'lead' ? ' <span class="pill mute">Leads</span>' : ''), trEsc(r.blurb), [28, 340, 150, 210, 260, 100, 188, 36][i % 8])).join('')}</div></div>`;
+    ${TRN.res.resources.map((r, i) => item(r.more ? `data-more="${r.more}"` : r.golist ? `data-golist="${trEsc(r.golist)}"` : r.tab ? `data-tab="${r.tab}"` : `data-tr="doc" data-id="${trEsc(r.id)}"`, trEsc(r.icon), trEsc(r.title) + (r.who === 'lead' ? ' <span class="pill mute">Leads</span>' : ''), trEsc(r.blurb), [28, 340, 150, 210, 260, 100, 188, 36][i % 8])).join('')}</div>
+    ${(data.links || []).length ? `<h2>Documents</h2><div class="card">${(data.links || []).map(resRow).join('')}</div>` : ''}</div>`;
 }
 const trStrip = (h) => {
   const d = document.createElement('div');
@@ -4500,6 +4501,7 @@ function trIndex() {
   TRN.res.resources.forEach((r) => (r.sections || []).forEach((s, i) => idx.push({ w: r.title, t: s.title, x: s.b.filter((b) => typeof b === 'string').map(trStrip).join(' '), go: { doc: r.id, i } })));
   Object.keys(TRN.res.sidework || {}).forEach((d) => TRN.res.sidework[d].forEach((t) => idx.push({ w: 'Side Work · ' + d, t: t[0], x: t[1], go: { doc: 'sidework', i: 0 } })));
   TRN.res.manual.forEach((c) => c.sections.forEach((s) => idx.push({ w: 'Employee Manual · ' + c.title, t: s.title, x: s.b.filter((b) => typeof b === 'string').map(trStrip).join(' '), go: { man: 1 } })));
+  (data.links || []).forEach((l) => idx.push({ w: 'Documents', t: l.name, x: l.tier || '', go: { link: l.id } }));
   (data.recipes || []).forEach((r) => idx.push({ w: r.type === 'Prep' ? 'Prep Recipe Book' : 'Drink Build Menu', t: r.name, x: [r.cat, r.size, (r.ing || []).join(' '), (r.steps || []).join(' '), r.notes].join(' '), go: { recipe: r.id } }));
   return (TRN.idx = idx);
 }
@@ -4529,7 +4531,7 @@ function trSearch() {
     return o;
   };
   box.innerHTML = hits.length
-    ? `<div class="card">${hits.map(({ e }) => `<button class="row rb trhit" ${e.go.recipe ? `data-recipe="${trEsc(e.go.recipe)}"` : e.go.man ? 'data-trsub="manual"' : `data-tr="doc" data-id="${trEsc(e.go.doc)}" data-i="${e.go.i}"`}><div class="txt"><div class="trw">${trEsc(e.w)}</div><b>${snip(e.t)}</b><div class="sub">${snip(e.x)}</div></div></button>`).join('')}</div>`
+    ? `<div class="card">${hits.map(({ e }) => `<button class="row rb trhit" ${e.go.recipe ? `data-recipe="${trEsc(e.go.recipe)}"` : e.go.link ? `data-tr="doclink" data-id="${trEsc(e.go.link)}"` : e.go.man ? 'data-trsub="manual"' : `data-tr="doc" data-id="${trEsc(e.go.doc)}" data-i="${e.go.i}"`}><div class="txt"><div class="trw">${trEsc(e.w)}</div><b>${snip(e.t)}</b><div class="sub">${snip(e.x)}</div></div></button>`).join('')}</div>`
     : `<p class="sub">Nothing matches. Try fewer or different words.</p>`;
 }
 function trToday() {
@@ -4791,6 +4793,10 @@ document.addEventListener('click', async (e) => {
       TRN.sub = 'res';
       TRN.jump = d.i ? Number(d.i) : null;
       window.scrollTo(0, 0);
+    } else if (a === 'doclink') {
+      const l = (data.links || []).find((x) => x.id === d.id);
+      if (l) l.file ? openPdf(l.id) : window.open(l.url, '_blank', 'noopener');
+      return;
     } else if (a === 'resback') {
       TRN.doc = null;
     } else if (a === 'jump') {
@@ -5109,7 +5115,7 @@ function viewMoreList() {
       ${item('avail', 'Availability', "When you can't work")}
       ${rowBtn('data-tab="tests" class="mobonly"', '<div class="txt"><b>Training</b><div class="sub">Manual, study guides, tests, resources and forms</div></div><span>›</span>')}
       ${Number(data.version) >= 5.04 ? item('recipes', 'Recipes', 'Drink builds and prep, step by step') : ''}
-      ${item('resources', 'Resources', 'Guides, handbooks, documents')}
+      ${shop() ? item('resources', 'Resources', 'Guides, handbooks, documents') : ''}
 
       ${mgr() ? item('team', 'Team & sign-in codes') : ''}</div>
     <div class="card">${item('settings', 'Settings', 'Notifications, reminders, look, sign out')}</div>
@@ -5599,7 +5605,7 @@ function deskMore() {
     unreadN = (data.announcements || []).filter((a) => !a.read).length;
   const it = (k, n, ic, badge) =>
     `<button data-more="${k}" class="deskonly" ${tab === 'more' && (moreView === k || (k === 'settings' && /^(push|reminders)$/.test(moreView))) ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}${badge ? `<span class="n">${badge}</span>` : ''}</button>`;
-  return `<div class="tabsep deskonly" aria-hidden="true"></div>${it('news', 'Announcements', '⚑', unreadN)}${it('time', mgr() ? 'Time sheets' : 'My time', '⏱')}${it('requests', 'Time off & swaps', '⇄', pendN)}${it('avail', 'Availability', '◷')}${Number(data.version) >= 5.04 ? it('recipes', 'Recipes', '❦') : ''}${it('resources', 'Resources', '❏')}${mgr() ? it('team', 'Team', '☺') : ''}
+  return `<div class="tabsep deskonly" aria-hidden="true"></div>${it('news', 'Announcements', '⚑', unreadN)}${it('time', mgr() ? 'Time sheets' : 'My time', '⏱')}${it('requests', 'Time off & swaps', '⇄', pendN)}${it('avail', 'Availability', '◷')}${Number(data.version) >= 5.04 ? it('recipes', 'Recipes', '❦') : ''}${mgr() ? it('team', 'Team', '☺') : ''}
     <div class="tabspacer deskonly" aria-hidden="true"></div>${it('settings', 'Settings', '⚙︎')}`;
 }
 function setShop(t) {
