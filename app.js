@@ -1403,7 +1403,6 @@ function viewToday() {
   if (shop()) return viewShopHome();
   if (HO.open) return viewHandoff();
   if (SRCH.open) return viewSearch();
-  if (!TRN.home) trLoadHome();
   const d = data,
     today = shiftsOn(T()).filter(live),
     next = myNextShift();
