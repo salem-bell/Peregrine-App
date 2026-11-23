@@ -3823,6 +3823,7 @@ function recHome() {
 }
 const isRecView = () =>
   (tab === 'more' && moreView === 'recipes') ||
+  tab === 'bar' ||
   tab === 'recipes' ||
   (/^res:/.test(tab) && /recipe/i.test(tab) && RECIPES().length > 0);
 const recFavs = () => {
@@ -3986,7 +3987,7 @@ function recipeForTask(task) {
 }
 /** Keep the screen on while a recipe is open (someone is following it with their hands full). */
 function syncWake() {
-  const want = (!!recSel || barMode) && isRecView() && !document.hidden; // bar mode keeps the whole recipe book awake
+  const want = (!!recSel || barMode || tab === 'bar') && isRecView() && !document.hidden; // bar mode keeps the whole recipe book awake
   try {
     if (want && !wakeLock && navigator.wakeLock)
       navigator.wakeLock
@@ -4011,7 +4012,7 @@ function viewRecipes(o) {
   if (recSel && recById(recSel)) return viewRecipe(recById(recSel), o);
   recSel = '';
   if (mgr()) loadRecCost();
-  const head = `${o.back || ''}<div class="rb-hero"><div class="rb-mark" aria-hidden="true"></div><div><div class="rb-eye">Peregrine Coffee Roasters</div><h1>${esc(o.title && !/^recipes?$/i.test(o.title) ? o.title : 'Recipe Book')}</h1><div class="rb-sub">${rs.filter((r) => r.type === 'Drink').length} drinks · ${rs.filter((r) => r.type === 'Prep').length} prep</div></div></div>`;
+  const head = `${o.back || ''}<div class="rb-hero"><div class="rb-mark" aria-hidden="true"></div><div><div class="rb-eye">Peregrine Coffee Roasters</div><h1>${esc(o.title && !/^recipes?$/i.test(o.title) ? o.title : 'Recipe Book')}</h1><div class="rb-sub">${rs.filter((r) => r.type === 'Drink').length} drinks${o.drinksOnly ? '' : ' · ' + rs.filter((r) => r.type === 'Prep').length + ' prep'}</div></div></div>`;
   const docs = (o.docs || []).length ? `<h2>Documents</h2><div class="card">${o.docs.map(resRow).join('')}</div>` : '';
   if (!rs.length)
     return `${head}<div class="card"><div class="empty">${
@@ -4021,7 +4022,7 @@ function viewRecipes(o) {
           ? 'No recipes yet. Add one here, or on the <b>Recipes</b> tab in the sheet.'
           : 'No recipes yet. Ask a manager to add the menu to the app.'
     }</div>${canEditRec() ? '<div class="btns" style="padding:0 14px 14px"><button class="btn go" data-recedit="new">+ Add a recipe</button></div>' : ''}${mgr() && data.recipeSheet ? `<div class="btns" style="padding:0 14px 14px"><a class="btn" href="${esc(data.recipeSheet)}" target="_blank" rel="noopener">Open the Recipes tab ↗</a></div>` : ''}</div>${docs}`;
-  const kinds = ['Drink', 'Prep'].filter((k) => rs.some((r) => r.type === k));
+  const kinds = ['Drink', 'Prep'].filter((k) => (!o.drinksOnly || k === 'Drink') && rs.some((r) => r.type === k));
   if (kinds.indexOf(recKind) < 0) recKind = kinds[0];
   const pct = (r) => {
     const h = mgr() && r.type === 'Drink' && recCosts(r);
@@ -4044,13 +4045,18 @@ function viewRecipes(o) {
         .join('');
     })
     .join('');
-  const favs = recFavs().map(recById).filter(Boolean),
-    recent = recRecent().map(recById).filter((r) => r && favs.indexOf(r) < 0).slice(0, 6);
+  const favs = recFavs()
+      .map(recById)
+      .filter((r) => r && (!o.drinksOnly || r.type === 'Drink')),
+    recent = recRecent()
+      .map(recById)
+      .filter((r) => r && favs.indexOf(r) < 0 && (!o.drinksOnly || r.type === 'Drink'))
+      .slice(0, 6);
   const quick = favs.length || recent.length
     ? `${favs.length ? `<section class="rb-cat"><h2>★ Favorites</h2><div class="rb-grid">${favs.map(card).join('')}</div></section>` : ''}${recent.length ? `<section class="rb-cat"><h2>Recent</h2><div class="rb-grid">${recent.map(card).join('')}</div></section>` : ''}`
     : '';
   return `${head}
-    <div class="rb-tools"><button class="btn sm ${barMode ? 'go' : ''}" data-barmode aria-pressed="${barMode}">Bar mode ${barMode ? 'on' : 'off'}</button>${kinds.length > 1 ? `<div class="seg" role="tablist">${kinds.map((k) => `<button data-reckind="${k}" aria-pressed="${k === recKind}">${k === 'Drink' ? 'Drinks' : 'Prep'}</button>`).join('')}</div>` : ''}
+    ${o.top || ''}<div class="rb-tools">${o.drinksOnly ? '' : `<button class="btn sm ${barMode ? 'go' : ''}" data-barmode aria-pressed="${barMode}">Bar mode ${barMode ? 'on' : 'off'}</button>`}${kinds.length > 1 ? `<div class="seg" role="tablist">${kinds.map((k) => `<button data-reckind="${k}" aria-pressed="${k === recKind}">${k === 'Drink' ? 'Drinks' : 'Prep'}</button>`).join('')}</div>` : ''}
     <input type="search" class="rb-search" data-recsearch placeholder="Search recipes or ingredients" autocomplete="off" aria-label="Search recipes">${canEditRec() ? '<button class="btn go" data-recedit="new">+ Add recipe</button>' : ''}</div>
     <div class="rb-none sub" hidden>No recipe matches that.</div>
     ${quick}${sections}${docs}
@@ -4642,6 +4648,10 @@ function dialCard() {
       ? rowBtn('data-more="dialin"', `<div class="txt"><b>${esc(x.coffee)} · grind ${esc(x.grind)}</b><div class="sub">${[x.dose && x.dose + 'g in', x.yield && x.yield + 'g out', x.time && x.time + ' sec'].filter(Boolean).join(' · ')}${x.note ? ' · ' + esc(x.note) : ''}</div><div class="sub">${esc(first(x.by))} · ${timeOf(x.at)}</div></div><span>›</span>`)
       : `<div class="row"><div class="txt"><b>Not dialed in yet today</b><div class="sub">${data.dialin[0] ? 'Last: ' + esc(data.dialin[0].coffee) + ' · grind ' + esc(data.dialin[0].grind) + ' (' + esc(shortDay(data.dialin[0].date)) + ')' : 'Log the first one'}</div></div><button class="btn sm go" data-dialnew>Log it</button></div>`
   }</div>`;
+}
+/** Shop iPad: the Bar tab – today's dial-in on top, then the drink recipes in big type, screen kept on. */
+function viewBar() {
+  return viewRecipes({ title: 'Bar', drinksOnly: true, top: recSel ? '' : dialCard() });
 }
 function viewDialIn() {
   const L = data.dialin || [],
@@ -6022,6 +6032,7 @@ function viewShopHome() {
     }</div>
     ${pinned ? `<div class="hs-ann"><span class="pill">Pinned</span> <b>${esc(pinned.title)}</b>${pinned.message ? ` <span class="sub">${linkify(esc(pinned.message))}</span>` : ''}</div>` : ''}
     <div class="hs-grid">
+      ${tile('data-tab="bar"', '◎', 'Bar', ((x) => (x ? 'Grind ' + esc(x.grind) + ' · ' + esc(x.coffee) : !data.features || data.features.dialin !== false ? 'Not dialed in yet' : 'Drink recipes'))(dialToday()), 0, 15)}
       ${tile('data-tab="schedule"', '▦', 'Schedule', working ? working + ' working today' : 'No one today', 0, 195)}
       ${tile('data-tab="chat"', '✉︎', 'Chat', chatN ? chatN + ' unread' : '', chatN, 175)}
       ${tile('data-tab="lists"', '✓', 'Checklists', clAll ? clDone + ' of ' + clAll + ' done' : '', 0, 120)}
@@ -6358,6 +6369,7 @@ const resGroups = () =>
 const shopTabs = () =>
   [
     ['today', 'Clock in', '◷'],
+    ...(RECIPES().some((r) => r.type === 'Drink') || on('dialin') ? [['bar', 'Bar', '◎']] : []),
     ['schedule', 'Schedule', '▦'],
     ['chat', 'Chat', '✉︎'],
     ['lists', 'Lists', '✓'],
@@ -6619,8 +6631,11 @@ function render() {
         ? [chat.open, ms0.scrollTop, ms0.scrollHeight - ms0.scrollTop - ms0.clientHeight]
         : null;
   const formSnap = snapForms();
+  document.documentElement.classList.toggle('barmode', barMode || tab === 'bar');
   const mainHtml = /^res:/.test(tab)
     ? viewResGroup(tab.slice(4))
+    : tab === 'bar'
+      ? viewBar()
     : tab === 'recipes'
       ? viewRecipes()
       : tab === 'inventory'
