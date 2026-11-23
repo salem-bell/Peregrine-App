@@ -3959,3 +3959,14 @@ html.barmode .rc-ing li,html.barmode .rc-step p,html.barmode .rc-warn p{font-siz
 html.barmode .rc-ing .amt{font-size:1.3rem}
 html.barmode .rb-card b{font-size:1.12rem}
 html.barmode .rb-card{padding:16px 14px;min-height:74px}
+
+/* ===== Drop 3: first week, swipe to check, bigger targets on phones ===== */
+.fwchk{flex:none;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;background:var(--ok);color:#fff;font-weight:700;font-size:.85rem}
+.fwchk.todo{background:none;border:2px solid var(--edge)}
+.fw-done b{color:var(--muted);font-weight:500}
+.row{transition:transform .15s ease}
+.row.swipe-go{background:var(--ok-soft)}
+@media (max-width:700px){
+  .row:has(> .chk){min-height:58px}
+  .chk{width:36px;height:36px}
+}
