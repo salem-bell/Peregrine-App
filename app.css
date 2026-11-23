@@ -3993,3 +3993,17 @@ html.barmode .rb-card{padding:16px 14px;min-height:74px}
 /* the checklist task you came back to from its recipe */
 @keyframes ckflash { 0%, 60% { box-shadow: inset 4px 0 0 #c8962d; background: rgba(200, 150, 45, 0.14); } 100% { box-shadow: none; background: none; } }
 .row.ckflash { animation: ckflash 2.4s ease-out; }
+/* phone bar: seven tabs (Today in the middle) – tighter labels so they don't run together */
+@media (max-width: 999px) {
+  .tabs button:not(.home) {
+    min-width: 0;
+    font-size: 0.6rem;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+  }
+  .tabs button.home {
+    flex: 1.1;
+    font-size: 0.6rem;
+    letter-spacing: 0.03em;
+  }
+}

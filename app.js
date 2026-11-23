@@ -3820,7 +3820,7 @@ function recHome(r) {
     const g = resGroups().find((x) => /recipe/i.test(x));
     return g ? ['res:' + g, ''] : ['recipes', ''];
   }
-  return ['more', 'recipes'];
+  return mainTabs().some((t) => t[0] === 'recipes') ? ['recipes', ''] : ['more', 'recipes'];
 }
 const isRecView = () =>
   (tab === 'more' && moreView === 'recipes') ||
@@ -6437,21 +6437,19 @@ const shopTabs = () =>
     .concat([['more', 'More', '☰']]);
 let navHide = load('pt-navhide') === '1';
 const INV_TAB = ['inventory', 'Inventory', '▤'];
-/* The bottom bar adapts: new people get Training, everyone else gets Recipes; leads get Training (with Team) and
-   keep Inventory on wide screens and in More. */
+/* The bottom bar is the same for everyone, with Today in the middle; leads also keep Inventory on wide screens and in More. */
 const mainTabs = () => {
   const st = stage(),
     trainOn = ['training', 'tests', 'manual', 'library', 'hr', 'foodhandler', 'progress'].some(on),
     feat = { schedule: 'schedule', chat: 'chat', lists: 'lists', recipes: 'recipes', inventory: 'inventory' },
     keep = (t) => (t[0] === 'tests' ? trainOn : !feat[t[0]] || on(feat[t[0]]));
-  const base = [['schedule', 'Schedule', '▦'], ['chat', 'Chat', '✉︎'], ['today', 'Today', '☀︎', 'home'], ['lists', 'Lists', '✓']];
-  const tail =
-    st === 'staff'
-      ? [['recipes', 'Recipes', '❦'], ['tests', 'Training', '✎', 'deskonly']]
-      : st === 'lead'
-        ? [['tests', 'Training', '✎'], INV_TAB.concat(['deskonly'])]
-        : [['tests', 'Training', '✎'], ['recipes', 'Recipes', '❦', 'deskonly']];
-  return base.concat(tail).filter(keep).concat([['more', 'More', '☰']]);
+  // Phone bar: Schedule · Chat · Lists | Today | Recipes · Training · More – Today sits in the middle.
+  const bar = [['schedule', 'Schedule', '▦'], ['chat', 'Chat', '✉︎'], ['lists', 'Lists', '✓'], ['recipes', 'Recipes', '❦'], ['tests', 'Training', '✎']]
+    .filter(keep)
+    .concat([['more', 'More', '☰']]);
+  bar.splice(Math.floor(bar.length / 2), 0, ['today', 'Today', '☀︎', 'home']);
+  if (st === 'lead' && keep(INV_TAB)) bar.splice(bar.length - 1, 0, INV_TAB.concat(['deskonly'])); // leads keep Inventory on wide screens
+  return bar;
 };
 const TABS = [
   ['schedule', 'Schedule', '▦'],
