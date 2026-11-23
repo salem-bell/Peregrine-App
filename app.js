@@ -3814,7 +3814,8 @@ function recCosts(r) {
   return hits;
 }
 /** Where the recipe book opens: the shop iPad's recipe tab, or More › Recipes. */
-function recHome() {
+function recHome(r) {
+  if (shop() && r && r.type === 'Drink' && shopTabs().some((t) => t[0] === 'bar')) return ['bar', ''];
   if (shop()) {
     const g = resGroups().find((x) => /recipe/i.test(x));
     return g ? ['res:' + g, ''] : ['recipes', ''];
@@ -3845,8 +3846,8 @@ function openRecipe(id) {
   const r = recById(id);
   if (!r) return;
   save('pt-recrecent', JSON.stringify([id].concat(recRecent().filter((x) => x !== id)).slice(0, 8)));
-  if (!isRecView()) {
-    const [t, mv] = recHome();
+  if (!isRecView() || (shop() && (tab === 'bar') !== (r.type === 'Drink'))) {
+    const [t, mv] = recHome(r);
     tab = t;
     moreView = mv;
     sheet = null;
@@ -4006,13 +4007,14 @@ function syncWake() {
 document.addEventListener('visibilitychange', syncWake);
 function viewRecipes(o) {
   o = o || {};
+  if (o.prepOnly === undefined) o.prepOnly = !o.drinksOnly && shop() && barTab(); // iPad: drinks live on the Bar tab
   const rs = RECIPES();
   if (recEdit && canEditRec()) return viewRecipeEdit(recEdit === 'new' ? null : recById(recEdit), o);
   recEdit = '';
   if (recSel && recById(recSel)) return viewRecipe(recById(recSel), o);
   recSel = '';
   if (mgr()) loadRecCost();
-  const head = `${o.back || ''}<div class="rb-hero"><div class="rb-mark" aria-hidden="true"></div><div><div class="rb-eye">Peregrine Coffee Roasters</div><h1>${esc(o.title && !/^recipes?$/i.test(o.title) ? o.title : 'Recipe Book')}</h1><div class="rb-sub">${rs.filter((r) => r.type === 'Drink').length} drinks${o.drinksOnly ? '' : ' · ' + rs.filter((r) => r.type === 'Prep').length + ' prep'}</div></div></div>`;
+  const head = `${o.back || ''}<div class="rb-hero"><div class="rb-mark" aria-hidden="true"></div><div><div class="rb-eye">Peregrine Coffee Roasters</div><h1>${esc(o.prepOnly && (!o.title || /^recipes?$/i.test(o.title)) ? 'Prep recipes' : o.title && !/^recipes?$/i.test(o.title) ? o.title : 'Recipe Book')}</h1><div class="rb-sub">${[!o.prepOnly && rs.filter((r) => r.type === 'Drink').length + ' drinks', !o.drinksOnly && rs.filter((r) => r.type === 'Prep').length + ' prep'].filter(Boolean).join(' · ')}</div></div></div>`;
   const docs = (o.docs || []).length ? `<h2>Documents</h2><div class="card">${o.docs.map(resRow).join('')}</div>` : '';
   if (!rs.length)
     return `${head}<div class="card"><div class="empty">${
@@ -4022,7 +4024,8 @@ function viewRecipes(o) {
           ? 'No recipes yet. Add one here, or on the <b>Recipes</b> tab in the sheet.'
           : 'No recipes yet. Ask a manager to add the menu to the app.'
     }</div>${canEditRec() ? '<div class="btns" style="padding:0 14px 14px"><button class="btn go" data-recedit="new">+ Add a recipe</button></div>' : ''}${mgr() && data.recipeSheet ? `<div class="btns" style="padding:0 14px 14px"><a class="btn" href="${esc(data.recipeSheet)}" target="_blank" rel="noopener">Open the Recipes tab ↗</a></div>` : ''}</div>${docs}`;
-  const kinds = ['Drink', 'Prep'].filter((k) => (!o.drinksOnly || k === 'Drink') && rs.some((r) => r.type === k));
+  const only = o.drinksOnly ? 'Drink' : o.prepOnly ? 'Prep' : '';
+  const kinds = ['Drink', 'Prep'].filter((k) => (!only || k === only) && rs.some((r) => r.type === k));
   if (kinds.indexOf(recKind) < 0) recKind = kinds[0];
   const pct = (r) => {
     const h = mgr() && r.type === 'Drink' && recCosts(r);
@@ -4047,16 +4050,16 @@ function viewRecipes(o) {
     .join('');
   const favs = recFavs()
       .map(recById)
-      .filter((r) => r && (!o.drinksOnly || r.type === 'Drink')),
+      .filter((r) => r && (!only || r.type === only)),
     recent = recRecent()
       .map(recById)
-      .filter((r) => r && favs.indexOf(r) < 0 && (!o.drinksOnly || r.type === 'Drink'))
+      .filter((r) => r && favs.indexOf(r) < 0 && (!only || r.type === only))
       .slice(0, 6);
   const quick = favs.length || recent.length
     ? `${favs.length ? `<section class="rb-cat"><h2>★ Favorites</h2><div class="rb-grid">${favs.map(card).join('')}</div></section>` : ''}${recent.length ? `<section class="rb-cat"><h2>Recent</h2><div class="rb-grid">${recent.map(card).join('')}</div></section>` : ''}`
     : '';
   return `${head}
-    ${o.top || ''}<div class="rb-tools">${o.drinksOnly ? '' : `<button class="btn sm ${barMode ? 'go' : ''}" data-barmode aria-pressed="${barMode}">Bar mode ${barMode ? 'on' : 'off'}</button>`}${kinds.length > 1 ? `<div class="seg" role="tablist">${kinds.map((k) => `<button data-reckind="${k}" aria-pressed="${k === recKind}">${k === 'Drink' ? 'Drinks' : 'Prep'}</button>`).join('')}</div>` : ''}
+    ${o.top || ''}<div class="rb-tools">${only ? '' : `<button class="btn sm ${barMode ? 'go' : ''}" data-barmode aria-pressed="${barMode}">Bar mode ${barMode ? 'on' : 'off'}</button>`}${kinds.length > 1 ? `<div class="seg" role="tablist">${kinds.map((k) => `<button data-reckind="${k}" aria-pressed="${k === recKind}">${k === 'Drink' ? 'Drinks' : 'Prep'}</button>`).join('')}</div>` : ''}
     <input type="search" class="rb-search" data-recsearch placeholder="Search recipes or ingredients" autocomplete="off" aria-label="Search recipes">${canEditRec() ? '<button class="btn go" data-recedit="new">+ Add recipe</button>' : ''}</div>
     <div class="rb-none sub" hidden>No recipe matches that.</div>
     ${quick}${sections}${docs}
@@ -4380,7 +4383,7 @@ const resRow = (l) =>
 /** Shop iPad: one resource group as its own tab. */
 function viewResGroup(g) {
   const xs = (data.links || []).filter((l) => l.group === g);
-  if (/recipe/i.test(g) && RECIPES().length) return viewRecipes({ title: g, docs: xs });
+  if (/recipe/i.test(g) && RECIPES().length) return viewRecipes({ title: shop() && barTab() ? 'Prep recipes' : g, docs: xs });
   return `<h1>${esc(g)}</h1><div class="card">${xs.map(resRow).join('') || '<div class="empty">Nothing here yet.</div>'}</div>`;
 }
 function viewResources() {
@@ -4508,6 +4511,58 @@ const dialToday = () => (on('dialin') && (data.dialin || []).find((d) => d.date 
 /** One line for a dial-in: coffee · grind · dose in · yield out · time. */
 const dialLine = (x) => [esc(x.coffee) + ' · grind ' + esc(x.grind), x.dose && x.dose + 'g in', x.yield && x.yield + 'g out', x.time && x.time + ' sec'].filter(Boolean).join(' · ');
 /** Shown right after someone clocks in: today's espresso settings, or a nudge to log them. */
+/** Shop iPad: signing out takes the iPad's own 4-digit sign-in code, so a passer-by can't sign it out. */
+function shopOutSheet() {
+  return `<div class="sheet" role="dialog" aria-label="Sign out the shop iPad"><div class="sheet-in"><h1 style="margin:0 0 4px">Sign out this iPad?</h1>
+    <p class="sub" style="margin:0 0 12px">Type the iPad's 4-digit sign-in code (the one on <b>${esc(data.me.name)}</b> in Team).</p>
+    <input data-shopoutcode inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" class="code" style="text-align:center;width:100%" aria-label="Sign-in code">
+    ${sheet.err ? `<p class="sub" style="color:var(--bad,#b3261e);margin:8px 0 0">${esc(sheet.err)}</p>` : ''}
+    <div class="btns" style="margin-top:12px"><button class="btn" data-closesheet>Cancel</button><button class="btn go" data-shopout ${sheet.busy ? 'disabled' : ''}>${sheet.busy ? 'Checking…' : 'Sign out'}</button></div></div></div>`;
+}
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest && e.target.closest('[data-shopout]');
+  if (!b || !sheet || sheet.kind !== 'shopout' || sheet.busy) return;
+  const code = (($('[data-shopoutcode]') || {}).value || '').trim();
+  if (!/^\d{4}$/.test(code)) {
+    sheet.err = 'Type the 4-digit code';
+    render();
+    return;
+  }
+  sheet.busy = true;
+  sheet.err = '';
+  render();
+  const names = [load('pt-last') || data.me.name]; // the name this iPad signed in with – one try per tap, so wrong codes don't stack up
+  let ok = false,
+    why = '';
+  for (const name of names) {
+    try {
+      await post({ fn: 'signIn', name, code }); // checks the code the same way signing in does
+      ok = true;
+      break;
+    } catch (err) {
+      why = String((err && err.message) || '');
+    }
+  }
+  if (ok) {
+    sheet = null;
+    return signOut('signed out');
+  }
+  if (sheet && sheet.kind === 'shopout') {
+    sheet.busy = false;
+    sheet.err =
+      navigator.onLine === false
+        ? "You're offline – the code can't be checked"
+        : /too many/i.test(why)
+          ? why // the sign-in lockout: say so, rather than blaming a code that may be right
+          : /don't match|more than one/i.test(why)
+            ? "That's not this iPad's code"
+            : "The code couldn't be checked – try again in a minute";
+    render();
+  }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.target.dataset && e.target.dataset.shopoutcode !== undefined) $('[data-shopout]') && $('[data-shopout]').click();
+});
 function dialPopSheet() {
   const x = dialToday(),
     last = (data.dialin || [])[0];
@@ -5948,7 +6003,7 @@ function viewSettings() {
     ]
       .map(([k, n]) => `<button data-theme="${k}" aria-pressed="${theme() === k}">${n}</button>`)
       .join('')}</div>
-    <h2>Shop iPad</h2><div class="card"><div class="row"><div class="txt sub">Signed in as <b>${esc(data.me.name)}</b>. It stays signed in; a manager can sign it out from Team by giving it a new code.</div><button class="btn sm" data-signout>Sign out</button></div></div>
+    <h2>Shop iPad</h2><div class="card"><div class="row"><div class="txt sub">Signed in as <b>${esc(data.me.name)}</b>. It stays signed in. Signing out takes this iPad's 4-digit code; a manager can also sign it out from Team by giving it a new code.</div><button class="btn sm" data-signout>Sign out</button></div></div>
     <p class="sub" style="text-align:center">Peregrine Team · server ${esc(data.version || '')}</p>`;
   pushCheck();
   const item = (k, label, sub) =>
@@ -6015,7 +6070,7 @@ function viewShopHome() {
   const tile = (attrs, ic, label, sub, n, hue) =>
     `<button class="hs-app" ${attrs}><span class="hs-ic" style="--hue:${hue}">${ic}${n ? `<span class="hs-n">${n > 99 ? '99+' : n}</span>` : ''}</span><b>${label}</b>${sub ? `<small>${sub}</small>` : ''}</button>`;
   const groups = resGroups().filter((g) => !sideLists().length || g !== SIDE_TAB).map((g, i) =>
-    tile(`data-tab="res:${esc(g)}"`, resIcon(g, i), esc(g), '', 0, [28, 340, 150, 210, 260, 100][i % 6])
+    tile(`data-tab="res:${esc(g)}"`, resIcon(g, i), /recipe/i.test(g) && barTab() ? 'Prep recipes' : esc(g), /recipe/i.test(g) && barTab() ? RECIPES().filter((r) => r.type === 'Prep').length + ' recipes' : '', 0, [28, 340, 150, 210, 260, 100][i % 6])
   );
   return `<div class="hs">
     <div class="hs-top"><div class="hs-time">${now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(/\s?[AP]M$/i, '')}<span>${now.getHours() < 12 ? 'AM' : 'PM'}</span></div><div class="hs-date">${now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}</div></div>
@@ -6040,7 +6095,7 @@ function viewShopHome() {
       ${tile(`data-golist="${PREP}"`, '✎', 'Prep', prepN ? prepN + ' to do' : 'All done', prepN, 40)}
       ${tile('data-tab="inventory"', '▤', 'Inventory', 'Count stock', 0, 225)}
       ${groups.join('')}
-      ${RECIPES().length && !resGroups().some((g) => /recipe/i.test(g)) ? tile('data-tab="recipes"', '❦', 'Recipes', RECIPES().length + ' recipes', 0, 28) : ''}
+      ${RECIPES().length && !resGroups().some((g) => /recipe/i.test(g)) ? tile('data-tab="recipes"', '❦', barTab() ? 'Prep recipes' : 'Recipes', barTab() ? RECIPES().filter((r) => r.type === 'Prep').length + ' recipes' : RECIPES().length + ' recipes', 0, 28) : ''}
       ${tile('data-more="news"', '⚑', 'Announcements', '', 0, 0)}
     </div></div>`;
 }
@@ -6364,20 +6419,21 @@ const resIcon = (g, i) =>
       : /clos|clean|side|check/i.test(g)
         ? '☾︎'
         : RES_ICONS[i % RES_ICONS.length];
+const barTab = () => RECIPES().some((r) => r.type === 'Drink') || on('dialin');
 const resGroups = () =>
   (data.links || []).reduce((a, l) => (l.group && a.indexOf(l.group) < 0 ? a.concat(l.group) : a), []);
 const shopTabs = () =>
   [
     ['today', 'Clock in', '◷'],
-    ...(RECIPES().some((r) => r.type === 'Drink') || on('dialin') ? [['bar', 'Bar', '◎']] : []),
+    ...(barTab() ? [['bar', 'Bar', '◎']] : []),
     ['schedule', 'Schedule', '▦'],
     ['chat', 'Chat', '✉︎'],
     ['lists', 'Lists', '✓'],
   ]
     .concat(sideLists().length ? [['sidework', SIDE_TAB, '☾︎']] : [])
     .concat([['inventory', 'Inventory', '▤']])
-    .concat(resGroups().filter((g) => !sideLists().length || g !== SIDE_TAB).map((g, i) => ['res:' + g, g, resIcon(g, i)]))
-    .concat(RECIPES().length && !resGroups().some((g) => /recipe/i.test(g)) ? [['recipes', 'Recipes', '❦']] : [])
+    .concat(resGroups().filter((g) => !sideLists().length || g !== SIDE_TAB).map((g, i) => ['res:' + g, /recipe/i.test(g) && barTab() ? 'Prep recipes' : g, resIcon(g, i)]))
+    .concat(RECIPES().length && !resGroups().some((g) => /recipe/i.test(g)) ? [['recipes', barTab() ? 'Prep recipes' : 'Recipes', '❦']] : [])
     .concat([['more', 'More', '☰']]);
 let navHide = load('pt-navhide') === '1';
 const INV_TAB = ['inventory', 'Inventory', '▤'];
@@ -6637,7 +6693,7 @@ function render() {
     : tab === 'bar'
       ? viewBar()
     : tab === 'recipes'
-      ? viewRecipes()
+      ? viewRecipes(shop() && barTab() ? { title: 'Prep recipes' } : undefined)
       : tab === 'inventory'
         ? viewInventory()
         : tab === 'tests'
@@ -6692,7 +6748,9 @@ function render() {
                   ? editChatSheet()
                   : sheet.kind === 'loc'
                     ? locSheet()
-                    : sheet.kind === 'preppop'
+                    : sheet.kind === 'shopout'
+                      ? shopOutSheet()
+                      : sheet.kind === 'preppop'
                       ? prepPopSheet()
                       : sheet.kind === 'dialpop'
                         ? dialPopSheet()
@@ -7060,6 +7118,12 @@ document.addEventListener('click', async (e) => {
     return;
   }
   if (d.signout !== undefined) {
+    if (shop()) {
+      sheet = { kind: 'shopout', err: '' }; // the shop iPad needs its own sign-in code to sign out
+      render();
+      setTimeout(() => $('[data-shopoutcode]') && $('[data-shopoutcode]').focus(), 50);
+      return;
+    }
     if (confirm('Sign out on this phone?')) signOut();
     return;
   }
