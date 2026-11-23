@@ -1691,8 +1691,14 @@ function prepPopSheet() {
 }
 function listSeg(cl) {
   const n = prepOpen().length;
-  return `<div class="seg">${cl.map((x) => `<button data-list="${esc(x.list)}" aria-pressed="${x.list === listTab}">${esc(x.list)} ${x.done}/${x.total}</button>`).join('')}<button data-list="${PREP}" aria-pressed="${listTab === PREP}">Prep${n ? ' ' + n : ''}</button></div>`;
+  return `<div class="seg">${cl.map((x) => `<button data-list="${esc(x.list)}" aria-pressed="${x.list === listTab}">${esc(x.list)} ${x.done}/${x.total}</button>`).join('')}${
+    tab === 'sidework' ? '' : `<button data-list="${PREP}" aria-pressed="${listTab === PREP}">Prep${n ? ' ' + n : ''}</button>`
+  }</div>`;
 }
+/* Shop iPad: the machine-cleaning and drawer lists live on their own "Closing & Side Work" tab, not under Lists. */
+const SIDE_RE = /machine|drawer/i,
+  SIDE_TAB = 'Closing & Side Work';
+const sideLists = () => (shop() ? (data.checklists || []).filter((c) => SIDE_RE.test(c.list)) : []);
 function prepRow(x) {
   const on = !!x.doneAt,
     canDel = x.by === data.me.name || lead();
@@ -1743,12 +1749,14 @@ function viewPrep(cl) {
     <p class="sub">The people on that shift get a pop-up when they open the app on that day, and see it on their Today screen until it's done. No email is sent.</p>`;
 }
 function viewLists() {
-  const cl = data.checklists || [];
-  if (listTab === PREP) return viewPrep(cl);
+  const side = tab === 'sidework',
+    cl = (data.checklists || []).filter((c) => !shop() || side === SIDE_RE.test(c.list)),
+    title = side ? esc(SIDE_TAB) : 'Checklists';
+  if (listTab === PREP && !side) return viewPrep(cl);
   if (listTab === INV) listTab = ''; // inventory has its own tab now
   if (!cl.length)
     return (
-      '<h1>Checklists</h1>' +
+      '<h1>' + title + '</h1>' +
       listSeg(cl) +
       '<div class="card"><div class="empty">Nothing on the checklists today.</div></div>'
     );
@@ -1770,7 +1778,7 @@ function viewLists() {
           })
           .join('')}</div>`
       : '';
-  return `<h1>Checklists</h1>${listSeg(cl)}
+  return `<h1>${title}</h1>${listSeg(cl)}
     <div class="card">${c.items
       .map((i, n) => {
         const k = 'c|' + c.list + '|' + i.task,
@@ -5988,7 +5996,7 @@ function viewShopHome() {
     on = data.onClock || [],
     sh = shopToday(),
     chatN = (data.channels || []).reduce((n, c) => n + (Number(c.unread) || 0), 0),
-    cl = data.checklists || [],
+    cl = (data.checklists || []).filter((c) => !SIDE_RE.test(c.list)),
     clDone = cl.reduce((n, c) => n + c.done, 0),
     clAll = cl.reduce((n, c) => n + c.total, 0),
     prepN = (data.prep || []).filter((x) => !x.doneAt && (!x.date || x.date <= T())).length,
@@ -5996,7 +6004,7 @@ function viewShopHome() {
   const working = [...new Set(sh.map((s) => s.name))].length;
   const tile = (attrs, ic, label, sub, n, hue) =>
     `<button class="hs-app" ${attrs}><span class="hs-ic" style="--hue:${hue}">${ic}${n ? `<span class="hs-n">${n > 99 ? '99+' : n}</span>` : ''}</span><b>${label}</b>${sub ? `<small>${sub}</small>` : ''}</button>`;
-  const groups = resGroups().map((g, i) =>
+  const groups = resGroups().filter((g) => !sideLists().length || g !== SIDE_TAB).map((g, i) =>
     tile(`data-tab="res:${esc(g)}"`, resIcon(g, i), esc(g), '', 0, [28, 340, 150, 210, 260, 100][i % 6])
   );
   return `<div class="hs">
@@ -6017,6 +6025,7 @@ function viewShopHome() {
       ${tile('data-tab="schedule"', '▦', 'Schedule', working ? working + ' working today' : 'No one today', 0, 195)}
       ${tile('data-tab="chat"', '✉︎', 'Chat', chatN ? chatN + ' unread' : '', chatN, 175)}
       ${tile('data-tab="lists"', '✓', 'Checklists', clAll ? clDone + ' of ' + clAll + ' done' : '', 0, 120)}
+      ${sideLists().length ? tile('data-tab="sidework"', '☾︎', esc(SIDE_TAB), ((xs) => xs.reduce((n, c) => n + c.done, 0) + ' of ' + xs.reduce((n, c) => n + c.total, 0) + ' done')(sideLists()), 0, 260) : ''}
       ${tile(`data-golist="${PREP}"`, '✎', 'Prep', prepN ? prepN + ' to do' : 'All done', prepN, 40)}
       ${tile('data-tab="inventory"', '▤', 'Inventory', 'Count stock', 0, 225)}
       ${groups.join('')}
@@ -6352,9 +6361,10 @@ const shopTabs = () =>
     ['schedule', 'Schedule', '▦'],
     ['chat', 'Chat', '✉︎'],
     ['lists', 'Lists', '✓'],
-    ['inventory', 'Inventory', '▤'],
   ]
-    .concat(resGroups().map((g, i) => ['res:' + g, g, resIcon(g, i)]))
+    .concat(sideLists().length ? [['sidework', SIDE_TAB, '☾︎']] : [])
+    .concat([['inventory', 'Inventory', '▤']])
+    .concat(resGroups().filter((g) => !sideLists().length || g !== SIDE_TAB).map((g, i) => ['res:' + g, g, resIcon(g, i)]))
     .concat(RECIPES().length && !resGroups().some((g) => /recipe/i.test(g)) ? [['recipes', 'Recipes', '❦']] : [])
     .concat([['more', 'More', '☰']]);
 let navHide = load('pt-navhide') === '1';
@@ -6617,7 +6627,7 @@ function render() {
         ? viewInventory()
         : tab === 'tests'
           ? viewTests()
-          : tab === 'lists'
+          : tab === 'lists' || tab === 'sidework'
             ? whoBar() + viewLists()
             : tab === 'schedule'
               ? viewSchedule()

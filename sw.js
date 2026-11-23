@@ -3,7 +3,7 @@
 // Another location (westcliffe/sw.js) loads this file after setting PT_NS (its cache names), PT_ROOT (where the shared files are) and PT_SHELL.
 const NS = self.PT_NS || '',
   ROOT = self.PT_ROOT || '';
-const VERSION = NS + 'pt-3.5.50';
+const VERSION = NS + 'pt-3.5.51';
 const SHELL = self.PT_SHELL || [
   './',
   'index.html',
