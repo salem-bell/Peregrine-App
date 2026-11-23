@@ -1403,6 +1403,7 @@ setInterval(() => {
 
 function viewToday() {
   if (shop()) return viewShopHome();
+  if (CK.open) return viewClockOutCheck();
   if (HO.open) return viewHandoff();
   if (SRCH.open) return viewSearch();
   const d = data,
@@ -1780,8 +1781,16 @@ function viewLists() {
             : '';
         return (
           head +
-          `<div class="row ${on ? 'done' : ''}"><button class="chk ${on ? 'on' : ''}" data-check="${esc(i.task)}" data-on="${on ? 1 : 0}" aria-label="${on ? 'Undo' : 'Done'}: ${esc(i.task)}">${on ? '✓' : ''}</button>
-        <div class="txt"><b>${esc(i.task)}</b>${i.notes ? `<div class="sub">${esc(i.notes)}</div>` : ''}${i.by ? `<div class="sub">${esc(i.by)} · ${timeOf(i.at)}</div>` : ''}</div></div>`
+          `<div class="row ${on ? 'done' : ''}">${
+            !on && isDialTask(i.task)
+              ? `<button class="chk" data-dialtask="${esc(c.list)}" aria-label="Log the dial-in: ${esc(i.task)}"></button>`
+              : `<button class="chk ${on ? 'on' : ''}" data-check="${esc(i.task)}" data-on="${on ? 1 : 0}" aria-label="${on ? 'Undo' : 'Done'}: ${esc(i.task)}">${on ? '✓' : ''}</button>`
+          }
+        <div class="txt">${
+          !on && isDialTask(i.task)
+            ? `<button class="linkbtn" data-dialtask="${esc(c.list)}" style="text-align:left"><b>${esc(i.task)}</b> <span class="pill">Log it ›</span></button>`
+            : ((r) => (r ? `<button class="prep-rec" data-recipe="${esc(r.id)}"><b>${esc(i.task)}</b> <span class="pill">Recipe ›</span></button>` : `<b>${esc(i.task)}</b>`))(recipeForTask(i.task))
+        }${i.notes ? `<div class="sub">${esc(i.notes)}</div>` : ''}${i.by ? `<div class="sub">${esc(i.by)} · ${timeOf(i.at)}</div>` : ''}</div></div>`
         );
       })
       .join('')}</div>${hist}`;
@@ -3851,6 +3860,27 @@ function recipeFor(text, picked) {
   if (!t) return null;
   return RECIPES().find((r) => r.type === 'Prep' && rbase(r.name).length >= 4 && t.indexOf(rbase(r.name)) >= 0) || null;
 }
+/** The prep recipe a checklist task is about: "Batch matcha" finds "Batched Matcha" (every word of the recipe's name, ignoring -s/-ed/-ing). */
+const rstem = (w) => w.replace(/(ing|ed|es|s)$/, '');
+const rwords = (t) =>
+  rnorm(t)
+    .replace(/[^a-z0-9' ]/g, ' ')
+    .split(' ')
+    .filter((w) => w.length >= 3)
+    .map(rstem);
+function recipeForTask(task) {
+  if (!on('recipes')) return null;
+  const direct = recipeFor(task);
+  if (direct) return direct;
+  const have = new Set(rwords(task));
+  return (
+    RECIPES().find((r) => {
+      if (r.type !== 'Prep') return false;
+      const ws = rwords(rbase(r.name));
+      return ws.length && ws.every((w) => have.has(w));
+    }) || null
+  );
+}
 /** Keep the screen on while a recipe is open (someone is following it with their hands full). */
 function syncWake() {
   const want = (!!recSel || barMode) && isRecView() && !document.hidden; // bar mode keeps the whole recipe book awake
@@ -3986,12 +4016,24 @@ function viewRecipeEdit(r, o) {
 function recPrepCard(r) {
   if (r.type !== 'Prep') return '';
   const xs = (data.prep || []).filter((x) => !x.doneAt && !/^tmp/.test(x.id) && recipeFor(x.item, x.recipe) === r);
-  if (!xs.length) return '';
-  return `<section class="rc-prep" id="rc-prep"><h2 class="rc-h"><span class="rc-prep-q">On the prep list</span></h2>
+  const ck = [];
+  (data.checklists || []).forEach((c) =>
+    (c.items || []).forEach((i) => {
+      const k = 'c|' + c.list + '|' + i.task;
+      if (!(busy[k] !== undefined ? busy[k] : !!i.by) && recipeForTask(i.task) === r) ck.push({ c, i });
+    })
+  );
+  if (!xs.length && !ck.length) return '';
+  return `<section class="rc-prep" id="rc-prep"><h2 class="rc-h"><span class="rc-prep-q">${xs.length ? 'On the prep list' : "On today's checklist"}</span></h2>
     ${xs
       .map(
         (x) =>
           `<div class="rc-prow"><div class="txt"><b>${esc(x.item)}</b><div class="sub">For ${esc(x.label || 'next shift')}${x.details ? ' · ' + esc(x.details) : ''}</div></div><button class="btn go sm" data-prepdone="${esc(x.id)}" data-on="0">Mark done</button></div>`
+      )
+      .join('')}${ck
+      .map(
+        ({ c, i }) =>
+          `<div class="rc-prow"><div class="txt"><b>${esc(i.task)}</b><div class="sub">${esc(c.list)} checklist</div></div><button class="btn go sm" data-recck="${esc(c.list)}" data-task="${esc(i.task)}">Mark done</button></div>`
       )
       .join('')}</section>`;
 }
@@ -4349,7 +4391,143 @@ let trainSrc = '',
 /* ===== Feature switches, Dial-in log, Drawer count ===== */
 /** Is this part of the app turned on for this shop? (Everything is on with an older server.) */
 const on = (k) => !data || !data.features || data.features[k] !== false;
-const DIAL = { open: false, busy: false };
+const DIAL = { open: false, busy: false, list: '' };
+/** A checklist task that is really "log the dial-in" (any task with "dial in" in it, while the Dial-in log is on). */
+const isDialTask = (t) => on('dialin') && /dial[\s-]?in/i.test(String(t || ''));
+const dialToday = () => (on('dialin') && (data.dialin || []).find((d) => d.date === T())) || null;
+/** One line for a dial-in: coffee · grind · dose in · yield out · time. */
+const dialLine = (x) => [esc(x.coffee) + ' · grind ' + esc(x.grind), x.dose && x.dose + 'g in', x.yield && x.yield + 'g out', x.time && x.time + ' sec'].filter(Boolean).join(' · ');
+/** Shown right after someone clocks in: today's espresso settings, or a nudge to log them. */
+function dialPopSheet() {
+  const x = dialToday(),
+    last = (data.dialin || [])[0];
+  return `<div class="sheet" role="dialog" aria-label="Today's dial-in"><div class="sheet-in"><h1 style="margin:0 0 4px">◎ Today's dial-in</h1>
+    ${
+      x
+        ? `<div class="card"><div class="row"><div class="txt"><b>${dialLine(x)}</b>${x.note ? `<div class="sub">${esc(x.note)}</div>` : ''}<div class="sub">Logged by ${esc(first(x.by))} · ${timeOf(x.at)}</div></div></div></div>`
+        : `<p class="sub" style="margin:0 0 10px">Nobody has dialed in yet today.${last ? ' Last: ' + dialLine(last) + ' (' + esc(shortDay(last.date)) + ').' : ''}</p>`
+    }
+    <div class="btns" style="margin-top:12px"><button class="btn go" data-dialok>Got it</button>${x ? '' : '<button class="btn" data-dialok data-dialnew>Log it now</button>'}</div></div></div>`;
+}
+/* ----- clock-out check: the person's shift checklist has to be done (or each open task skipped with a reason) ----- */
+document.addEventListener('click', (e) => {
+  const b = e.target.closest && e.target.closest('[data-recck]');
+  if (!b || !data) return;
+  const list = b.dataset.recck,
+    task = b.dataset.task;
+  busy['c|' + list + '|' + task] = true;
+  if (navigator.vibrate) navigator.vibrate(10);
+  act('check', { list, task, done: '1' });
+  toast('Checked off · ' + task);
+  recSel = '';
+  listTab = list;
+  tab = 'lists';
+  save('pt-tab', tab);
+  window.scrollTo(0, 0);
+  render();
+});
+const CK = { open: false, pass: false, list: '', skip: {}, note: '' };
+/** Open tasks on the checklist for this person's shift today. Empty when there's nothing to hold them to. */
+function clockOutOpen() {
+  if (!on('lists') || !data.open) return [];
+  if (/meeting|training/i.test(data.open.as || '')) return [];
+  const L = shiftList();
+  if (!L) return [];
+  const c = (data.checklists || []).find((x) => x.list === L);
+  if (!c) return [];
+  CK.list = L;
+  return (c.items || []).filter((i) => {
+    const k = 'c|' + L + '|' + i.task;
+    return !(busy[k] !== undefined ? busy[k] : !!i.by);
+  });
+}
+function viewClockOutCheck() {
+  const open = clockOutOpen(),
+    ho = on('handoff');
+  if (!open.length) {
+    CK.open = false;
+    return viewToday();
+  }
+  return `<div class="btns" style="margin-bottom:8px"><button class="btn sm" data-ckcancel>‹ Back</button></div><h1>Before you clock out</h1>
+    <p class="sub" style="margin:-4px 4px 10px">${open.length} left on the ${esc(CK.list)} checklist. Finish ${open.length > 1 ? 'them' : 'it'}, or say why you can't${ho ? ' – that goes in your handoff' : ''}.</p>
+    <div class="card">${open
+      .map(
+        (i) => `<div class="row"><div class="txt"><b>${esc(i.task)}</b>
+      <input class="ckwhy" data-ckwhy="${esc(i.task)}" placeholder="Can't finish? Why…" value="${esc(CK.skip[i.task] || '')}" aria-label="Why ${esc(i.task)} isn't done" style="margin-top:6px;width:100%"></div></div>`
+      )
+      .join('')}</div>
+    <div class="btns" style="margin-top:12px"><button class="btn go" data-ckgo>Go finish them</button><button class="btn" data-ckskip>Clock out with reasons</button></div>`;
+}
+document.addEventListener('input', (e) => {
+  if (e.target.dataset && e.target.dataset.ckwhy !== undefined) CK.skip[e.target.dataset.ckwhy] = e.target.value;
+});
+document.addEventListener(
+  'click',
+  (e) => {
+    const b = e.target.closest && e.target.closest('[data-clock="out"], [data-ckcancel], [data-ckgo], [data-ckskip], [data-dialok], [data-dialtask]');
+    if (!b || !data) return;
+    const d = b.dataset;
+    if (d.clock === 'out') {
+      if (CK.pass) {
+        CK.pass = false; // let it through to the handoff / clock out
+        return;
+      }
+      if (!clockOutOpen().length) return;
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      CK.open = true;
+      tab = 'today';
+      window.scrollTo(0, 0);
+      return render();
+    }
+    if (d.ckcancel !== undefined) {
+      CK.open = false;
+      return render();
+    }
+    if (d.ckgo !== undefined) {
+      CK.open = false;
+      listTab = CK.list;
+      tab = 'lists';
+      save('pt-tab', tab);
+      window.scrollTo(0, 0);
+      return render();
+    }
+    if (d.ckskip !== undefined) {
+      const open = clockOutOpen(),
+        miss = open.filter((i) => !String(CK.skip[i.task] || '').trim());
+      if (miss.length) return toast('Say why for each one, or go finish ' + (miss.length > 1 ? 'them' : 'it'));
+      CK.note = open.length ? 'Not finished (' + CK.list + '):\n' + open.map((i) => '• ' + i.task + ' – ' + String(CK.skip[i.task]).trim()).join('\n') : '';
+      CK.open = false;
+      CK.pass = true;
+      if (CK.note && on('handoff')) {
+        HO.open = true; // a skipped task always gets a handoff, even when handoffs aren't required
+        tab = 'today';
+        window.scrollTo(0, 0);
+        CK.pass = false;
+        return render();
+      }
+      render();
+      const cb = $('[data-clock="out"]');
+      if (cb) cb.click();
+      else CK.pass = false;
+      return;
+    }
+    if (d.dialok !== undefined) {
+      sheet = null;
+      if (d.dialnew === undefined) render();
+      return; // "Log it now" carries on to the dial-in form
+    }
+    if (d.dialtask !== undefined) {
+      e.stopImmediatePropagation();
+      DIAL.list = d.dialtask;
+      tab = 'more';
+      moreView = 'dialin';
+      window.scrollTo(0, 0);
+      return render();
+    }
+  },
+  true
+);
 const DRAW = { busy: false, last: null };
 /** Today: the current dial-in, one tap to log a new one. */
 function dialCard() {
@@ -4436,7 +4614,24 @@ document.addEventListener('click', async (e) => {
     render();
     const r = await act('dialIn', { coffee: v('coffee'), grind: v('grind'), dose: v('dose'), yield: v('yield'), time: v('time'), note: v('note') });
     DIAL.busy = false;
-    if (r) toast('Dial-in saved');
+    if (r) {
+      (data.checklists || []).forEach((c) =>
+        (c.items || []).forEach((i) => {
+          if (!i.by && isDialTask(i.task)) {
+            busy['c|' + c.list + '|' + i.task] = true;
+            act('check', { list: c.list, task: i.task, done: '1' });
+          }
+        })
+      );
+      toast('Dial-in saved' + (DIAL.list ? ' · checked off' : ''));
+      if (DIAL.list) {
+        listTab = DIAL.list;
+        tab = 'lists';
+        save('pt-tab', tab);
+        window.scrollTo(0, 0);
+      }
+      DIAL.list = '';
+    }
     render();
   }
   if (d.drawersave !== undefined) {
@@ -4653,6 +4848,7 @@ function viewHandoff() {
   const f = (id, label, ph, rows) => `<label class="f">${label}<textarea id="${id}" rows="${rows || 2}" placeholder="${ph}">${esc(HO[id.slice(2)] || '')}</textarea></label>`;
   return `<div class="btns" style="margin-bottom:8px"><button class="btn sm" data-hocancel>‹ Back</button></div><h1>Shift handoff</h1>
     <p class="sub" style="margin:-4px 4px 10px">The next shift sees this on Today. Then you're clocked out.</p>
+    ${CK.note ? `<div class="card"><div class="row"><div class="txt"><div class="sub">Goes in with your handoff</div><div>${esc(CK.note).replace(/\n/g, '<br>')}</div></div></div></div>` : ''}
     <div class="card"><form class="stack" onsubmit="return false">
       ${f('holow', 'Ran out or running low', 'e.g. oat milk, 12oz lids, almond croissants')}
       ${f('hoprepped', 'Prepped', 'e.g. chai concentrate, 2 iced teas, matcha')}
@@ -4740,7 +4936,7 @@ document.addEventListener(
     const b = e.target.closest && e.target.closest('[data-gsopen], [data-gsclose], [data-hocancel], [data-hosubmit], [data-horead], [data-clock="out"]');
     if (!b) return;
     const d = b.dataset;
-    if (d.clock === 'out' && data && data.handoffRequired && !HO.done) {
+    if (d.clock === 'out' && data && data.handoffRequired && !HO.done && !CK.open) {
       e.stopImmediatePropagation();
       e.preventDefault();
       HO.open = true;
@@ -4762,6 +4958,7 @@ document.addEventListener(
     }
     if (d.hocancel !== undefined) {
       HO.open = false;
+      Object.assign(CK, { note: '', pass: false });
       return render();
     }
     if (d.horead) {
@@ -4772,14 +4969,16 @@ document.addEventListener(
       return;
     }
     if (d.hosubmit !== undefined) {
-      if (!(HO.low || HO.prepped || HO.issues || HO.note).trim() && !HO.nothing) return toast('Fill in at least one part, or tick "Nothing to hand off"');
+      if (!(HO.low || HO.prepped || HO.issues || HO.note || CK.note).trim() && !HO.nothing) return toast('Fill in at least one part, or tick "Nothing to hand off"');
+      const note = [CK.note, HO.note].filter((x) => String(x || '').trim()).join('\n\n');
       HO.busy = true;
       render();
       const pos = await getPos();
-      const r = await act('clockOut', Object.assign({ handoff: { low: HO.low, prepped: HO.prepped, issues: HO.issues, note: HO.note, nothing: HO.nothing } }, pos));
+      const r = await act('clockOut', Object.assign({ handoff: { low: HO.low, prepped: HO.prepped, issues: HO.issues, note, nothing: HO.nothing && !CK.note } }, pos));
       HO.busy = false;
       if (r) {
         Object.assign(HO, { open: false, low: '', prepped: '', issues: '', note: '', nothing: false });
+        Object.assign(CK, { skip: {}, note: '' });
         toast('Handoff saved · clocked out · have a good one');
       }
       render();
@@ -5915,7 +6114,9 @@ function kioskSheet() {
     ${sheet.busy ? `<p class="sub" style="text-align:center">Clocking ${since ? 'out' : 'in'}…</p>` : ''}</div></div>`;
 }
 function kioskDoneSheet() {
-  return `<div class="sheet" role="dialog" aria-label="Done"><div class="sheet-in kiosk kdone"><div class="kok">✓</div><h1>${esc(first(sheet.name))} clocked ${sheet.did}</h1><p class="sub">${timeOf(sheet.at)}</p></div></div>`;
+  return `<div class="sheet" role="dialog" aria-label="Done"><div class="sheet-in kiosk kdone"><div class="kok">✓</div><h1>${esc(first(sheet.name))} clocked ${sheet.did}</h1><p class="sub">${timeOf(sheet.at)}</p>${
+    sheet.did === 'in' && on('dialin') ? ((x) => `<p class="sub" style="margin-top:14px">${x ? "Today's dial-in: <b>" + dialLine(x) + '</b>' : 'Not dialed in yet today'}</p>`)(dialToday()) : ''
+  }</div></div>`;
 }
 async function kioskGo() {
   const k = sheet;
@@ -5957,7 +6158,7 @@ async function kioskGo() {
       sheet = null;
       render();
     }
-  }, 2500);
+  }, r.did === 'in' && on('dialin') ? 6000 : 2500);
 }
 /* Shop iPad: whoever just ticked something off keeps ticking without being asked again, for a minute after their last tick */
 const WHO_MS = 60000;
@@ -6372,6 +6573,8 @@ function render() {
                     ? locSheet()
                     : sheet.kind === 'preppop'
                       ? prepPopSheet()
+                      : sheet.kind === 'dialpop'
+                        ? dialPopSheet()
                       : sheet.kind === 'testacc'
                         ? testAccSheet()
                         : sheet.kind === 'reqedit'
@@ -7016,6 +7219,7 @@ document.addEventListener('click', async (e) => {
     cb.textContent = d.clock === 'in' ? 'Clocking in…' : 'Clocking out…';
     const pos = await getPos();
     act(d.clock === 'in' ? 'clockIn' : 'clockOut', type ? Object.assign({ type }, pos) : pos).then((r) => {
+      if (r && d.clock === 'in' && on('dialin') && !/meeting/i.test(type) && !sheet) sheet = { kind: 'dialpop' };
       if (r && d.clock === 'in' && tab === 'today') {
         const L = shiftList();
         if (L) {
