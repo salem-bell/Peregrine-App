@@ -1789,7 +1789,7 @@ function viewLists() {
         <div class="txt">${
           !on && isDialTask(i.task)
             ? `<button class="linkbtn" data-dialtask="${esc(c.list)}" style="text-align:left"><b>${esc(i.task)}</b> <span class="pill">Log it ›</span></button>`
-            : ((r) => (r ? `<button class="prep-rec" data-recipe="${esc(r.id)}"><b>${esc(i.task)}</b> <span class="pill">Recipe ›</span></button>` : `<b>${esc(i.task)}</b>`))(recipeForTask(i.task))
+            : ((r) => (r ? `<button class="prep-rec" data-recipe="${esc(r.id)}" data-recfrom="${esc(c.list)}" data-rectask="${esc(i.task)}"><b>${esc(i.task)}</b> <span class="pill">Recipe ›</span></button>` : `<b>${esc(i.task)}</b>`))(recipeForTask(i.task))
         }${i.notes ? `<div class="sub">${esc(i.notes)}</div>` : ''}${i.by ? `<div class="sub">${esc(i.by)} · ${timeOf(i.at)}</div>` : ''}</div></div>`
         );
       })
@@ -3860,6 +3860,101 @@ function recipeFor(text, picked) {
   if (!t) return null;
   return RECIPES().find((r) => r.type === 'Prep' && rbase(r.name).length >= 4 && t.indexOf(rbase(r.name)) >= 0) || null;
 }
+/* ----- recipe step counter: a step ending in [count: 10 × ½ gal] gets a tap counter (it survives the phone sleeping) ----- */
+const CNT_RE = /\s*\[count:\s*(\d+)\s*[×x*]\s*([^\]]+)\]\s*$/i;
+const cntAll = () => {
+  try {
+    const o = JSON.parse(load('pt-reccnt') || '{}'),
+      fresh = {};
+    Object.keys(o).forEach((k) => Date.now() - o[k].at < 12 * 36e5 && (fresh[k] = o[k]));
+    return fresh;
+  } catch (_) {
+    return {};
+  }
+};
+const cntSub = (n, unit) => (n ? esc(scaleAmt(unit, n)) + ' in' : 'Tap after each pour');
+function cntHtml(r, si, base, unit, prep) {
+  const max = Math.max(1, Math.round(base * (prep ? recScale : 1))),
+    key = r.id + '|' + si + '|' + max,
+    n = Math.min(max, (cntAll()[key] || {}).n || 0);
+  return `<div class="rc-cnt ${n >= max ? 'full' : ''}" data-cntkey="${esc(key)}" data-cntmax="${max}" data-cntunit="${esc(unit)}">
+    <button class="btn" data-cnt="-1" aria-label="Take one back" ${n ? '' : 'disabled'}>−</button>
+    <div class="rc-cnt-mid"><b class="rc-cnt-n">${n} of ${max}</b><div class="sub rc-cnt-sub">${cntSub(n, unit)}</div>
+      <div class="rc-cnt-dots" aria-hidden="true">${Array.from({ length: max }, (_, i) => `<i class="${i < n ? 'on' : ''}"></i>`).join('')}</div></div>
+    <button class="btn go" data-cnt="1" ${n >= max ? 'disabled' : ''}>+ ${esc(unit)}</button></div>`;
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest && e.target.closest('[data-cnt]');
+  if (!b) return;
+  const box = b.closest('.rc-cnt'),
+    key = box.dataset.cntkey,
+    max = Number(box.dataset.cntmax),
+    unit = box.dataset.cntunit,
+    all = cntAll();
+  const n = Math.max(0, Math.min(max, ((all[key] || {}).n || 0) + Number(b.dataset.cnt)));
+  if (n) all[key] = { n, at: Date.now() };
+  else delete all[key];
+  save('pt-reccnt', JSON.stringify(all));
+  if (navigator.vibrate) navigator.vibrate(n >= max ? [20, 60, 20] : 10);
+  box.querySelector('.rc-cnt-n').textContent = n + ' of ' + max;
+  box.querySelector('.rc-cnt-sub').innerHTML = cntSub(n, unit);
+  box.querySelectorAll('.rc-cnt-dots i').forEach((d, i) => d.classList.toggle('on', i < n));
+  box.querySelector('[data-cnt="-1"]').disabled = !n;
+  box.querySelector('[data-cnt="1"]').disabled = n >= max;
+  box.classList.toggle('full', n >= max);
+  const step = box.parentNode.querySelector('.rc-step');
+  if (step && (n >= max) !== step.classList.contains('on')) {
+    step.classList.toggle('on', n >= max);
+    recStepsReady();
+  }
+  if (n >= max) toast('Full · ' + max + ' × ' + unit);
+});
+/** Where a recipe was opened from, so finishing its steps can go back to that checklist task. */
+let RECFROM = null;
+document.addEventListener(
+  'click',
+  (e) => {
+    const b = e.target.closest && e.target.closest('[data-recfrom]');
+    if (b) RECFROM = { id: b.dataset.recipe, list: b.dataset.recfrom, task: b.dataset.rectask };
+    else if (e.target.closest && e.target.closest('[data-recipe], [data-recback]')) RECFROM = null;
+  },
+  true
+);
+/** After a step is ticked: when every step is done, go back to the checklist (if it came from one) or point at the tick-off card. */
+function recStepsReady() {
+  const all = [...document.querySelectorAll('.rc-step')],
+    ready = all.length > 0 && all.every((x) => x.classList.contains('on')),
+    card = $('#rc-prep');
+  if (ready && RECFROM && RECFROM.id === recSel) {
+    const go = RECFROM;
+    RECFROM = null;
+    toast('All steps done · check it off');
+    setTimeout(() => {
+      if (recSel !== go.id) return;
+      recSel = '';
+      listTab = go.list;
+      tab = 'lists';
+      save('pt-tab', tab);
+      render();
+      const row = [...document.querySelectorAll('[data-check]')].find((x) => x.dataset.check === go.task);
+      const r = row && row.closest('.row');
+      if (r) {
+        r.scrollIntoView({ block: 'center' });
+        r.classList.add('ckflash');
+      }
+    }, 900);
+    return;
+  }
+  if (card) {
+    card.classList.toggle('ready', ready);
+    const q = card.querySelector('.rc-prep-q');
+    if (q) {
+      q.dataset.label = q.dataset.label || q.textContent;
+      q.textContent = ready ? 'All done — tick it off?' : q.dataset.label;
+    }
+    if (ready) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+}
 /** The prep recipe a checklist task is about: "Batch matcha" finds "Batched Matcha" (every word of the recipe's name, ignoring -s/-ed/-ing). */
 const rstem = (w) => w.replace(/(ing|ed|es|s)$/, '');
 const rwords = (t) =>
@@ -4082,11 +4177,12 @@ function viewRecipe(r, o) {
     .join('');
   let n = 0;
   const steps = r.steps
-    .map((l) =>
-      /^!/.test(l)
-        ? `<li class="rc-warn"><span class="n" aria-hidden="true">!</span><p>${esc(l.replace(/^!\s*/, ''))}</p></li>`
-        : `<li><button class="rc-step" data-recstep><span class="n">${++n}</span><p>${esc(l)}</p></button></li>`
-    )
+    .map((l, si) => {
+      if (/^!/.test(l)) return `<li class="rc-warn"><span class="n" aria-hidden="true">!</span><p>${esc(l.replace(/^!\s*/, ''))}</p></li>`;
+      const m = l.match(CNT_RE),
+        txt = m ? l.replace(CNT_RE, '').trim() : l;
+      return `<li><button class="rc-step" data-recstep><span class="n">${++n}</span><p>${esc(txt)}</p></button>${m ? cntHtml(r, si, Number(m[1]), m[2].trim(), prep) : ''}</li>`;
+    })
     .join('');
   const sib = RECIPES().filter((x) => x.type === r.type && (x.cat || 'Other') === (r.cat || 'Other')),
     at = sib.indexOf(r),
@@ -6754,15 +6850,7 @@ document.addEventListener('click', async (e) => {
   }
   if (d.recstep !== undefined) {
     b.classList.toggle('on'); // ticked steps live on screen only; leaving the recipe clears them
-    const all = [...document.querySelectorAll('.rc-step')],
-      card = $('#rc-prep');
-    if (card) {
-      const ready = all.length > 0 && all.every((x) => x.classList.contains('on'));
-      card.classList.toggle('ready', ready);
-      const q = card.querySelector('.rc-prep-q');
-      if (q) q.textContent = ready ? 'All done — tick it off the prep list?' : 'On the prep list';
-      if (ready) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
+    recStepsReady();
     return;
   }
   if (d.prepok !== undefined) {

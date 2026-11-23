@@ -3977,3 +3977,19 @@ html.barmode .rb-card{padding:16px 14px;min-height:74px}
 .tgl[aria-pressed="true"]{background:var(--ok)}.tgl[aria-pressed="true"] i{left:23px}
 .drw{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
 @media (max-width:520px){.drw{grid-template-columns:repeat(3,1fr)}}
+
+/* recipe step counter ([count: 10 × ½ gal] at the end of a step) */
+.rc-cnt { display: flex; align-items: center; gap: 8px; margin: 8px 0 4px 0; padding: 10px; border: 1px solid var(--line, #ddd); border-radius: 12px; background: var(--card, #fff); }
+.rc-cnt .btn { min-width: 48px; min-height: 52px; font-size: 18px; padding: 0 10px; }
+.rc-cnt .btn.go { flex: 0 0 auto; min-width: 88px; font-size: 14px; white-space: nowrap; }
+.rc-cnt-mid { flex: 1; min-width: 0; text-align: center; }
+.rc-cnt-n { font-size: 22px; font-variant-numeric: tabular-nums; }
+.rc-cnt-dots { display: flex; flex-wrap: wrap; justify-content: center; gap: 3px; margin-top: 6px; }
+.rc-cnt-dots i { flex: 0 0 auto; }
+.rc-cnt-dots i { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid currentColor; opacity: 0.35; }
+.rc-cnt-dots i.on { background: currentColor; opacity: 1; }
+.rc-cnt.full { border-color: #3c7a4a; }
+.rc-cnt.full .rc-cnt-n { color: #3c7a4a; }
+/* the checklist task you came back to from its recipe */
+@keyframes ckflash { 0%, 60% { box-shadow: inset 4px 0 0 #c8962d; background: rgba(200, 150, 45, 0.14); } 100% { box-shadow: none; background: none; } }
+.row.ckflash { animation: ckflash 2.4s ease-out; }
