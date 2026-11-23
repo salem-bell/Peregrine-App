@@ -3970,3 +3970,10 @@ html.barmode .rb-card{padding:16px 14px;min-height:74px}
   .row:has(> .chk){min-height:58px}
   .chk{width:36px;height:36px}
 }
+
+/* ===== Feature switches, drawer count ===== */
+.tgl{all:unset;cursor:pointer;flex:none;width:50px;height:30px;border-radius:99px;background:var(--line);position:relative;transition:background .15s}
+.tgl i{position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:left .15s}
+.tgl[aria-pressed="true"]{background:var(--ok)}.tgl[aria-pressed="true"] i{left:23px}
+.drw{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+@media (max-width:520px){.drw{grid-template-columns:repeat(3,1fr)}}

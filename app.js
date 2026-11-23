@@ -428,6 +428,8 @@ const SECTION_FIELDS = {
   recipes: ['recipes', 'recipeSheet'],
   team: ['users', 'pay', 'period', 'myPay', 'levels', 'trBadge', 'sales'],
   train: ['training', 'myTraining'],
+  dial: ['dialin'],
+  drawer: ['drawer', 'drawerBase'],
 };
 const haveNow = () => (data && data.v && data.me ? data.v : undefined);
 let HIST = { key: '', from: '', shifts: [], punches: [] },
@@ -1451,11 +1453,11 @@ function viewToday() {
       : '';
   return `<h1>${hi}, ${esc(first(d.me.name))}</h1>
     <button class="gsbar" data-gsopen aria-label="Search everything"><span aria-hidden="true">⌕</span>Search recipes, checklists, people…</button>
-    ${pubHint}${stage() === 'new' ? '' : pushHint}${remindHint}${clockCard()}${handoffCard()}${firstWeekCard()}${forYouCard()}${laborCard()}${salesCard()}${prepCard}
+    ${pubHint}${stage() === 'new' ? '' : pushHint}${remindHint}${on('timeclock') ? clockCard() : ''}${handoffCard()}${firstWeekCard()}${forYouCard()}${on('timeclock') ? laborCard() : ''}${on('sales') ? salesCard() : ''}${on('prep') ? prepCard : ''}${dialCard()}
     ${unread.length ? `<div class="card">${unread.slice(0, 3).map(annRow).join('')}</div>` : ''}
     ${chatN ? `<div class="card">${rowBtn('data-tab="chat"', `<div class="txt"><b>${chatN} unread message${chatN > 1 ? 's' : ''}</b></div><span>›</span>`)}</div>` : ''}
     <h2>Working today</h2><div class="card">${today.length ? today.map((s) => `<div class="row ${s.name === d.me.name ? 'mine' : ''}"><div class="txt"><b>${esc(s.name)}</b>${levelPill(s.name)}<div class="sub">${t12(s.start)}–${t12(s.end)}${s.position ? ' · ' + esc(s.position) : ''}</div></div>${mgr() ? clockState(s) : ''}</div>`).join('') : '<div class="empty">Nobody scheduled today.</div>'}</div>
-    <h2>Lists</h2><div class="card">${(d.checklists || []).map((c) => rowBtn(`data-golist="${esc(c.list)}"`, `<div class="txt"><b>${esc(c.list)}</b><div class="progress"><i style="width:${c.total ? Math.round((c.done / c.total) * 100) : 0}%"></i></div></div><span class="pill ${c.done === c.total && c.total ? 'ok' : 'mute'}">${c.done}/${c.total}</span>`)).join('') || '<div class="empty">No lists today. A manager sets them up on the Checklists tab in the sheet.</div>'}</div>
+    ${!on('lists') ? '' : `<h2>Lists</h2><div class="card">${(d.checklists || []).map((c) => rowBtn(`data-golist="${esc(c.list)}"`, `<div class="txt"><b>${esc(c.list)}</b><div class="progress"><i style="width:${c.total ? Math.round((c.done / c.total) * 100) : 0}%"></i></div></div><span class="pill ${c.done === c.total && c.total ? 'ok' : 'mute'}">${c.done}/${c.total}</span>`)).join('') || '<div class="empty">No lists today. A manager sets them up on the Checklists tab in the sheet.</div>'}</div>`}
     ${
       pendingReq.length || (att && (att.late || att.no || att.miss || att.over || att.auto))
         ? `<h2>Waiting on you</h2><div class="card">
@@ -4344,6 +4346,122 @@ function levelPill(name) {
 }
 let trainSrc = '',
   trainUntil = 0;
+/* ===== Feature switches, Dial-in log, Drawer count ===== */
+/** Is this part of the app turned on for this shop? (Everything is on with an older server.) */
+const on = (k) => !data || !data.features || data.features[k] !== false;
+const DIAL = { open: false, busy: false };
+const DRAW = { busy: false, last: null };
+/** Today: the current dial-in, one tap to log a new one. */
+function dialCard() {
+  if (!on('dialin') || !data.dialin) return '';
+  const x = data.dialin.find((d) => d.date === T());
+  return `<h2>Dial-in</h2><div class="card">${
+    x
+      ? rowBtn('data-more="dialin"', `<div class="txt"><b>${esc(x.coffee)} · grind ${esc(x.grind)}</b><div class="sub">${[x.dose && x.dose + 'g in', x.yield && x.yield + 'g out', x.time && x.time + ' sec'].filter(Boolean).join(' · ')}${x.note ? ' · ' + esc(x.note) : ''}</div><div class="sub">${esc(first(x.by))} · ${timeOf(x.at)}</div></div><span>›</span>`)
+      : `<div class="row"><div class="txt"><b>Not dialed in yet today</b><div class="sub">${data.dialin[0] ? 'Last: ' + esc(data.dialin[0].coffee) + ' · grind ' + esc(data.dialin[0].grind) + ' (' + esc(shortDay(data.dialin[0].date)) + ')' : 'Log the first one'}</div></div><button class="btn sm go" data-dialnew>Log it</button></div>`
+  }</div>`;
+}
+function viewDialIn() {
+  const L = data.dialin || [],
+    last = L[0] || {},
+    coffees = [...new Set(L.map((x) => x.coffee).filter(Boolean))];
+  const f = (n, label, attrs, val) => `<label class="f">${label}<input name="${n}" ${attrs} value="${esc(val || '')}"></label>`;
+  return `${back()}<h1>Dial-in log</h1>
+    <h2>Log today's dial-in</h2><div class="card"><form class="stack" data-form="dialin" onsubmit="return false">
+      ${f('coffee', 'Coffee', 'list="dialcoffees" placeholder="House"', last.coffee)}<datalist id="dialcoffees">${coffees.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>
+      <div class="trtwo">${f('grind', 'Grind setting', 'inputmode="decimal" placeholder="e.g. 4.2"', last.grind)}${f('dose', 'Dose (g)', 'type="number" step="0.1" inputmode="decimal"', last.dose || '17.5')}</div>
+      <div class="trtwo">${f('yield', 'Yield (g)', 'type="number" step="0.1" inputmode="decimal"', last.yield || '')}${f('time', 'Time (sec)', 'type="number" step="1" inputmode="numeric"', '')}</div>
+      ${f('note', 'Taste / notes', 'placeholder="e.g. balanced, a touch sour – went finer"', '')}
+      <button class="btn go" data-dialsave ${DIAL.busy ? 'disabled' : ''}>${DIAL.busy ? 'Saving…' : 'Save'}</button></form></div>
+    <h2>History</h2><div class="card">${
+      L.map((x) => `<div class="row"><div class="txt"><b>${esc(x.coffee)} · grind ${esc(x.grind)}</b><div class="sub">${[x.dose && x.dose + 'g in', x.yield && x.yield + 'g out', x.time && x.time + ' sec'].filter(Boolean).join(' · ')}${x.note ? ' · ' + esc(x.note) : ''}</div></div><span class="sub" style="text-align:right">${esc(shortDay(x.date))}<br>${esc(first(x.by))}</span></div>`).join('') ||
+      '<div class="empty">No dial-ins yet. The opener logs the first one each morning.</div>'
+    }</div>`;
+}
+function viewDrawer() {
+  const base = data.drawerBase || 200,
+    L = data.drawer || [];
+  return `${back()}<h1>Drawer count</h1>
+    <h2>Count and close</h2><div class="card"><form class="stack" data-form="drawer" onsubmit="return false">
+      <div class="sub">Enter how many of each bill, like Count Bills in the POS. The drawer keeps $${base}.</div>
+      <div class="drw">${[100, 50, 20, 10, 5, 1].map((d) => `<label class="f">$${d}s<input type="number" min="0" step="1" inputmode="numeric" data-bill="${d}" placeholder="0"></label>`).join('')}<label class="f">Coins ($)<input type="number" min="0" step="0.01" inputmode="decimal" data-coins placeholder="0.00"></label></div>
+      <label class="f">POS expected cash ($)<input type="number" step="0.01" inputmode="decimal" data-expected placeholder="From the Count and Close summary"></label>
+      <div id="drwout" class="hint" style="margin:0">Counted $0.00</div>
+      <label class="f">Note (optional)<input data-drnote placeholder="Anything about this count"></label>
+      <button class="btn go" data-drawersave ${DRAW.busy ? 'disabled' : ''}>${DRAW.busy ? 'Saving…' : 'Save count'}</button></form></div>
+    <h2>${lead() ? 'Recent counts' : 'Your counts'}</h2><div class="card">${
+      L.map((x) => `<div class="row"><div class="txt"><b>$${x.counted.toFixed(2)} counted · deposit $${x.deposit}</b><div class="sub">${esc(first(x.by))} · ${timeOf(x.at)}${x.note ? ' · ' + esc(x.note) : ''}</div></div>${x.diff == null ? '' : `<span class="pill ${Math.abs(x.diff) > 5 ? 'warn' : Math.abs(x.diff) > 0 ? 'mute' : 'ok'}">${x.diff > 0 ? '+' : x.diff < 0 ? '−' : ''}$${Math.abs(x.diff).toFixed(2)}</span>`}</div>`).join('') ||
+      '<div class="empty">No counts yet.</div>'
+    }</div>`;
+}
+function drawerMath() {
+  const base = data.drawerBase || 200;
+  let t = 0;
+  document.querySelectorAll('[data-bill]').forEach((i) => (t += (Number(i.value) || 0) * Number(i.dataset.bill)));
+  t += Number(($('[data-coins]') || {}).value) || 0;
+  const exp = ($('[data-expected]') || {}).value,
+    dep = Math.max(0, Math.round(t) - base),
+    diff = exp === '' || exp == null ? null : t - Number(exp);
+  const o = $('#drwout');
+  if (o)
+    o.innerHTML = `<b>Counted $${t.toFixed(2)}</b> · deposit <b>$${dep}</b> · $${(t - dep).toFixed(2)} stays in the drawer${diff == null ? '' : `<br>${Math.abs(diff) < 0.005 ? 'Matches the POS.' : (diff < 0 ? 'Short' : 'Over') + ' $' + Math.abs(diff).toFixed(2) + (Math.abs(diff) > 5 ? ' — recount. If it stands, the manager is told the same day.' : ' — note it with the deposit.')}`}`;
+  return { t, exp };
+}
+/** Master Admin: turn parts of the app on or off for this shop. */
+function viewMaster() {
+  if (!data.master) return viewMoreList();
+  const L = data.featureList || [],
+    groups = [...new Set(L.map((f) => f.group))];
+  return `${back()}<h1>Master admin</h1><p class="sub" style="margin:-4px 4px 10px">Turn parts of the app on or off for ${esc(data.name || 'this shop')}. Changes reach everyone within a minute. Sign-in, Today, Team and Settings are always on.</p>
+    ${groups.map((g) => `<h2>${esc(g)}</h2><div class="card">${L.filter((f) => f.group === g).map((f) => `<div class="row"><div class="txt"><b>${esc(f.name)}</b><div class="sub">${esc(f.desc)}</div></div><button class="tgl" data-feat="${esc(f.key)}" aria-pressed="${on(f.key)}" aria-label="${esc(f.name)}"><i></i></button></div>`).join('')}</div>`).join('')}`;
+}
+document.addEventListener('input', (e) => {
+  if (e.target.matches && e.target.matches('[data-bill], [data-coins], [data-expected]')) drawerMath();
+});
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest && e.target.closest('[data-dialnew], [data-dialsave], [data-drawersave], [data-feat]');
+  if (!b || !data) return;
+  const d = b.dataset;
+  if (d.dialnew !== undefined) {
+    tab = 'more';
+    moreView = 'dialin';
+    window.scrollTo(0, 0);
+    return render();
+  }
+  if (d.dialsave !== undefined) {
+    const f = $('form[data-form="dialin"]'),
+      v = (n) => f.elements.namedItem(n).value;
+    if (!v('grind').trim()) return toast('Add the grind setting');
+    DIAL.busy = true;
+    render();
+    const r = await act('dialIn', { coffee: v('coffee'), grind: v('grind'), dose: v('dose'), yield: v('yield'), time: v('time'), note: v('note') });
+    DIAL.busy = false;
+    if (r) toast('Dial-in saved');
+    render();
+  }
+  if (d.drawersave !== undefined) {
+    const { t, exp } = drawerMath();
+    if (!t) return toast('Enter the bill counts');
+    const bills = {};
+    document.querySelectorAll('[data-bill]').forEach((i) => (bills[i.dataset.bill] = Number(i.value) || 0));
+    if (!confirm('Save a count of $' + t.toFixed(2) + '?')) return;
+    DRAW.busy = true;
+    render();
+    const r = await act('drawerCount', { bills, coins: ($('[data-coins]') || {}).value, expected: exp, note: ($('[data-drnote]') || {}).value });
+    DRAW.busy = false;
+    if (r) toast('Count saved');
+    render();
+  }
+  if (d.feat) {
+    const now = !on(d.feat);
+    if (!confirm((now ? 'Turn on ' : 'Turn off ') + b.getAttribute('aria-label') + ' for everyone at this shop?')) return;
+    data.features[d.feat] = now;
+    render();
+    const r = await act('setFeatures', { features: { [d.feat]: now } });
+    if (r) toast(b.getAttribute('aria-label') + (now ? ' is on' : ' is off'));
+  }
+});
+
 /* ===== Drop 3: swipe a list row right to check it off ===== */
 let lsw = null;
 document.addEventListener(
@@ -4481,12 +4599,12 @@ const HO = { open: false, low: '', prepped: '', issues: '', note: '', nothing: f
 /** Everything someone might look for, from what the app already has on this phone. */
 function searchIndex() {
   const idx = [];
-  (data.recipes || []).forEach((r) => idx.push({ w: r.type === 'Prep' ? 'Prep recipe' : 'Drink', t: r.name, x: [r.cat, r.size, (r.ing || []).join(' '), (r.steps || []).join(' '), r.notes].join(' '), a: `data-recipe="${esc(r.id)}"` }));
+  if (on('recipes')) (data.recipes || []).forEach((r) => idx.push({ w: r.type === 'Prep' ? 'Prep recipe' : 'Drink', t: r.name, x: [r.cat, r.size, (r.ing || []).join(' '), (r.steps || []).join(' '), r.notes].join(' '), a: `data-recipe="${esc(r.id)}"` }));
   (data.checklists || []).forEach((c) => (c.items || []).forEach((it) => idx.push({ w: 'Checklist · ' + c.list, t: it.task, x: [it.section, it.notes].join(' '), a: `data-golist="${esc(c.list)}"` })));
-  (data.people || []).filter((p) => p.id !== data.meId).forEach((p) => idx.push({ w: 'Message', t: p.name, x: p.role, a: `data-dm="${esc(p.id)}" data-dmname="${esc(p.name)}"` }));
+  if (on('chat')) (data.people || []).filter((p) => p.id !== data.meId).forEach((p) => idx.push({ w: 'Message', t: p.name, x: p.role, a: `data-dm="${esc(p.id)}" data-dmname="${esc(p.name)}"` }));
   (data.announcements || []).forEach((a) => idx.push({ w: 'Announcement', t: a.title, x: a.message, a: 'data-more="news"' }));
   (data.links || []).forEach((l) => idx.push({ w: 'Document', t: l.name, x: l.tier || '', a: `data-tr="doclink" data-id="${esc(l.id)}"` }));
-  [['Requests', 'requests', 'request time off swap cover open shift pick up'], ['Availability', 'avail', 'availability days'], [mgr() ? 'Time sheets' : 'My time', 'time', 'hours pay timecard punches'], ['Reminders', 'reminders', 'notifications email shift reminders']].forEach(([t, k, x]) => idx.push({ w: 'App', t, x, a: `data-more="${k}"` }));
+  [['Requests', 'requests', 'request time off swap cover open shift pick up', 'requests'], ['Availability', 'avail', 'availability days', 'availability'], [mgr() ? 'Time sheets' : 'My time', 'time', 'hours pay timecard punches', 'timeclock'], ['Dial-in log', 'dialin', 'espresso grind dose yield dial in', 'dialin'], ['Drawer count', 'drawer', 'drawer count cash deposit close', 'drawer'], ['Reminders', 'reminders', 'notifications email shift reminders', '']].filter((x) => !x[3] || on(x[3])).forEach(([t, k, x]) => idx.push({ w: 'App', t, x, a: `data-more="${k}"` }));
   if (TRN.res) {
     TRN.res.resources.forEach((r) => (r.sections || []).forEach((s, i) => idx.push({ w: r.title, t: s.title, x: s.b.filter((b) => typeof b === 'string').map(trStrip).join(' '), a: `data-tr="doc" data-id="${esc(r.id)}" data-i="${i}"` })));
     TRN.res.manual.forEach((c) => c.sections.forEach((s) => idx.push({ w: 'Employee Manual', t: s.title, x: s.b.filter((b) => typeof b === 'string').map(trStrip).join(' '), a: 'data-trsub="manual"' })));
@@ -4566,13 +4684,13 @@ function firstWeekCard() {
     got = t ? items.filter((it) => t.done[it.skill]).length : 0;
   const home = window.matchMedia && (window.matchMedia('(display-mode: standalone)').matches || navigator.standalone);
   const steps = [
-    ['Sign the Employee Manual', 'Training › Manual', !b.manual, 'data-tab="tests" data-trsub="manual"'],
+    ['Sign the Employee Manual', 'Training › Manual', !b.manual, 'data-tab="tests" data-trsub="manual"', 'manual'],
     ['Add the app to your Home Screen', 'So it opens like any app', !!home, 'data-more="push"'],
     ['Turn on notifications', 'Shift reminders, schedule changes, messages', typeof pushOn_ === 'function' && pushOn_(), 'data-more="push"'],
-    ['Upload your food handler certificate', b.food ? (/overdue/.test(b.food) ? 'Overdue' : 'Due ' + esc(b.food.replace(/^due /, ''))) : 'Due by the end of week 2', !!b.foodOn, 'data-tab="tests" data-trsub="forms"'],
-    ['Level I study guide and test', 'Within your first 4 shifts', code !== 'T', 'data-tab="tests" data-trsub="study"'],
-    ['Level I skill checklist', t ? got + ' of ' + items.length + ' skills checked off by your trainer' : 'Your trainer starts it with you', !!t && items.length > 0 && got === items.length, 'data-tab="tests" data-trsub="skills"'],
-  ];
+    ['Upload your food handler certificate', b.food ? (/overdue/.test(b.food) ? 'Overdue' : 'Due ' + esc(b.food.replace(/^due /, ''))) : 'Due by the end of week 2', !!b.foodOn, 'data-tab="tests" data-trsub="forms"', 'foodhandler'],
+    ['Level I study guide and test', 'Within your first 4 shifts', code !== 'T', 'data-tab="tests" data-trsub="study"', 'tests'],
+    ['Level I skill checklist', t ? got + ' of ' + items.length + ' skills checked off by your trainer' : 'Your trainer starts it with you', !!t && items.length > 0 && got === items.length, 'data-tab="tests" data-trsub="skills"', 'training'],
+  ].filter((x) => !x[4] || on(x[4]));
   const done = steps.filter((x) => x[2]).length;
   if (done === steps.length) return '';
   return `<h2>Your first week</h2><div class="card"><div class="row"><div class="txt"><b>${done} of ${steps.length} done</b><div class="progress" style="margin-top:8px"><i style="width:${Math.round((done / steps.length) * 100)}%"></i></div></div></div>
@@ -4697,7 +4815,9 @@ async function trLoadHome(force) {
 }
 const trEsc = (s) => esc(s == null ? '' : s);
 function trPillsHtml() {
-  const subs = [['skills', 'Checklist'], ['study', 'Study & tests'], ['manual', 'Manual'], ['res', 'Resources'], ['forms', 'Forms']].concat(lead() ? [['dash', 'Progress']] : []);
+  const subs = [['skills', 'Checklist', 'training'], ['study', 'Study & tests', 'tests'], ['manual', 'Manual', 'manual'], ['res', 'Resources', 'library'], ['forms', 'Forms', '']]
+    .concat(lead() ? [['dash', 'Progress', 'progress']] : [])
+    .filter(([k, , f]) => (k === 'forms' ? on('hr') || on('foodhandler') : on(f)));
   const H = TRN.home || {},
     n = { skills: lead() ? ((data.training || {}).active || []).length : 0, manual: H.manual && !H.manual.acked ? 1 : 0, forms: (H.docs || []).length + (H.food && !H.food.onFile ? 1 : 0) };
   return `<div class="seg trseg">${subs.map(([k, l]) => `<button data-trsub="${k}" aria-pressed="${TRN.sub === k}">${l}${n[k] ? ' ' + n[k] : ''}</button>`).join('')}</div>`;
@@ -4716,7 +4836,9 @@ function trAlertHtml() {
 }
 function viewTests() {
   trLoadHome();
-  if (!TRN.sub) TRN.sub = 'skills';
+  const okSubs = [['skills', 'training'], ['study', 'tests'], ['manual', 'manual'], ['res', 'library'], ['forms', 'hr'], ['dash', 'progress']].filter(([k, f]) => (k === 'forms' ? on('hr') || on('foodhandler') : on(f)) && (k !== 'dash' || lead())).map((x) => x[0]);
+  if (!TRN.sub || okSubs.indexOf(TRN.sub) < 0) TRN.sub = okSubs[0] || '';
+  if (!TRN.sub) return '<h1>Training</h1><div class="card"><div class="empty">Training is turned off for this shop.</div></div>';
   const body = TRN.sub === 'skills' ? trSkillsView() : TRN.sub === 'manual' ? trManualView() : TRN.sub === 'res' ? trResView() : TRN.sub === 'forms' ? trFormsView() : TRN.sub === 'dash' && lead() ? trDashView() : trStudyView();
   setTimeout(trAfter, 0);
   return `<div class="trhub"><h1>Training ${levelPill(data.me.name)}</h1>${trPillsHtml()}${trAlertHtml()}${body}</div>`;
@@ -4972,6 +5094,7 @@ function trFormsView() {
         ${f('Your comments (optional)', `<textarea rows="3" data-trcomment="${trEsc(d.id)}"></textarea>`)}<button class="btn go" data-tr="sign" data-id="${trEsc(d.id)}">Sign as received</button></form></div>`;
     });
   }
+  if (!on('foodhandler')) return h + (on('hr') ? trFormsHr(H, f, names) : '');
   h += '<h2>Food handler certificate</h2><div class="card">';
   h += F.onFile
     ? `<div class="row"><div class="txt"><b>Certificate on file</b><div class="sub">Uploaded ${trEsc(F.onFile.uploaded)}${F.onFile.expires ? ' · expires ' + trEsc(F.onFile.expires) : ''}</div></div><span class="pill ok">Done</span></div>`
@@ -4980,6 +5103,10 @@ function trFormsView() {
       <div class="trtwo">${f('Expiration date', '<input id="trfe" placeholder="MM/DD/YYYY">')}${f('What you paid ($)', '<input id="trfp" type="number" step="0.01" inputmode="decimal" placeholder="7.00">')}</div>
       <button class="btn go" data-tr="food">Upload</button></form>`;
   h += '</div>';
+  return h + (on('hr') ? trFormsHr(H, f, names) : '');
+}
+function trFormsHr(H, f, names) {
+  let h = '';
   h += `<h2>Report a concern</h2><div class="card"><div class="row"><div class="txt"><b>Confidential</b><div class="sub">Harassment, discrimination, safety, or anything you aren't comfortable raising on shift. Handled as privately as possible. Retaliation for reporting in good faith is not allowed.</div></div></div>
     <form class="stack" onsubmit="return false">${f('Kind of concern', '<select id="trck"><option>Harassment</option><option>Sexual harassment</option><option>Discrimination</option><option>Threats or violence</option><option>Safety</option><option>Other</option></select>')}
     ${f('Who was involved', '<input id="trci">')}<div class="trtwo">${f('When', '<input id="trcd" placeholder="Date and time">')}${f('Where', '<input id="trcw">')}</div>
@@ -5457,6 +5584,9 @@ function viewMore() {
     resources: viewResources,
     recipes: () => viewRecipes({ back: back() }),
     training: () => (lead() ? viewTraining() : viewMoreList()),
+    dialin: () => (on('dialin') ? viewDialIn() : viewMoreList()),
+    drawer: () => (on('drawer') ? viewDrawer() : viewMoreList()),
+    master: viewMaster,
     team: () => (mgr() ? viewTeam() : viewMoreList()),
   };
   if (shop() && ['news', 'resources', 'settings', 'recipes'].indexOf(moreView) < 0) moreView = wide() ? 'news' : '';
@@ -5478,16 +5608,19 @@ function viewMoreList() {
     );
   const pill = (n) => (n ? `<span class="pill warn" style="margin-right:8px">${n}</span>` : '');
   return `<h1>More</h1><div class="card">
-      ${item('news', 'Announcements', '', pill(unreadN))}
-      ${item('time', mgr() ? 'Time sheets' : 'My time', mgr() ? 'Labor by day, week or pay period' : 'Your hours and estimated pay')}
-      ${item('requests', 'Requests', 'Time off, swaps, covers and open shifts', pill(pendN))}
-      ${item('avail', 'Availability', "When you can't work")}
-      ${rowBtn('data-tab="tests" class="mobonly"', '<div class="txt"><b>Training</b><div class="sub">Manual, study guides, tests, resources and forms</div></div><span>›</span>')}
-      ${Number(data.version) >= 5.04 ? item('recipes', 'Recipes', 'Drink builds and prep, step by step') : ''}
-      ${lead() ? `<span class="mobonly">${rowBtn('data-tab="inventory"', '<div class="txt"><b>Inventory</b><div class="sub">Count and reorder</div></div><span>›</span>')}</span>` : ''}
+      ${on('news') ? item('news', 'Announcements', '', pill(unreadN)) : ''}
+      ${on('timeclock') ? item('time', mgr() ? 'Time sheets' : 'My time', mgr() ? 'Labor by day, week or pay period' : 'Your hours and estimated pay') : ''}
+      ${on('requests') ? item('requests', 'Requests', 'Time off, swaps, covers and open shifts', pill(pendN)) : ''}
+      ${on('availability') ? item('avail', 'Availability', "When you can't work") : ''}
+      ${on('dialin') ? item('dialin', 'Dial-in log', "Today's espresso settings and history") : ''}
+      ${on('drawer') ? item('drawer', 'Drawer count', 'Count and close the drawer') : ''}
+      ${['training', 'tests', 'manual', 'library', 'hr', 'foodhandler', 'progress'].some(on) ? rowBtn('data-tab="tests" class="mobonly"', '<div class="txt"><b>Training</b><div class="sub">Manual, study guides, tests, resources and forms</div></div><span>›</span>') : ''}
+      ${Number(data.version) >= 5.04 && on('recipes') ? item('recipes', 'Recipes', 'Drink builds and prep, step by step') : ''}
+      ${lead() && on('inventory') ? `<span class="mobonly">${rowBtn('data-tab="inventory"', '<div class="txt"><b>Inventory</b><div class="sub">Count and reorder</div></div><span>›</span>')}</span>` : ''}
       ${shop() ? item('resources', 'Resources', 'Guides, handbooks, documents') : ''}
 
-      ${mgr() ? item('team', 'Team & sign-in codes') : ''}</div>
+      ${mgr() ? item('team', 'Team & sign-in codes') : ''}
+      ${data.master ? item('master', 'Master admin', 'Turn parts of the app on or off') : ''}</div>
     <div class="card">${item('settings', 'Settings', 'Notifications, reminders, look, sign out')}</div>
     <p class="sub" style="text-align:center">Peregrine Team · server ${esc(data.version || '')}</p>`;
 }
@@ -5933,10 +6066,17 @@ const INV_TAB = ['inventory', 'Inventory', '▤'];
    keep Inventory on wide screens and in More. */
 const mainTabs = () => {
   const st = stage(),
-    base = [['schedule', 'Schedule', '▦'], ['chat', 'Chat', '✉︎'], ['today', 'Today', '☀︎', 'home'], ['lists', 'Lists', '✓']];
-  if (st === 'staff') return base.concat([['recipes', 'Recipes', '❦'], ['tests', 'Training', '✎', 'deskonly'], ['more', 'More', '☰']]);
-  if (st === 'lead') return base.concat([['tests', 'Training', '✎'], INV_TAB.concat(['deskonly']), ['more', 'More', '☰']]);
-  return base.concat([['tests', 'Training', '✎'], ['more', 'More', '☰']]);
+    trainOn = ['training', 'tests', 'manual', 'library', 'hr', 'foodhandler', 'progress'].some(on),
+    feat = { schedule: 'schedule', chat: 'chat', lists: 'lists', recipes: 'recipes', inventory: 'inventory' },
+    keep = (t) => (t[0] === 'tests' ? trainOn : !feat[t[0]] || on(feat[t[0]]));
+  const base = [['schedule', 'Schedule', '▦'], ['chat', 'Chat', '✉︎'], ['today', 'Today', '☀︎', 'home'], ['lists', 'Lists', '✓']];
+  const tail =
+    st === 'staff'
+      ? [['recipes', 'Recipes', '❦'], ['tests', 'Training', '✎', 'deskonly']]
+      : st === 'lead'
+        ? [['tests', 'Training', '✎'], INV_TAB.concat(['deskonly'])]
+        : [['tests', 'Training', '✎'], ['recipes', 'Recipes', '❦', 'deskonly']];
+  return base.concat(tail).filter(keep).concat([['more', 'More', '☰']]);
 };
 const TABS = [
   ['schedule', 'Schedule', '▦'],
@@ -5983,7 +6123,7 @@ function deskMore() {
     unreadN = (data.announcements || []).filter((a) => !a.read).length;
   const it = (k, n, ic, badge) =>
     `<button data-more="${k}" class="deskonly" ${tab === 'more' && (moreView === k || (k === 'settings' && /^(push|reminders)$/.test(moreView))) ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}${badge ? `<span class="n">${badge}</span>` : ''}</button>`;
-  return `<div class="tabsep deskonly" aria-hidden="true"></div>${it('news', 'Announcements', '⚑', unreadN)}${it('time', mgr() ? 'Time sheets' : 'My time', '⏱')}${it('requests', 'Requests', '⇄', pendN)}${it('avail', 'Availability', '◷')}${Number(data.version) >= 5.04 ? it('recipes', 'Recipes', '❦') : ''}${mgr() ? it('team', 'Team', '☺') : ''}
+  return `<div class="tabsep deskonly" aria-hidden="true"></div>${on('news') ? it('news', 'Announcements', '⚑', unreadN) : ''}${on('timeclock') ? it('time', mgr() ? 'Time sheets' : 'My time', '⏱') : ''}${on('requests') ? it('requests', 'Requests', '⇄', pendN) : ''}${on('availability') ? it('avail', 'Availability', '◷') : ''}${on('dialin') ? it('dialin', 'Dial-in log', '◎') : ''}${on('drawer') ? it('drawer', 'Drawer count', '$') : ''}${mgr() ? it('team', 'Team', '☺') : ''}${data.master ? it('master', 'Master admin', '⚙︎') : ''}
     <div class="tabspacer deskonly" aria-hidden="true"></div>${it('settings', 'Settings', '⚙︎')}`;
 }
 function setShop(t) {
