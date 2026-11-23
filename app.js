@@ -1695,8 +1695,8 @@ function listSeg(cl) {
     tab === 'sidework' ? '' : `<button data-list="${PREP}" aria-pressed="${listTab === PREP}">Prep${n ? ' ' + n : ''}</button>`
   }</div>`;
 }
-/* Shop iPad: the machine-cleaning and drawer lists live on their own "Closing & Side Work" tab, not under Lists. */
-const SIDE_RE = /machine|drawer/i,
+/* Shop iPad: Closing, Side work, Machine cleaning and Drawer close live on the "Closing & Side Work" tab; Lists keeps Opening, Mid and Prep. */
+const SIDE_RE = /^clos|side|machine|drawer/i,
   SIDE_TAB = 'Closing & Side Work';
 const sideLists = () => (shop() ? (data.checklists || []).filter((c) => SIDE_RE.test(c.list)) : []);
 function prepRow(x) {
@@ -1723,7 +1723,7 @@ function prepChoices() {
     ${recs.length ? `<div class="pchips"><span class="sub">Recipes</span>${recs.map((r) => chip(r.name, true)).join('')}</div>` : ''}
     ${other.length ? `<div class="pchips"><span class="sub">Other</span>${other.map((t) => chip(t, false)).join('')}</div>` : ''}`;
 }
-function viewPrep(cl) {
+function viewPrep(cl, addOnly) {
   const items = data.prep || [],
     open = items.filter((x) => !x.doneAt),
     done = items.filter((x) => x.doneAt);
@@ -1736,14 +1736,18 @@ function viewPrep(cl) {
       );
     })
   );
-  return `<h1>Checklists</h1>${listSeg(cl)}
-    <div class="card"><form class="stack" data-form="prep">
+  const form = `<div class="card"><form class="stack" data-form="prep">
       <label class="f">What needs prepping<input name="item" maxlength="120" placeholder="Pick below or type something new" autocomplete="off" list="prep-choices"></label>
       ${prepChoices()}
       <label class="f">Details (optional)<input name="details" maxlength="300" placeholder="e.g. 2 gallons, we're out of concentrate"></label>
       <label class="f">For<select name="when">${opts.join('')}</select></label>
       <label class="opt"><input type="checkbox" name="notify" checked> Also send them a notification</label>
-      <button class="btn go">Send to the shift</button></form></div>
+      <button class="btn go">Send to the shift</button></form></div>`;
+  if (addOnly)
+    return `<div class="btns" style="margin-bottom:8px"><button class="btn sm" data-tab="today">‹ Home</button></div><h1>Add prep</h1>${form}
+    <h2>Already on the list</h2><div class="card">${open.map(prepRow).join('') || '<div class="empty">Nothing to prep.</div>'}</div>`;
+  return `<h1>${shop() ? 'Prep to-do' : 'Checklists'}</h1>${listSeg(cl)}
+    ${shop() ? '' : form}${shop() ? `<div class="btns" style="margin:0 0 10px"><button class="btn sm" data-tab="addprep">+ Add prep</button></div>` : ''}
     <h2>To prep</h2><div class="card">${open.map(prepRow).join('') || '<div class="empty">Nothing to prep.</div>'}</div>
     ${done.length ? `<h2>Done recently</h2><div class="card">${done.map(prepRow).join('')}</div>` : ''}
     <p class="sub">The people on that shift get a pop-up when they open the app on that day, and see it on their Today screen until it's done. No email is sent.</p>`;
@@ -6055,6 +6059,17 @@ function shopPeople() {
   const known = today.map((n) => ppl.find((p) => p.name === n)).filter(Boolean);
   return { today: known, rest: ppl.filter((p) => today.indexOf(p.name) < 0) };
 }
+/** Shop iPad home: today's reminders – prep to do and side work left – each line opens its list. */
+function shopReminders() {
+  const prep = (data.prep || []).filter((x) => !x.doneAt && (!x.date || x.date <= T())),
+    side = (data.checklists || []).filter((c) => /side/i.test(c.list)),
+    left = side.flatMap((c) => (c.items || []).filter((i) => !i.by).map((i) => ({ list: c.list, task: i.task })));
+  if (!prep.length && !left.length) return '';
+  const few = (xs, f) => xs.slice(0, 3).map(f).join(' · ') + (xs.length > 3 ? ' · +' + (xs.length - 3) + ' more' : '');
+  return `<div class="hs-rem"><div class="hs-rem-h">Today's reminders</div>
+    ${prep.length ? `<button class="hs-rem-row" data-golist="${PREP}"><b>✎ Prep · ${prep.length}</b><span>${few(prep, (x) => esc(x.item))}</span><i>›</i></button>` : ''}
+    ${left.length ? `<button class="hs-rem-row" data-golist="${esc(left[0].list)}"><b>☾ Side work · ${left.length} left</b><span>${few(left, (x) => esc(x.task))}</span><i>›</i></button>` : ''}</div>`;
+}
 /** Shop iPad home screen: big clock, one big Clock in / out button, who's on now, and app-style tiles. */
 function viewShopHome() {
   const now = new Date(),
@@ -6085,6 +6100,7 @@ function viewShopHome() {
             .join('')}`
         : '<span class="sub">No one is clocked in</span>'
     }</div>
+    ${shopReminders()}
     ${pinned ? `<div class="hs-ann"><span class="pill">Pinned</span> <b>${esc(pinned.title)}</b>${pinned.message ? ` <span class="sub">${linkify(esc(pinned.message))}</span>` : ''}</div>` : ''}
     <div class="hs-grid">
       ${tile('data-tab="bar"', '◎', 'Bar', ((x) => (x ? 'Grind ' + esc(x.grind) + ' · ' + esc(x.coffee) : !data.features || data.features.dialin !== false ? 'Not dialed in yet' : 'Drink recipes'))(dialToday()), 0, 15)}
@@ -6092,7 +6108,8 @@ function viewShopHome() {
       ${tile('data-tab="chat"', '✉︎', 'Chat', chatN ? chatN + ' unread' : '', chatN, 175)}
       ${tile('data-tab="lists"', '✓', 'Checklists', clAll ? clDone + ' of ' + clAll + ' done' : '', 0, 120)}
       ${sideLists().length ? tile('data-tab="sidework"', '☾︎', esc(SIDE_TAB), ((xs) => xs.reduce((n, c) => n + c.done, 0) + ' of ' + xs.reduce((n, c) => n + c.total, 0) + ' done')(sideLists()), 0, 260) : ''}
-      ${tile(`data-golist="${PREP}"`, '✎', 'Prep', prepN ? prepN + ' to do' : 'All done', prepN, 40)}
+      ${tile(`data-golist="${PREP}"`, '✎', 'Prep to-do', prepN ? prepN + ' to do' : 'All done', prepN, 40)}
+      ${tile('data-tab="addprep"', '＋', 'Add prep', 'Send to a shift', 0, 80)}
       ${tile('data-tab="inventory"', '▤', 'Inventory', 'Count stock', 0, 225)}
       ${groups.join('')}
       ${RECIPES().length && !resGroups().some((g) => /recipe/i.test(g)) ? tile('data-tab="recipes"', '❦', barTab() ? 'Prep recipes' : 'Recipes', barTab() ? RECIPES().filter((r) => r.type === 'Prep').length + ' recipes' : RECIPES().length + ' recipes', 0, 28) : ''}
@@ -6145,6 +6162,7 @@ function prepCountSheet() {
       (t) =>
         `<optgroup label="${esc(t)}">${names
           .filter((n) => n.tab === t)
+          .sort((a, b) => String(a.item).localeCompare(String(b.item), undefined, { sensitivity: 'base', numeric: true }))
           .map(
             (n) =>
               `<option value="${esc(n.k)}" ${n.k === sheet.pick ? 'selected' : ''}>${esc(n.item)}${n.unit ? ' (' + esc(n.unit) + ')' : ''}</option>`
@@ -6644,7 +6662,7 @@ function render() {
     tests: data.trBadge ? (data.trBadge.manual || 0) + (data.trBadge.recipes || 0) + (data.trBadge.sign || 0) : 0,
   };
   $('#tabs').hidden = false;
-  if (shop() && !shopTabs().some((t) => t[0] === tab)) tab = 'today';
+  if (shop() && !shopTabs().some((t) => t[0] === tab) && tab !== 'addprep') tab = 'today';
   if (!shop() && tab === 'inventory' && !lead()) tab = 'today';
   $('#tabs').innerHTML =
     (shop() ? shopTabs() : mainTabs())
@@ -6690,6 +6708,8 @@ function render() {
     ? viewResGroup(tab.slice(4))
     : tab === 'bar'
       ? viewBar()
+      : tab === 'addprep'
+        ? viewPrep([], true)
     : tab === 'recipes'
       ? viewRecipes(shop() && barTab() ? { title: 'Prep recipes' } : undefined)
       : tab === 'inventory'
@@ -6976,7 +6996,7 @@ document.addEventListener('click', async (e) => {
   }
   if (d.golist) {
     listTab = d.golist;
-    tab = 'lists';
+    tab = shop() && SIDE_RE.test(d.golist) ? 'sidework' : 'lists';
     save('pt-tab', tab);
     window.scrollTo(0, 0);
     render();
