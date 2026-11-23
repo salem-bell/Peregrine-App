@@ -4549,7 +4549,7 @@ function handoffCard() {
   if (!hs.length) return '';
   const part = (l, v) => (v ? `<div class="row"><div class="txt"><div class="sub">${l}</div><div>${esc(v).replace(/\n/g, '<br>')}</div></div></div>` : '');
   return `<h2>Shift handoff</h2>${hs
-    .map((h) => `<div class="card"><div class="row"><img class="trmark" src="brand/bird-gold.png" alt=""><div class="txt"><b>From ${esc(first(h.name))}</b><div class="sub">${timeOf(h.at)}</div></div><button class="btn sm go" data-horead="${esc(h.id)}">Got it</button></div>
+    .map((h) => `<div class="card"><div class="row"><img class="trmark" src="brand/bird-gold.png" alt=""><div class="txt"><b>From ${esc(first(h.name))}</b><div class="sub">${timeOf(h.at)}${h.for !== undefined ? ' · for ' + (h.for ? esc(h.for) : 'managers only (nobody scheduled next)') : ''}</div></div><button class="btn sm go" data-horead="${esc(h.id)}">Got it</button></div>
       ${part('Ran out or running low', h.low)}${part('Prepped', h.prepped)}${part('Equipment or issues', h.issues)}${part('Note', h.note)}</div>`)
     .join('')}`;
 }
