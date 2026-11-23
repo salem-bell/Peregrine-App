@@ -1858,7 +1858,7 @@ function viewMyCalendar() {
     <div class="cal"><div class="cal-h">${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((x) => `<span>${x}</span>`).join('')}</div><div class="cal-g">${cells}</div></div>
     ${detail}
     <p class="sub" style="margin:8px 4px">Shows your published shifts and approved time off.</p>
-    <div class="btns" style="margin-top:14px"><button class="btn" data-more="requests">Time off & swaps</button><button class="btn" data-more="avail">My availability</button><button class="btn" data-more="reminders">Reminders & calendar</button></div></div>`;
+    <div class="btns" style="margin-top:14px"><button class="btn" data-more="requests">Requests</button><button class="btn" data-more="avail">My availability</button><button class="btn" data-more="reminders">Reminders & calendar</button></div></div>`;
 }
 function viewMyList() {
   const vis = (data.shifts || []).map(pubView).filter(Boolean),
@@ -1885,7 +1885,7 @@ function viewMyList() {
   const wk = mine.filter((s) => s.date <= plus(monday(T()), 6)).reduce((n, s) => n + mins(s.end) - mins(s.start), 0);
   return `<div class="mywrap">${mine.length ? `<p class="sub" style="margin:0 4px 10px">${mine.length} upcoming shift${mine.length > 1 ? 's' : ''}${wk ? ' · ' + hrs(wk) + ' left this week' : ''}</p>${mine.map(card).join('')}` : '<div class="card"><div class="empty">No upcoming shifts on the published schedule.</div></div>'}
     ${past.length ? `<details class="more" style="margin:12px 4px"><summary>Last 7 days</summary>${past.map(card).join('')}</details>` : ''}
-    <div class="btns" style="margin-top:14px"><button class="btn" data-more="requests">Time off & swaps</button><button class="btn" data-more="avail">My availability</button><button class="btn" data-more="reminders">Reminders & calendar</button></div></div>`;
+    <div class="btns" style="margin-top:14px"><button class="btn" data-more="requests">Requests</button><button class="btn" data-more="avail">My availability</button><button class="btn" data-more="reminders">Reminders & calendar</button></div></div>`;
 }
 function weekBounds() {
   return [monday(plus(T(), -21)), monday(plus(T(), lead() ? 49 : 7))];
@@ -1966,7 +1966,7 @@ function viewScheduleBuild(seg) {
     : '';
   return `<h1>Schedule</h1>${seg || ''}${nav}${lead() && pend ? '<p class="sub" style="margin:0 4px 6px">Drafts and changes stay hidden from the team until you publish.</p>' : ''}${mgr() ? '' : `<div class="seg"><button data-mine="0" aria-pressed="${!schedMine}">Everyone</button><button data-mine="1" aria-pressed="${schedMine}">My shifts</button></div>`}
     ${tools}${days.map(dayCard).join('')}${totals}
-    <div class="btns" style="margin-top:14px"><button class="btn" data-more="requests">Time off & swaps</button><button class="btn" data-more="avail">My availability</button></div>`;
+    <div class="btns" style="margin-top:14px"><button class="btn" data-more="requests">Requests</button><button class="btn" data-more="avail">My availability</button></div>`;
 }
 
 /** Desktop: the whole week as a grid, people down the side. Click a cell to add, click a shift to edit, drag to move (hold Alt/Option to copy). */
@@ -3583,7 +3583,8 @@ function reqRow(q) {
   const cls = q.status === 'Approved' ? 'ok' : q.status === 'Denied' ? 'warn' : 'mute';
   return `<div class="row" style="display:block"><div style="display:flex;gap:8px;align-items:center"><b style="flex:1">${esc(q.type)} · ${reqWhen(q)}</b><span class="pill ${cls}">${esc(q.status)}</span></div>
     <div class="sub">${mgr() && q.from !== data.me.name ? esc(q.from) + ' · ' : ''}${esc(q.details)}${q.note ? ' — ' + esc(q.by) + ': ' + esc(q.note) : ''}</div>
-    ${q.status === 'Pending' && mgr() ? `<div class="btns" style="margin-top:8px"><button class="btn sm go" data-decide="${esc(q.id)}" data-ok="1">Approve</button><button class="btn sm" data-decide="${esc(q.id)}" data-ok="0">Deny</button>${((n) => (n ? `<span class="pill warn" style="align-self:center">Scheduled ${q.until ? n + (n > 1 ? ' shifts' : ' shift') + ' in this time' : 'that day'}</span>` : ''))(Array.from({ length: offDays(q) }, (_, k) => plus(q.date, k)).reduce((a, d) => a + shiftsOn(d).filter((s) => s.name === q.from).length, 0))}</div>` : ''}
+    ${q.type === 'Cover' && q.takenBy ? `<div class="sub"><b>${esc(q.takenBy)}</b> offered to take it${q.status === 'Approved' ? ' · the shift is theirs now' : ''}</div>` : ''}
+    ${q.status === 'Pending' && mgr() ? `<div class="btns" style="margin-top:8px"><button class="btn sm go" data-decide="${esc(q.id)}" data-ok="1">${q.type === 'Cover' && q.takenBy && q.shift ? 'Approve · give it to ' + esc(first(q.takenBy)) : 'Approve'}</button><button class="btn sm" data-decide="${esc(q.id)}" data-ok="0">Deny</button>${((n) => (n ? `<span class="pill warn" style="align-self:center">Scheduled ${q.until ? n + (n > 1 ? ' shifts' : ' shift') + ' in this time' : 'that day'}</span>` : ''))(Array.from({ length: offDays(q) }, (_, k) => plus(q.date, k)).reduce((a, d) => a + shiftsOn(d).filter((s) => s.name === q.from).length, 0))}</div>` : ''}
     ${reqCanChange(q) ? `<div class="btns" style="margin-top:8px"><button class="btn sm" data-editreq="${esc(q.id)}">Edit</button><button class="btn sm" data-cancelreq="${esc(q.id)}">${q.status === 'Approved' ? 'Cancel time off' : 'Cancel request'}</button></div>` : ''}</div>`;
 }
 /** Your own pending or approved request that hasn't finished yet – or anyone's, for a manager. */
@@ -3695,15 +3696,26 @@ document.addEventListener('change', (e) => {
   syncAvailPick(f);
   if (e.target.value === 'part') scrollAvailPick(f);
 });
+/** Open shifts: cover requests from others that anyone can offer to take. */
+function openShiftRow(q) {
+  const s = (data.shifts || []).find((x) => x.id === q.shift),
+    mineOffer = q.takenBy === data.me.name;
+  return `<div class="row"><div class="txt"><b>${esc(shortDay(q.date))}${s ? ' · ' + t12(s.start) + '–' + t12(s.end) : ''}</b><div class="sub">${esc(first(q.from))}'s shift${s && s.position ? ' · ' + esc(s.position) : ''}${q.details ? ' · ' + esc(q.details) : ''}</div>${q.takenBy ? `<div class="sub">${mineOffer ? 'You offered to take it · waiting on a manager' : esc(first(q.takenBy)) + ' offered to take it'}</div>` : ''}</div>
+    ${q.from === data.me.name || mgr() ? '' : mineOffer ? `<button class="btn sm" data-takeshift="${esc(q.id)}" data-undo="1">Withdraw</button>` : q.takenBy ? '' : `<button class="btn sm go" data-takeshift="${esc(q.id)}">I can take it</button>`}</div>`;
+}
 function viewRequests() {
   const all = (data.requests || []).filter((q) => q.status !== 'Cancelled'),
     pend = mgr() ? all.filter((q) => q.status === 'Pending' && q.from !== data.me.name) : [];
+  const open = all.filter((q) => q.type === 'Cover' && q.status === 'Pending' && q.date >= T() && q.from !== data.me.name && !mgr());
+  const myShifts = (data.shifts || []).filter((x) => x.name === data.me.name && x.date >= T() && x.status !== 'draft').slice(0, 20);
   const mine = all.filter((q) => q.from === data.me.name),
     others = mgr() ? all.filter((q) => q.status !== 'Pending' && q.from !== data.me.name) : [];
-  return `${back()}<h1>Time off & swaps</h1>
+  return `${back()}<h1>Requests</h1>
     ${mgr() ? `<h2>Waiting for you</h2><div class="card">${pend.map(reqRow).join('') || '<div class="empty">Nothing to approve.</div>'}</div>` : ''}
+    ${open.length ? `<h2>Open shifts</h2><div class="card">${open.map(openShiftRow).join('')}</div>` : ''}
     <h2>New request</h2><div class="card"><form class="stack" data-form="request">
-      <label class="f">What<select name="type"><option>Time off</option><option>Swap</option><option>Cover</option></select></label>
+      <label class="f">What<select name="type"><option>Time off</option><option>Swap</option><option value="Cover">Cover (post my shift for pickup)</option></select></label>
+      ${myShifts.length ? `<label class="f" data-reqshift hidden>Which shift<select name="shift"><option value="">Pick a shift</option>${myShifts.map((x) => `<option value="${esc(x.id)}" data-date="${esc(x.date)}">${esc(shortDay(x.date))} · ${t12(x.start)}–${t12(x.end)}</option>`).join('')}</select></label>` : ''}
       <label class="f">First day<input name="date" type="date" min="${T()}" value="${plus(T(), 1)}"></label>
       <label class="f" data-reqthru>Last day<input name="until" type="date" min="${T()}"><span class="sub">Leave blank for one day.</span></label>
       <label class="f">Details<textarea name="details" maxlength="1000" placeholder="e.g. Swap my Saturday open with Kelsey"></textarea></label><button class="btn go">${mgr() ? 'Send' : 'Send to managers'}</button>${mgr() ? '<p class="sub">Your own time off is approved right away.</p>' : ''}</form></div>
@@ -3795,9 +3807,25 @@ const isRecView = () =>
   (tab === 'more' && moreView === 'recipes') ||
   tab === 'recipes' ||
   (/^res:/.test(tab) && /recipe/i.test(tab) && RECIPES().length > 0);
+const recFavs = () => {
+  try {
+    return JSON.parse(load('pt-recfav') || '[]');
+  } catch (e) {
+    return [];
+  }
+};
+const recRecent = () => {
+  try {
+    return JSON.parse(load('pt-recrecent') || '[]');
+  } catch (e) {
+    return [];
+  }
+};
+let barMode = load('pt-barmode') === '1';
 function openRecipe(id) {
   const r = recById(id);
   if (!r) return;
+  save('pt-recrecent', JSON.stringify([id].concat(recRecent().filter((x) => x !== id)).slice(0, 8)));
   if (!isRecView()) {
     const [t, mv] = recHome();
     tab = t;
@@ -3824,7 +3852,7 @@ function recipeFor(text, picked) {
 }
 /** Keep the screen on while a recipe is open (someone is following it with their hands full). */
 function syncWake() {
-  const want = !!recSel && isRecView() && !document.hidden;
+  const want = (!!recSel || barMode) && isRecView() && !document.hidden; // bar mode keeps the whole recipe book awake
   try {
     if (want && !wakeLock && navigator.wakeLock)
       navigator.wakeLock
@@ -3882,11 +3910,16 @@ function viewRecipes(o) {
         .join('');
     })
     .join('');
+  const favs = recFavs().map(recById).filter(Boolean),
+    recent = recRecent().map(recById).filter((r) => r && favs.indexOf(r) < 0).slice(0, 6);
+  const quick = favs.length || recent.length
+    ? `${favs.length ? `<section class="rb-cat"><h2>★ Favorites</h2><div class="rb-grid">${favs.map(card).join('')}</div></section>` : ''}${recent.length ? `<section class="rb-cat"><h2>Recent</h2><div class="rb-grid">${recent.map(card).join('')}</div></section>` : ''}`
+    : '';
   return `${head}
-    <div class="rb-tools">${kinds.length > 1 ? `<div class="seg" role="tablist">${kinds.map((k) => `<button data-reckind="${k}" aria-pressed="${k === recKind}">${k === 'Drink' ? 'Drinks' : 'Prep'}</button>`).join('')}</div>` : ''}
+    <div class="rb-tools"><button class="btn sm ${barMode ? 'go' : ''}" data-barmode aria-pressed="${barMode}">Bar mode ${barMode ? 'on' : 'off'}</button>${kinds.length > 1 ? `<div class="seg" role="tablist">${kinds.map((k) => `<button data-reckind="${k}" aria-pressed="${k === recKind}">${k === 'Drink' ? 'Drinks' : 'Prep'}</button>`).join('')}</div>` : ''}
     <input type="search" class="rb-search" data-recsearch placeholder="Search recipes or ingredients" autocomplete="off" aria-label="Search recipes">${canEditRec() ? '<button class="btn go" data-recedit="new">+ Add recipe</button>' : ''}</div>
     <div class="rb-none sub" hidden>No recipe matches that.</div>
-    ${sections}${docs}
+    ${quick}${sections}${docs}
     ${mgr() ? `<p class="sub">Recipes live on the Recipes tab in the sheet${data.recipeSheet ? ` (<a href="${esc(data.recipeSheet)}" target="_blank" rel="noopener">open it</a>)` : ''}. ${canEditRec() ? 'Edit them here or there; edits made here show for everyone straight away, edits in the sheet within a few minutes.' : 'Edits show up here within a few minutes.'}${recCost && recCost.errs && recCost.errs.length ? ' Costs: ' + esc(recCost.errs.join(' · ')) : ''}</p>` : ''}`;
 }
 /** Managers: add or change a recipe in the app. Saves to the same Recipes tab row the sheet shows. */
@@ -4012,7 +4045,14 @@ function viewRecipe(r, o) {
         : `<li><button class="rc-step" data-recstep><span class="n">${++n}</span><p>${esc(l)}</p></button></li>`
     )
     .join('');
-  return `<button class="btn sm" data-recback style="margin-bottom:8px">‹ ${esc(o && o.title && !/^recipes?$/i.test(o.title) ? o.title : 'Recipes')}</button>
+  const sib = RECIPES().filter((x) => x.type === r.type && (x.cat || 'Other') === (r.cat || 'Other')),
+    at = sib.indexOf(r),
+    prev = sib[at - 1],
+    next = sib[at + 1],
+    fav = recFavs().indexOf(r.id) >= 0;
+  return `<div class="rc-nav"><button class="btn sm" data-recback>‹ ${esc(o && o.title && !/^recipes?$/i.test(o.title) ? o.title : 'Recipes')}</button><span style="flex:1"></span>
+    <button class="btn sm" data-recfav="${esc(r.id)}" aria-pressed="${fav}" aria-label="${fav ? 'Remove from favorites' : 'Add to favorites'}">${fav ? '★' : '☆'}</button>
+    ${prev ? `<button class="btn sm" data-recipe="${esc(prev.id)}" data-swipe="prev" aria-label="Previous: ${esc(prev.name)}">‹</button>` : ''}${next ? `<button class="btn sm" data-recipe="${esc(next.id)}" data-swipe="next" aria-label="Next: ${esc(next.name)}">›</button>` : ''}</div>
     ${r.hidden ? `<div class="card rc-hidden"><div class="row"><div class="txt"><b>Hidden from the team</b><div class="sub">Only managers can see this recipe.</div></div>${canEditRec() ? `<button class="btn sm" data-recshow="${esc(r.id)}" data-on="1">Show it</button>` : ''}</div></div>` : ''}
     <article class="rc ${prep ? 'prep' : 'drink'}">
       <header class="rc-head"><div class="rc-brand"><img src="brand/bird-gold.png" alt=""><span>Peregrine${r.cat ? ' · ' + esc(r.cat) : ''}</span></div>
@@ -4305,6 +4345,86 @@ function levelPill(name) {
 }
 let trainSrc = '',
   trainUntil = 0;
+/* ===== Drop 2: bar mode, open shifts, clock in to your checklist ===== */
+document.documentElement.classList.toggle('barmode', barMode);
+/** The checklist that goes with today's shift: Opening for early starts, Closing for late finishes, Mid otherwise. */
+function shiftList() {
+  const s = (data.shifts || []).find((x) => x.name === data.me.name && x.date === T() && x.status !== 'removed');
+  const names = (data.checklists || []).map((c) => c.list);
+  const pick = (re) => names.find((n) => re.test(n));
+  if (!s) return '';
+  if (mins(s.start) <= 8 * 60) return pick(/^open/i) || '';
+  if (mins(s.end) >= 17 * 60) return pick(/^clos/i) || '';
+  return pick(/^mid/i) || '';
+}
+document.addEventListener('change', (e) => {
+  const f = e.target.closest && e.target.closest('form[data-form="request"]');
+  if (f && e.target.name === 'type') {
+    const w = f.querySelector('[data-reqshift]'),
+      cover = e.target.value === 'Cover';
+    if (w) w.hidden = !cover;
+    const thru = f.querySelector('[data-reqthru]');
+    if (thru) thru.hidden = e.target.value !== 'Time off';
+  }
+  if (f && e.target.name === 'shift') {
+    const o = e.target.selectedOptions[0];
+    if (o && o.dataset.date) f.elements.namedItem('date').value = o.dataset.date;
+  }
+});
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest && e.target.closest('[data-takeshift], [data-barmode], [data-recfav]');
+  if (!b) return;
+  const d = b.dataset;
+  if (d.barmode !== undefined) {
+    barMode = !barMode;
+    save('pt-barmode', barMode ? '1' : '0');
+    document.documentElement.classList.toggle('barmode', barMode);
+    toast(barMode ? 'Bar mode on: bigger type, and the screen stays on in Recipes' : 'Bar mode off');
+    return render();
+  }
+  if (d.recfav) {
+    const f = recFavs(),
+      i = f.indexOf(d.recfav);
+    if (i >= 0) f.splice(i, 1);
+    else f.unshift(d.recfav);
+    save('pt-recfav', JSON.stringify(f.slice(0, 24)));
+    return render();
+  }
+  if (d.takeshift) {
+    const q = (data.requests || []).find((x) => x.id === d.takeshift);
+    if (!d.undo && !confirm('Offer to take ' + (q ? first(q.from) + "'s shift on " + shortDay(q.date) : 'this shift') + '? A manager approves it.')) return;
+    if (q) q.takenBy = d.undo ? '' : data.me.name;
+    render();
+    const r = await act('takeShift', { id: d.takeshift, undo: d.undo ? '1' : '' });
+    if (r) toast(d.undo ? 'Withdrawn' : "Sent · we'll let you know when it's approved");
+  }
+});
+/* swipe left or right on a recipe to move through its category */
+let swX = null,
+  swY = null;
+document.addEventListener(
+  'touchstart',
+  (e) => {
+    if (!e.target.closest || !e.target.closest('.rc')) return (swX = null);
+    swX = e.touches[0].clientX;
+    swY = e.touches[0].clientY;
+  },
+  { passive: true }
+);
+document.addEventListener(
+  'touchend',
+  (e) => {
+    if (swX == null) return;
+    const dx = e.changedTouches[0].clientX - swX,
+      dy = e.changedTouches[0].clientY - swY;
+    swX = null;
+    if (Math.abs(dx) < 70 || Math.abs(dy) > Math.abs(dx) * 0.6) return;
+    const btn = document.querySelector(`[data-swipe="${dx < 0 ? 'next' : 'prev'}"]`);
+    if (btn) openRecipe(btn.dataset.recipe);
+  },
+  { passive: true }
+);
+
 /* ===== Drop 1: Today inbox, search everywhere, shift handoff ===== */
 /** Where this person is: 'new' (trainee, Level I, or manual not signed), 'staff', or 'lead'. Decides the bottom bar. */
 function stage() {
@@ -4324,7 +4444,7 @@ function searchIndex() {
   (data.people || []).filter((p) => p.id !== data.meId).forEach((p) => idx.push({ w: 'Message', t: p.name, x: p.role, a: `data-dm="${esc(p.id)}" data-dmname="${esc(p.name)}"` }));
   (data.announcements || []).forEach((a) => idx.push({ w: 'Announcement', t: a.title, x: a.message, a: 'data-more="news"' }));
   (data.links || []).forEach((l) => idx.push({ w: 'Document', t: l.name, x: l.tier || '', a: `data-tr="doclink" data-id="${esc(l.id)}"` }));
-  [['Time off & swaps', 'requests', 'request time off swap cover'], ['Availability', 'avail', 'availability days'], [mgr() ? 'Time sheets' : 'My time', 'time', 'hours pay timecard punches'], ['Reminders', 'reminders', 'notifications email shift reminders']].forEach(([t, k, x]) => idx.push({ w: 'App', t, x, a: `data-more="${k}"` }));
+  [['Requests', 'requests', 'request time off swap cover open shift pick up'], ['Availability', 'avail', 'availability days'], [mgr() ? 'Time sheets' : 'My time', 'time', 'hours pay timecard punches'], ['Reminders', 'reminders', 'notifications email shift reminders']].forEach(([t, k, x]) => idx.push({ w: 'App', t, x, a: `data-more="${k}"` }));
   if (TRN.res) {
     TRN.res.resources.forEach((r) => (r.sections || []).forEach((s, i) => idx.push({ w: r.title, t: s.title, x: s.b.filter((b) => typeof b === 'string').map(trStrip).join(' '), a: `data-tr="doc" data-id="${esc(r.id)}" data-i="${i}"` })));
     TRN.res.manual.forEach((c) => c.sections.forEach((s) => idx.push({ w: 'Employee Manual', t: s.title, x: s.b.filter((b) => typeof b === 'string').map(trStrip).join(' '), a: 'data-trsub="manual"' })));
@@ -5292,7 +5412,7 @@ function viewMoreList() {
   return `<h1>More</h1><div class="card">
       ${item('news', 'Announcements', '', pill(unreadN))}
       ${item('time', mgr() ? 'Time sheets' : 'My time', mgr() ? 'Labor by day, week or pay period' : 'Your hours and estimated pay')}
-      ${item('requests', 'Time off & swaps', '', pill(pendN))}
+      ${item('requests', 'Requests', 'Time off, swaps, covers and open shifts', pill(pendN))}
       ${item('avail', 'Availability', "When you can't work")}
       ${rowBtn('data-tab="tests" class="mobonly"', '<div class="txt"><b>Training</b><div class="sub">Manual, study guides, tests, resources and forms</div></div><span>›</span>')}
       ${Number(data.version) >= 5.04 ? item('recipes', 'Recipes', 'Drink builds and prep, step by step') : ''}
@@ -5795,7 +5915,7 @@ function deskMore() {
     unreadN = (data.announcements || []).filter((a) => !a.read).length;
   const it = (k, n, ic, badge) =>
     `<button data-more="${k}" class="deskonly" ${tab === 'more' && (moreView === k || (k === 'settings' && /^(push|reminders)$/.test(moreView))) ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}${badge ? `<span class="n">${badge}</span>` : ''}</button>`;
-  return `<div class="tabsep deskonly" aria-hidden="true"></div>${it('news', 'Announcements', '⚑', unreadN)}${it('time', mgr() ? 'Time sheets' : 'My time', '⏱')}${it('requests', 'Time off & swaps', '⇄', pendN)}${it('avail', 'Availability', '◷')}${Number(data.version) >= 5.04 ? it('recipes', 'Recipes', '❦') : ''}${mgr() ? it('team', 'Team', '☺') : ''}
+  return `<div class="tabsep deskonly" aria-hidden="true"></div>${it('news', 'Announcements', '⚑', unreadN)}${it('time', mgr() ? 'Time sheets' : 'My time', '⏱')}${it('requests', 'Requests', '⇄', pendN)}${it('avail', 'Availability', '◷')}${Number(data.version) >= 5.04 ? it('recipes', 'Recipes', '❦') : ''}${mgr() ? it('team', 'Team', '☺') : ''}
     <div class="tabspacer deskonly" aria-hidden="true"></div>${it('settings', 'Settings', '⚙︎')}`;
 }
 function setShop(t) {
@@ -6688,6 +6808,16 @@ document.addEventListener('click', async (e) => {
     cb.textContent = d.clock === 'in' ? 'Clocking in…' : 'Clocking out…';
     const pos = await getPos();
     act(d.clock === 'in' ? 'clockIn' : 'clockOut', type ? Object.assign({ type }, pos) : pos).then((r) => {
+      if (r && d.clock === 'in' && tab === 'today') {
+        const L = shiftList();
+        if (L) {
+          listTab = L;
+          tab = 'lists';
+          save('pt-tab', tab);
+          window.scrollTo(0, 0);
+          render();
+        }
+      }
       if (r)
         toast(
           d.clock === 'in'
@@ -8007,7 +8137,7 @@ document.addEventListener('submit', async (e) => {
       created: new Date().toISOString(),
     });
     render();
-    act('request', { type: v('type'), date: v('date'), until, details: v('details') }).then((r) => {
+    act('request', { type: v('type'), date: v('date'), until, details: v('details'), shift: v('type') === 'Cover' ? v('shift') : '' }).then((r) => {
       if (r) toast(mgr() && v('type') === 'Time off' ? 'Time off approved' : 'Sent to managers');
     });
     f.reset();

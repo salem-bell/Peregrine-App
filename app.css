@@ -3950,3 +3950,12 @@ input[type=file]{padding:9px 10px;font-size:.9rem}
 .gsbar span{font-size:1.2rem;color:var(--teal,var(--accent))}
 .fydot{flex:none;width:10px;height:10px;border-radius:50%;background:var(--teal,var(--accent))}
 .fydot.warn{background:var(--warn)}
+
+/* ===== Recipes: nav, favorites, bar mode ===== */
+.rc-nav{display:flex;gap:6px;align-items:center;margin-bottom:8px}
+.rc-nav [aria-pressed="true"]{color:var(--gold);border-color:var(--gold)}
+html.barmode .rc-title{font-size:2.3rem}
+html.barmode .rc-ing li,html.barmode .rc-step p,html.barmode .rc-warn p{font-size:1.25rem;line-height:1.45}
+html.barmode .rc-ing .amt{font-size:1.3rem}
+html.barmode .rb-card b{font-size:1.12rem}
+html.barmode .rb-card{padding:16px 14px;min-height:74px}
