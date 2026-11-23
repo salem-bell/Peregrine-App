@@ -4596,6 +4596,14 @@ document.addEventListener('click', (e) => {
   render();
 });
 const CK = { open: false, pass: false, list: '', skip: {}, note: '' };
+/** No shift handoff for Training or Admin shifts, or anything under an hour on the clock. */
+function skipHandoff() {
+  const o = data && data.open;
+  if (!o) return false;
+  const s = (data.shifts || []).find((x) => x.id === o.shift);
+  if (/training|admin/i.test((o.as || '') + ' ' + ((s && s.position) || ''))) return true;
+  return Date.now() - new Date(o.in) < 36e5;
+}
 /** Open tasks on the checklist for this person's shift today. Empty when there's nothing to hold them to. */
 function clockOutOpen() {
   if (!on('lists') || !data.open) return [];
@@ -4612,7 +4620,7 @@ function clockOutOpen() {
 }
 function viewClockOutCheck() {
   const open = clockOutOpen(),
-    ho = on('handoff');
+    ho = on('handoff') && !skipHandoff();
   if (!open.length) {
     CK.open = false;
     return viewToday();
@@ -4668,7 +4676,7 @@ document.addEventListener(
       CK.note = open.length ? 'Not finished (' + CK.list + '):\n' + open.map((i) => '• ' + i.task + ' – ' + String(CK.skip[i.task]).trim()).join('\n') : '';
       CK.open = false;
       CK.pass = true;
-      if (CK.note && on('handoff')) {
+      if (CK.note && on('handoff') && !skipHandoff()) {
         HO.open = true; // a skipped task always gets a handoff, even when handoffs aren't required
         tab = 'today';
         window.scrollTo(0, 0);
@@ -5109,7 +5117,7 @@ document.addEventListener(
     const b = e.target.closest && e.target.closest('[data-gsopen], [data-gsclose], [data-hocancel], [data-hosubmit], [data-horead], [data-clock="out"]');
     if (!b) return;
     const d = b.dataset;
-    if (d.clock === 'out' && data && data.handoffRequired && !HO.done && !CK.open) {
+    if (d.clock === 'out' && data && data.handoffRequired && !HO.done && !CK.open && !skipHandoff()) {
       e.stopImmediatePropagation();
       e.preventDefault();
       HO.open = true;
