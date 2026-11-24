@@ -1698,7 +1698,7 @@ function listSeg(cl) {
 /* Shop iPad: Closing, Side work, Machine cleaning and Drawer close live on the "Closing & Side Work" tab; Lists keeps Opening, Mid and Prep. */
 const SIDE_RE = /^clos|side|machine|drawer/i,
   SIDE_TAB = 'Closing & Side Work';
-const sideLists = () => []; // the iPad keeps every checklist on one Checklists tab now
+const sideLists = () => (shop() ? (data.checklists || []).filter((c) => SIDE_RE.test(c.list)) : []);
 function prepRow(x) {
   const on = !!x.doneAt,
     canDel = x.by === data.me.name || lead();
@@ -1754,7 +1754,7 @@ function viewPrep(cl, addOnly) {
 }
 function viewLists() {
   const side = tab === 'sidework',
-    cl = (data.checklists || []).filter((c) => !side || SIDE_RE.test(c.list)),
+    cl = (data.checklists || []).filter((c) => !shop() || side === SIDE_RE.test(c.list)),
     title = side ? esc(SIDE_TAB) : 'Checklists';
   if (listTab === PREP && !side) return shop() ? viewShopPrep() : viewPrep(cl);
   if (listTab === INV) listTab = ''; // inventory has its own tab now
@@ -6176,6 +6176,7 @@ document.addEventListener('click', (e) => {
   else render();
 });
 /* ---------- shop iPad: clock-in screen, whole-team schedule, "who did it" ---------- */
+const featOn = (k) => on(k); // for screens where a local "on" (who's on the clock) hides the feature check
 const shopToday = () =>
   shiftsOn(T())
     .filter(live)
@@ -6212,7 +6213,7 @@ function viewShopHome() {
     on = data.onClock || [],
     sh = shopToday(),
     chatN = (data.channels || []).reduce((n, c) => n + (Number(c.unread) || 0), 0),
-    cl = data.checklists || [],
+    cl = (data.checklists || []).filter((c) => !SIDE_RE.test(c.list)), // Closing has its own tile
     clDone = cl.reduce((n, c) => n + c.done, 0),
     clAll = cl.reduce((n, c) => n + c.total, 0),
     prepN = (data.prep || []).filter((x) => !x.doneAt && (!x.date || x.date <= T())).length,
@@ -6236,10 +6237,13 @@ function viewShopHome() {
     ${shopReminders()}
     ${pinned ? `<div class="hs-ann"><span class="pill">Pinned</span> <b>${esc(pinned.title)}</b>${pinned.message ? ` <span class="sub">${linkify(esc(pinned.message))}</span>` : ''}</div>` : ''}
     <div class="hs-grid">
-      ${barTab() ? tile('data-tab="bar"', '◎', 'Bar Menu', ((x) => (x ? 'Grind ' + esc(x.grind) + ' · ' + timeOf(x.at) : !data.features || data.features.dialin !== false ? 'Not dialed in yet' : 'Drink recipes'))(dialToday()), 0, 15) : ''}
+      ${barTab() ? tile('data-tab="bar"', '◎', 'Bar Menu', ((x) => (x ? 'Grind ' + esc(x.grind) + ' · ' + timeOf(x.at) : featOn('dialin') ? 'Not dialed in yet' : 'Drink recipes'))(dialToday()), 0, 15) : ''}
       ${tile('data-tab="lists"', '✓', 'Checklists', clAll ? clDone + ' of ' + clAll + ' done' : '', 0, 120)}
-      ${tile('data-tab="prep"', '✎', 'Prep', prepN ? prepN + ' to do' : 'All done', prepN, 40)}
-      ${tile('data-tab="chat"', '✉︎', 'Chat', chatN ? chatN + ' unread' : '', chatN, 175, chatN ? 'hs-ping' : '')}
+      ${sideLists().length ? tile('data-tab="sidework"', '☾︎', 'Closing', ((xs) => xs.reduce((n, c) => n + c.done, 0) + ' of ' + xs.reduce((n, c) => n + c.total, 0) + ' done')(sideLists()), 0, 260) : ''}
+      ${tile('data-tab="prep"', '✎', 'Prep to-do', prepN ? prepN + ' to do' : 'All done', prepN, 40)}
+      ${tile('data-tab="addprep"', '＋', 'Add prep', 'Send to a shift', 0, 80)}
+      ${featOn('inventory') ? tile('data-tab="inventory"', '▤', 'Inventory', 'Count stock', 0, 225) : ''}
+      ${shopPrepRec() ? tile(`data-tab="${esc(shopPrepRec())}"`, '❦', 'Prep recipes', ((n) => n + (n === 1 ? ' recipe' : ' recipes'))(RECIPES().filter((r) => r.type === 'Prep').length), 0, 28) : ''}
     </div></div>`;
 }
 /* ---------- prep done: "how much do we have now?" → straight into the inventory sheet ---------- */
@@ -6566,18 +6570,26 @@ const resIcon = (g, i) =>
 const barTab = () => RECIPES().some((r) => r.type === 'Drink') || on('dialin');
 const resGroups = () =>
   (data.links || []).reduce((a, l) => (l.group && a.indexOf(l.group) < 0 ? a.concat(l.group) : a), []);
-/* Shop iPad: the menu holds the reference screens; the work (Bar Menu, Checklists, Prep, Chat) is the big tiles on Home. */
+/* Shop iPad menu: every screen one tap away. Home's tiles are the shift work (Bar Menu, lists, prep, inventory). */
 const shopTabs = () =>
-  [
-    ['today', 'Home', '◷'],
-    ['schedule', 'Schedule', '▦'],
-  ]
-    .concat(resGroups().filter((g) => !/recipe/i.test(g)).map((g, i) => ['res:' + g, g, resIcon(g, i)]))
+  [['today', 'Home', '◷'], ...(barTab() ? [['bar', 'Bar Menu', '◎']] : []), ['lists', 'Checklists', '✓']]
+    .concat(sideLists().length ? [['sidework', SIDE_TAB, '☾︎']] : [])
+    .concat([
+      ['prep', 'Prep', '✎'],
+      ['inventory', 'Inventory', '▤'],
+      ['chat', 'Chat', '✉︎'],
+      ['schedule', 'Schedule', '▦'],
+    ])
+    .concat(resGroups().filter((g) => !/recipe/i.test(g) && g !== SIDE_TAB).map((g, i) => ['res:' + g, g, resIcon(g, i)]))
     .concat([['more', 'More', '☰']]);
-/* Screens opened from the Home tiles (or from Prep): the menu lights up Home while they're open. */
-const SHOP_REACH = /^(bar|lists|prep|chat|inventory|addprep|recipes|more|res:.*)$/;
+/* Screens opened from Home or Prep rather than the menu (the menu lights up the item they belong to). */
+const SHOP_REACH = /^(addprep|recipes|more|res:.*)$/;
 const shopUnder = (t) =>
-  t === 'more' && /^(news|settings|resources)$/.test(moreView) ? 'more' : /^(bar|lists|prep|chat|inventory|addprep|recipes)$/.test(t) || (t === 'more' && moreView === 'dialin') || (/^res:/.test(t) && /recipe/i.test(t)) ? 'today' : t;
+  t === 'more' && moreView === 'dialin'
+    ? 'bar'
+    : /^(addprep|recipes)$/.test(t) || (/^res:/.test(t) && /recipe/i.test(t))
+      ? 'prep'
+      : t;
 /** Shop iPad: where the prep recipes live (the recipe book, or a resource group of recipe docs). */
 const shopPrepRec = () => {
   const g = resGroups().find((x) => /recipe/i.test(x));
@@ -6792,7 +6804,7 @@ function render() {
   const chatN = (data.channels || []).reduce((n, c) => n + c.unread, 0);
   const badge = {
     lists: shop() ? 0 : prepMine().length,
-    today: shop() && tab !== 'today' ? chatN : 0,
+    prep: shop() ? prepOpen().length : 0,
     chat: chatN,
     more:
       (mgr() ? (data.requests || []).filter((q) => q.status === 'Pending' && q.from !== data.me.name).length : 0) +
@@ -6801,14 +6813,13 @@ function render() {
   };
   $('#tabs').hidden = false;
   if (shop()) shopPing(chatN);
-  if (shop() && tab === 'sidework') tab = 'lists'; // side work now sits with the other checklists
   if (shop() && !shopTabs().some((t) => t[0] === tab) && !SHOP_REACH.test(tab)) tab = 'today';
   if (!shop() && tab === 'inventory' && !lead()) tab = 'today';
   $('#tabs').innerHTML =
     (shop() ? shopTabs() : mainTabs())
       .map(
         ([k, n, ic, cls]) =>
-          `<button data-tab="${k}" class="${cls || ''}${k === 'more' ? ' mobonly' : ''}${k === 'more' && tab === 'tests' ? ' cur-m' : ''}${shop() && k === 'today' && chatN && tab !== 'today' ? ' ping' : ''}" ${(shop() ? shopUnder(tab) : tab) === k && !(k === 'more' && wide()) ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}${badge[k] ? `<span class="n">${badge[k]}</span>` : ''}</button>`
+          `<button data-tab="${k}" class="${cls || ''}${k === 'more' ? ' mobonly' : ''}${k === 'more' && tab === 'tests' ? ' cur-m' : ''}${shop() && k === 'chat' && chatN ? ' ping' : ''}" ${(shop() ? shopUnder(tab) : tab) === k && !(k === 'more' && wide()) ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}${badge[k] ? `<span class="n">${badge[k]}</span>` : ''}</button>`
       )
       .join('') +
     deskMore() +
@@ -7138,7 +7149,7 @@ document.addEventListener('click', async (e) => {
   }
   if (d.golist) {
     listTab = d.golist;
-    tab = shop() && d.golist === PREP ? 'prep' : 'lists';
+    tab = shop() && d.golist === PREP ? 'prep' : shop() && SIDE_RE.test(d.golist) ? 'sidework' : 'lists';
     save('pt-tab', tab);
     window.scrollTo(0, 0);
     render();
