@@ -6086,7 +6086,7 @@ function viewSettings() {
 /* ---------- loading screen (in index.html, so it shows before this file has even loaded) ---------- */
 /* It stays up for at least SPLASH_MIN_MS every time the app opens, even when saved data is ready at once – the pause is
    part of the feel. Only a fresh open shows it (coming back from the background on a phone or iPad doesn't reload). */
-const SPLASH_MIN_MS = 1800;
+const SPLASH_MIN_MS = 2500;
 let splashT = 0,
   splashGoing = false;
 function splash(show) {
