@@ -6084,7 +6084,11 @@ function viewSettings() {
 }
 
 /* ---------- loading screen (in index.html, so it shows before this file has even loaded) ---------- */
-let splashT = 0;
+/* It stays up for at least SPLASH_MIN_MS every time the app opens, even when saved data is ready at once – the pause is
+   part of the feel. Only a fresh open shows it (coming back from the background on a phone or iPad doesn't reload). */
+const SPLASH_MIN_MS = 1800;
+let splashT = 0,
+  splashGoing = false;
 function splash(show) {
   const el = $('#splash');
   if (!el) return;
@@ -6092,10 +6096,16 @@ function splash(show) {
     if (!splashT) splashT = setTimeout(() => el.classList.add('slow'), 9000); // "taking longer than usual"
     return;
   }
+  if (splashGoing) return;
+  splashGoing = true;
   clearTimeout(splashT);
-  if (el.classList.contains('out')) return;
-  el.classList.add('out');
-  setTimeout(() => el.remove(), 450);
+  setTimeout(
+    () => {
+      el.classList.add('out');
+      setTimeout(() => el.remove(), 450);
+    },
+    Math.max(0, SPLASH_MIN_MS - performance.now()) // performance.now() = time since the app started opening
+  );
 }
 /* ---------- shop iPad: new-message alert – a big banner, a chime and a pulsing Chat tab until someone looks ---------- */
 let pingN = -1,
