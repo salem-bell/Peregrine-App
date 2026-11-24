@@ -4996,6 +4996,8 @@ function stage() {
 }
 const SRCH = { open: false, q: '' };
 const HO = { open: false, low: '', prepped: '', issues: '', note: '', nothing: false, busy: false };
+/** Anything typed into the handoff? Then "Nothing to hand off" can't be ticked. */
+const hoFilled = () => ['low', 'prepped', 'issues', 'note'].some((k) => String(HO[k] || '').trim());
 /** Everything someone might look for, from what the app already has on this phone. */
 function searchIndex() {
   const idx = [];
@@ -5003,8 +5005,9 @@ function searchIndex() {
   (data.checklists || []).forEach((c) => (c.items || []).forEach((it) => idx.push({ w: 'Checklist · ' + c.list, t: it.task, x: [it.section, it.notes].join(' '), a: `data-golist="${esc(c.list)}"` })));
   if (on('chat')) (data.people || []).filter((p) => p.id !== data.meId).forEach((p) => idx.push({ w: 'Message', t: p.name, x: p.role, a: `data-dm="${esc(p.id)}" data-dmname="${esc(p.name)}"` }));
   (data.announcements || []).forEach((a) => idx.push({ w: 'Announcement', t: a.title, x: a.message, a: 'data-more="news"' }));
+  if (on('handoff')) (data.handoffs || []).forEach((h) => idx.push({ w: 'Handoff · ' + timeOf(h.at), t: 'From ' + first(h.name), x: [h.low, h.prepped, h.issues, h.note].join(' '), a: 'data-more="handoffs"' }));
   (data.links || []).forEach((l) => idx.push({ w: 'Document', t: l.name, x: l.tier || '', a: `data-tr="doclink" data-id="${esc(l.id)}"` }));
-  [['Requests', 'requests', 'request time off swap cover open shift pick up', 'requests'], ['Availability', 'avail', 'availability days', 'availability'], [mgr() ? 'Time sheets' : 'My time', 'time', 'hours pay timecard punches', 'timeclock'], ['Dial-in log', 'dialin', 'espresso grind dose yield dial in', 'dialin'], ['Drawer count', 'drawer', 'drawer count cash deposit close', 'drawer'], ['Reminders', 'reminders', 'notifications email shift reminders', '']].filter((x) => !x[3] || on(x[3])).forEach(([t, k, x]) => idx.push({ w: 'App', t, x, a: `data-more="${k}"` }));
+  [['Requests', 'requests', 'request time off swap cover open shift pick up', 'requests'], ['Availability', 'avail', 'availability days', 'availability'], [mgr() ? 'Time sheets' : 'My time', 'time', 'hours pay timecard punches', 'timeclock'], ['Dial-in log', 'dialin', 'espresso grind dose yield dial in', 'dialin'], ['Handoffs', 'handoffs', 'shift handoff ran out low prepped equipment issues next shift', 'handoff'], ['Drawer count', 'drawer', 'drawer count cash deposit close', 'drawer'], ['Reminders', 'reminders', 'notifications email shift reminders', '']].filter((x) => !x[3] || on(x[3])).forEach(([t, k, x]) => idx.push({ w: 'App', t, x, a: `data-more="${k}"` }));
   if (TRN.res) {
     TRN.res.resources.forEach((r) => (r.sections || []).forEach((s, i) => idx.push({ w: r.title, t: s.title, x: s.b.filter((b) => typeof b === 'string').map(trStrip).join(' '), a: `data-tr="doc" data-id="${esc(r.id)}" data-i="${i}"` })));
     TRN.res.manual.forEach((c) => c.sections.forEach((s) => idx.push({ w: 'Employee Manual', t: s.title, x: s.b.filter((b) => typeof b === 'string').map(trStrip).join(' '), a: 'data-trsub="manual"' })));
@@ -5059,18 +5062,104 @@ function viewHandoff() {
       ${f('hoprepped', 'Prepped', 'e.g. chai concentrate, 2 iced teas, matcha')}
       ${f('hoissues', 'Equipment or issues', 'e.g. group 3 dripping, dish machine slow to drain')}
       ${f('honote', 'Anything else the next shift should know', '', 3)}
-      <label class="trcheck"><input type="checkbox" id="honothing" ${HO.nothing ? 'checked' : ''}> Nothing to hand off</label>
+      <label class="trcheck"><input type="checkbox" id="honothing" ${HO.nothing && !hoFilled() ? 'checked' : ''} ${hoFilled() ? 'disabled' : ''}> Nothing to hand off</label>
+      <p class="sub" id="honothint" style="margin:-6px 4px 0;${hoFilled() ? '' : 'display:none'}">You've written something above, so this isn't needed.</p>
       <button class="btn go" data-hosubmit ${HO.busy ? 'disabled' : ''}>${HO.busy ? 'Clocking out…' : 'Save handoff and clock out'}</button></form></div>`;
 }
-/** Handoffs from the last day the person hasn't read yet. */
-function handoffCard() {
-  const hs = (data.handoffs || []).filter((h) => !h.read);
-  if (!hs.length) return '';
+/* ----- shift handoffs: one item (open when unread, one line once read), the Today card and the Handoffs screen ----- */
+const HOH = { mode: 'day', date: '', key: '', list: null, at: 0, from: '', to: '', busy: '', err: '', open: {} };
+const hoCan = () => on('handoff') && Number(data && data.version) >= 5.1 && !shop();
+function hoItem(h) {
   const part = (l, v) => (v ? `<div class="row"><div class="txt"><div class="sub">${l}</div><div>${esc(v).replace(/\n/g, '<br>')}</div></div></div>` : '');
-  return `<h2>Shift handoff</h2>${hs
-    .map((h) => `<div class="card"><div class="row"><img class="trmark" src="brand/bird-gold.png" alt=""><div class="txt"><b>From ${esc(first(h.name))}</b><div class="sub">${timeOf(h.at)}${h.for !== undefined ? ' · for ' + (h.for ? esc(h.for) : 'managers only (nobody scheduled next)') : ''}</div></div><button class="btn sm go" data-horead="${esc(h.id)}">Got it</button></div>
-      ${part('Ran out or running low', h.low)}${part('Prepped', h.prepped)}${part('Equipment or issues', h.issues)}${part('Note', h.note)}</div>`)
-    .join('')}`;
+  const who = h.mine ? 'You' : esc(first(h.name)),
+    when = timeOf(h.at),
+    forTxt = h.for !== undefined ? (h.for ? 'for ' + esc(h.for) : 'nobody scheduled next') : '',
+    gist = [h.low && 'Low: ' + h.low, h.issues && 'Issues: ' + h.issues, h.prepped && 'Prepped: ' + h.prepped, h.note].filter(Boolean)[0] || '';
+  const full = !h.read || HOH.open[h.id];
+  if (!full)
+    return `<div class="card hoitem">${rowBtn(
+      `data-hotoggle="${esc(h.id)}"`,
+      `<div class="txt"><b>${h.mine ? 'You' : 'From ' + who}</b> <span class="sub">· ${when}</span><div class="sub hogist">${esc(gist.replace(/\s*\n+\s*/g, ' '))}</div></div><span class="sub">›</span>`
+    )}</div>`;
+  const readBy = h.readers && h.readers.length ? `<div class="row"><div class="txt sub">Read by ${h.readers.map((n) => esc(first(n))).join(', ')}</div></div>` : '';
+  return `<div class="card hoitem"><div class="row"><img class="trmark" src="brand/bird-gold.png" alt=""><div class="txt"><b>${h.mine ? 'Your handoff' : 'From ' + who}</b><div class="sub">${when}${forTxt ? ' · ' + forTxt : ''}</div></div>${h.read ? `<button class="btn sm" data-hotoggle="${esc(h.id)}">Hide</button>` : `<button class="btn sm go" data-horead="${esc(h.id)}">Got it</button>`}</div>
+      ${part('Ran out or running low', h.low)}${part('Prepped', h.prepped)}${part('Equipment or issues', h.issues)}${part('Note', h.note)}${readBy}</div>`;
+}
+/** Today: handoffs from the last day – unread ones open, read ones folded to one line. */
+function handoffCard() {
+  const hs = data.handoffs || [];
+  if (!hs.length) return '';
+  const unread = hs.filter((h) => !h.read).length;
+  return `<h2>Shift handoff${unread ? ` <span class="pill warn">${unread} new</span>` : ''}</h2>${hs.map(hoItem).join('')}${hoCan() ? `<p class="sub" style="margin:-2px 4px 12px"><button class="linkbtn" data-more="handoffs">All handoffs ›</button></p>` : ''}`;
+}
+/** Fetch the handoffs for a stretch of days (managers) or the last few days (everyone else). */
+function hoLoad(from, to) {
+  const key = data.me.id + data.me.role + from + to,
+    have = HOH.key === key && HOH.list;
+  if (have && Date.now() - HOH.at < 6e4) return true;
+  if (HOH.busy === key) return !!have;
+  HOH.busy = key; // older than a minute: refresh quietly while the last copy stays on screen
+  HOH.err = '';
+  post({ fn: 'api', token: TOKEN, p: { hoHist: { from, to } } })
+    .then((r) => {
+      if (HOH.busy !== key) return;
+      HOH.busy = '';
+      const h = r && r.hoHist;
+      if (!h) return;
+      Object.assign(HOH, { key, list: h.list || [], from: h.from, to: h.to, at: Date.now() });
+      if (tab === 'more' && moreView === 'handoffs') render();
+    })
+    .catch((e) => {
+      if (HOH.busy !== key) return;
+      HOH.busy = '';
+      HOH.err = String(e.message || e) === 'timeout' ? 'Handoffs took too long to load – try again' : String(e.message || e);
+      if (tab === 'more' && moreView === 'handoffs') render();
+    });
+  return !!have;
+}
+function viewHandoffs() {
+  const today = T(),
+    M = mgr();
+  if (!HOH.date) HOH.date = today;
+  const [from, to] = M ? rangeOf(HOH.mode, HOH.date) : [plus(today, -2), today];
+  const ready = hoLoad(from, to);
+  let nav = '';
+  if (M) {
+    const lo = plus(today, -399),
+      title =
+        HOH.mode === 'day'
+          ? dayName(from)
+          : from === monday(today)
+            ? 'This week'
+            : from === monday(plus(today, -7))
+              ? 'Last week'
+              : 'Week of ' + shortDay(from),
+      sub = HOH.mode === 'day' ? (dayName(from) === shortDay(from) ? '' : shortDay(from)) : shortDay(from) + ' – ' + shortDay(to),
+      away = !(today >= from && today <= to);
+    nav = `<div class="seg">${[
+      ['day', 'Day'],
+      ['week', 'Week'],
+    ]
+      .map(([k, n]) => `<button data-homode="${k}" aria-pressed="${HOH.mode === k}">${n}</button>`)
+      .join('')}</div>
+    <div class="weeknav"><button class="btn sm" data-hostep="-1" ${from <= lo ? 'disabled' : ''} aria-label="Earlier">‹</button><div><b>${title}</b><div class="sub">${sub}${away ? `${sub ? ' · ' : ''}<button class="linkbtn" data-hojump>Back to today</button>` : ''}</div></div><button class="btn sm" data-hostep="1" ${to >= today ? 'disabled' : ''} aria-label="Later">›</button></div>`;
+  }
+  const intro = M ? '' : `<p class="sub" style="margin:-4px 4px 10px">Handoffs left for your shifts, and your own, from the last 3 days.</p>`;
+  let body;
+  if (!ready) body = HOH.err ? `<div class="card"><div class="empty">${esc(HOH.err)}</div></div>` : '<div class="hint">Loading handoffs…</div>';
+  else if (!HOH.list.length) body = `<div class="card"><div class="empty">No handoffs ${M ? (HOH.mode === 'day' ? 'this day' : 'this week') : 'in the last 3 days'}.</div></div>`;
+  else {
+    const days = [];
+    HOH.list.forEach((h) => {
+      const d = days.find((x) => x.date === h.date);
+      d ? d.items.push(h) : days.push({ date: h.date, items: [h] });
+    });
+    const unread = HOH.list.filter((h) => !h.read).length;
+    body =
+      (unread ? `<p class="sub" style="margin:0 4px 8px"><span class="pill warn">${unread} new</span> Tap “Got it” once you've read one – it folds up but stays here.</p>` : '') +
+      days.map((d) => `${days.length > 1 || !M || HOH.mode !== 'day' ? `<h2>${dayName(d.date)}</h2>` : ''}${d.items.map(hoItem).join('')}`).join('');
+  }
+  return `${back()}<h1>Handoffs</h1>${intro}${nav}${body}`;
 }
 /** New hires: one guided path through their first week. Disappears once every step is done. */
 function firstWeekCard() {
@@ -5130,10 +5219,44 @@ document.addEventListener('input', (e) => {
     SRCH.q = e.target.value;
     runSearch();
   }
-  if (/^ho(low|prepped|issues|note)$/.test(e.target.id || '')) HO[e.target.id.slice(2)] = e.target.value;
+  if (/^ho(low|prepped|issues|note)$/.test(e.target.id || '')) {
+    HO[e.target.id.slice(2)] = e.target.value;
+    const full = hoFilled(),
+      box = $('#honothing'),
+      hint = $('#honothint');
+    if (full) HO.nothing = false;
+    if (box) {
+      box.disabled = full;
+      if (full) box.checked = false;
+    }
+    if (hint) hint.style.display = full ? '' : 'none';
+  }
+});
+document.addEventListener('click', (e) => {
+  const b = e.target.closest && e.target.closest('[data-hotoggle], [data-homode], [data-hostep], [data-hojump]');
+  if (!b) return;
+  const d = b.dataset;
+  if (d.hotoggle) {
+    HOH.open[d.hotoggle] = !HOH.open[d.hotoggle];
+    return render();
+  }
+  if (d.homode) {
+    HOH.mode = d.homode;
+    return render();
+  }
+  if (d.hostep) {
+    const n = Number(d.hostep) * (HOH.mode === 'day' ? 1 : 7),
+      nx = plus(HOH.mode === 'day' ? HOH.date : monday(HOH.date), n);
+    HOH.date = nx > T() ? T() : nx;
+    return render();
+  }
+  if (d.hojump !== undefined) {
+    HOH.date = T();
+    return render();
+  }
 });
 document.addEventListener('change', (e) => {
-  if (e.target.id === 'honothing') HO.nothing = e.target.checked;
+  if (e.target.id === 'honothing') HO.nothing = e.target.checked && !hoFilled();
 });
 document.addEventListener(
   'click',
@@ -5169,6 +5292,9 @@ document.addEventListener(
     if (d.horead) {
       const h = (data.handoffs || []).find((x) => x.id === d.horead);
       if (h) h.read = true;
+      const h2 = (HOH.list || []).find((x) => x.id === d.horead);
+      if (h2) h2.read = true;
+      delete HOH.open[d.horead];
       render();
       act('readHandoff', { id: d.horead });
       return;
@@ -5179,7 +5305,7 @@ document.addEventListener(
       HO.busy = true;
       render();
       const pos = await getPos();
-      const r = await act('clockOut', Object.assign({ handoff: { low: HO.low, prepped: HO.prepped, issues: HO.issues, note, nothing: HO.nothing && !CK.note } }, pos));
+      const r = await act('clockOut', Object.assign({ handoff: { low: HO.low, prepped: HO.prepped, issues: HO.issues, note, nothing: HO.nothing && !hoFilled() && !CK.note } }, pos));
       HO.busy = false;
       if (r) {
         Object.assign(HO, { open: false, low: '', prepped: '', issues: '', note: '', nothing: false });
@@ -6001,6 +6127,7 @@ function viewMore() {
     recipes: () => viewRecipes({ back: back() }),
     training: () => (lead() ? viewTraining() : viewMoreList()),
     dialin: () => (on('dialin') ? viewDialIn() : viewMoreList()),
+    handoffs: () => (hoCan() ? viewHandoffs() : viewMoreList()),
     drawer: () => (on('drawer') ? viewDrawer() : viewMoreList()),
     master: viewMaster,
     team: () => (mgr() ? viewTeam() : viewMoreList()),
@@ -6029,6 +6156,7 @@ function viewMoreList() {
       ${on('requests') ? item('requests', 'Requests', 'Time off, swaps, covers and open shifts', pill(pendN)) : ''}
       ${on('availability') ? item('avail', 'Availability', "When you can't work") : ''}
       ${on('dialin') ? item('dialin', 'Dial-in log', "Today's espresso settings and history") : ''}
+      ${hoCan() ? item('handoffs', 'Handoffs', mgr() ? 'Every shift handoff, by day or week' : 'Handoffs for your shifts, last 3 days', pill((data.handoffs || []).filter((h) => !h.read).length)) : ''}
       ${on('drawer') ? item('drawer', 'Drawer count', 'Count and close the drawer') : ''}
       ${['training', 'tests', 'manual', 'library', 'hr', 'foodhandler', 'progress'].some(on) ? rowBtn('data-tab="tests" class="mobonly"', '<div class="txt"><b>Training</b><div class="sub">Manual, study guides, tests, resources and forms</div></div><span>›</span>') : ''}
       ${Number(data.version) >= 5.04 && on('recipes') ? item('recipes', 'Recipes', 'Drink builds and prep, step by step') : ''}
@@ -6672,7 +6800,7 @@ function deskMore() {
     unreadN = (data.announcements || []).filter((a) => !a.read).length;
   const it = (k, n, ic, badge) =>
     `<button data-more="${k}" class="deskonly" ${tab === 'more' && (moreView === k || (k === 'settings' && /^(push|reminders)$/.test(moreView))) ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}${badge ? `<span class="n">${badge}</span>` : ''}</button>`;
-  return `<div class="tabsep deskonly" aria-hidden="true"></div>${on('news') ? it('news', 'Announcements', '⚑', unreadN) : ''}${on('timeclock') ? it('time', mgr() ? 'Time sheets' : 'My time', '⏱') : ''}${on('requests') ? it('requests', 'Requests', '⇄', pendN) : ''}${on('availability') ? it('avail', 'Availability', '◷') : ''}${on('dialin') ? it('dialin', 'Dial-in log', '◎') : ''}${on('drawer') ? it('drawer', 'Drawer count', '$') : ''}${mgr() ? it('team', 'Team', '☺') : ''}${data.master ? it('master', 'Master admin', '⚙︎') : ''}
+  return `<div class="tabsep deskonly" aria-hidden="true"></div>${on('news') ? it('news', 'Announcements', '⚑', unreadN) : ''}${on('timeclock') ? it('time', mgr() ? 'Time sheets' : 'My time', '⏱') : ''}${on('requests') ? it('requests', 'Requests', '⇄', pendN) : ''}${on('availability') ? it('avail', 'Availability', '◷') : ''}${on('dialin') ? it('dialin', 'Dial-in log', '◎') : ''}${hoCan() ? it('handoffs', 'Handoffs', '↻', (data.handoffs || []).filter((h) => !h.read).length) : ''}${on('drawer') ? it('drawer', 'Drawer count', '$') : ''}${mgr() ? it('team', 'Team', '☺') : ''}${data.master ? it('master', 'Master admin', '⚙︎') : ''}
     <div class="tabspacer deskonly" aria-hidden="true"></div>${it('settings', 'Settings', '⚙︎')}`;
 }
 function setShop(t) {

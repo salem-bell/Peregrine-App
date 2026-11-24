@@ -4251,3 +4251,7 @@ html.barmode .rb-grid{grid-template-columns:repeat(auto-fill,minmax(132px,1fr))}
     animation: none;
   }
 }
+
+/* Shift handoffs: read ones fold to one line */
+.hoitem .hogist { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hoitem .rb .txt { min-width: 0; }

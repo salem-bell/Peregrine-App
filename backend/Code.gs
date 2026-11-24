@@ -11,7 +11,7 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '5.09';
+const VERSION = '5.10';
 const ROLES = ['Manager', 'Lead', 'Staff', 'Shop']; // Shop: the shared counter iPad – lists, messages, resources, schedule, clock-in screen
 // Everything the Shop iPad may change. Anything else is refused on the server, whatever the app sends.
 const SHOP_ACTIONS_ = ['check', 'read', 'addPrep', 'donePrep', 'delPrep', 'kioskClock', 'pinChat', 'dialIn'];
@@ -1054,6 +1054,11 @@ function api_(token, p) {
     const lock = LockService.getScriptLock();
     if (lock.tryLock(1500)) lock.releaseLock();
   } // don't make readers wait long for someone else's save
+  if (p.hoHist) {
+    const out = { ok: true, hoHist: handoffsRange_(ss, me, p.hoHist) };
+    out.ms = Date.now() - t0;
+    return out;
+  } // the Handoffs screen: a day or week of handoffs (managers), or the last few days for your shifts
   if (p.hist) {
     const out = hist_(ss, me, p.hist);
     out.ms = Date.now() - t0;
@@ -1504,40 +1509,87 @@ function handoffRecipients_(ss, author, when, tz) {
   const nextGroup = later.length ? later.filter((x) => x.date === later[0].date && x.start <= addMin_(later[0].start, 60)) : [];
   return [...new Set(on.concat(nextGroup).map((x) => x.name))];
 }
-/** Shift handoffs from the last 24 hours: managers see them all; everyone else only the ones left for their shift. */
+/** One handoff row as the app shows it. Managers also get who it was for and who has read it. */
+function handoffObj_(r, me, isMgr, tz) {
+  const readers = String(r[8] || '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+  const low = String(r[4] || ''),
+    prepped = String(r[5] || ''),
+    issues = String(r[6] || '');
+  let note = String(r[7] || '');
+  if (note === 'Nothing to hand off' && (low || prepped || issues)) note = ''; // older rows: the box was ticked after filling things in
+  return {
+    id: String(r[0]),
+    name: String(r[2]).trim(),
+    at: toIso_(r[9]),
+    date: r[9] instanceof Date ? Utilities.formatDate(r[9], tz, 'yyyy-MM-dd') : String(r[1] || ''),
+    low,
+    prepped,
+    issues,
+    note,
+    read: readers.indexOf(me.name) >= 0 || String(r[2]).trim() === me.name,
+    mine: String(r[2]).trim() === me.name,
+    readers: isMgr ? readers : undefined,
+    for: isMgr ? String(r[10] || '') : undefined,
+  };
+}
+/** Is this handoff row one this person may see? Managers: all. Everyone else: the ones left for their shift, and their own. */
+function handoffSees_(r, me, isMgr) {
+  if (isMgr) return true;
+  if (String(r[2]).trim() === me.name) return true;
+  return (
+    String(r[10] || '')
+      .split(',')
+      .map((x) => x.trim())
+      .indexOf(me.name) >= 0
+  );
+}
+/** Shift handoffs from the last 24 hours (Today): managers see them all; everyone else only the ones left for their shift. */
 function handoffsFor_(ss, me) {
   if (!ss.getSheetByName('Handoffs')) return [];
   const cut = Date.now() - 24 * 36e5,
-    isMgr = me.role === 'Manager';
+    isMgr = me.role === 'Manager',
+    tz = ss.getSpreadsheetTimeZone();
   return rv_(ss, 'Handoffs', 200)
     .filter((r) => r[0] && r[9] instanceof Date && r[9].getTime() > cut)
-    .filter(
-      (r) =>
-        isMgr ||
-        String(r[10] || '')
-          .split(',')
-          .map((x) => x.trim())
-          .indexOf(me.name) >= 0
-    )
-    .map((r) => {
-      const readers = String(r[8] || '')
-        .split(',')
-        .map((x) => x.trim())
-        .filter(Boolean);
-      return {
-        id: String(r[0]),
-        name: String(r[2]).trim(),
-        at: toIso_(r[9]),
-        low: String(r[4] || ''),
-        prepped: String(r[5] || ''),
-        issues: String(r[6] || ''),
-        note: String(r[7] || ''),
-        read: readers.indexOf(me.name) >= 0 || String(r[2]).trim() === me.name,
-        readers: isMgr ? readers : undefined,
-        for: isMgr ? String(r[10] || '') : undefined,
-      };
-    })
+    .filter((r) => isMgr || (String(r[2]).trim() !== me.name && handoffSees_(r, me, false)))
+    .map((r) => handoffObj_(r, me, isMgr, tz))
     .reverse();
+}
+/** The Handoffs screen. Managers: any day or week (up to 62 days at a time, a year back).
+    Leads and staff: the last 3 days (today and the 2 before), only the ones for their shifts plus their own. */
+function handoffsRange_(ss, me, h) {
+  needFeature_('handoff');
+  if (me.role === 'Shop') throw new Error("The shop iPad can't do that – use your own phone");
+  const tz = ss.getSpreadsheetTimeZone(),
+    today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd'),
+    isMgr = me.role === 'Manager';
+  let from = String((h && h.from) || ''),
+    to = String((h && h.to) || '');
+  if (isMgr) {
+    if (!/^\d{4}-\d\d-\d\d$/.test(from) || !/^\d{4}-\d\d-\d\d$/.test(to) || to < from || daysBetween_(from, to) > 62)
+      throw new Error('Pick a shorter stretch of dates');
+    const oldest = addDays_(today, -400);
+    if (from < oldest) from = oldest;
+  } else {
+    from = addDays_(today, -2);
+    to = today;
+  }
+  const sh = ss.getSheetByName('Handoffs');
+  const list = sh
+    ? vals_(sh)
+        .filter((r) => r[0] && r[9] instanceof Date)
+        .filter((r) => {
+          const d = Utilities.formatDate(r[9], tz, 'yyyy-MM-dd');
+          return d >= from && d <= to;
+        })
+        .filter((r) => handoffSees_(r, me, isMgr))
+        .map((r) => handoffObj_(r, me, isMgr, tz))
+        .reverse()
+    : [];
+  return { from, to, list };
 }
 /** Shifts between two days, as this person may see them. */
 function shiftsFor_(ss, me, first, last, tz) {
@@ -2737,8 +2789,9 @@ function act_(ss, me, p, touched) {
         const hsh = tab('Handoffs');
         if (hsh.getLastColumn() < TABS.Handoffs.length) buildTab_(ss, 'Handoffs');
         const forN = handoffRecipients_(ss, me.name, new Date(), tz);
-        hsh.appendRow(['h' + newId_(8), today, me.name, String(v[i][0]), f('low'), f('prepped'), f('issues'), ho.nothing && !f('note') ? 'Nothing to hand off' : f('note', 1000), '', new Date(), forN.join(', ')]);
-        if (!ho.nothing || f('note'))
+        const nothing = !!ho.nothing && !f('low') && !f('prepped') && !f('issues') && !f('note', 1000); // ticked "Nothing" but filled something in: what they wrote wins
+        hsh.appendRow(['h' + newId_(8), today, me.name, String(v[i][0]), f('low'), f('prepped'), f('issues'), nothing ? 'Nothing to hand off' : f('note', 1000), '', new Date(), forN.join(', ')]);
+        if (!nothing)
           try {
             const us = vals_(ss.getSheetByName('Users'));
             push_(
