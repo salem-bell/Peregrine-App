@@ -1692,13 +1692,13 @@ function prepPopSheet() {
 function listSeg(cl) {
   const n = prepOpen().length;
   return `<div class="seg">${cl.map((x) => `<button data-list="${esc(x.list)}" aria-pressed="${x.list === listTab}">${esc(x.list)} ${x.done}/${x.total}</button>`).join('')}${
-    tab === 'sidework' ? '' : `<button data-list="${PREP}" aria-pressed="${listTab === PREP}">Prep${n ? ' ' + n : ''}</button>`
+    tab === 'sidework' || shop() ? '' : `<button data-list="${PREP}" aria-pressed="${listTab === PREP}">Prep${n ? ' ' + n : ''}</button>`
   }</div>`;
 }
 /* Shop iPad: Closing, Side work, Machine cleaning and Drawer close live on the "Closing & Side Work" tab; Lists keeps Opening, Mid and Prep. */
 const SIDE_RE = /^clos|side|machine|drawer/i,
   SIDE_TAB = 'Closing & Side Work';
-const sideLists = () => (shop() ? (data.checklists || []).filter((c) => SIDE_RE.test(c.list)) : []);
+const sideLists = () => []; // the iPad keeps every checklist on one Checklists tab now
 function prepRow(x) {
   const on = !!x.doneAt,
     canDel = x.by === data.me.name || lead();
@@ -1744,19 +1744,19 @@ function viewPrep(cl, addOnly) {
       <label class="opt"><input type="checkbox" name="notify" checked> Also send them a notification</label>
       <button class="btn go">Send to the shift</button></form></div>`;
   if (addOnly)
-    return `<div class="btns" style="margin-bottom:8px"><button class="btn sm" data-tab="today">‹ Home</button></div><h1>Add prep</h1>${form}
+    return `<div class="btns" style="margin-bottom:8px"><button class="btn sm" data-tab="${shop() ? 'prep' : 'today'}">‹ ${shop() ? 'Prep' : 'Home'}</button></div><h1>Add prep</h1>${form}
     <h2>Already on the list</h2><div class="card">${open.map(prepRow).join('') || '<div class="empty">Nothing to prep.</div>'}</div>`;
-  return `<h1>${shop() ? 'Prep to-do' : 'Checklists'}</h1>${listSeg(cl)}
-    ${shop() ? '' : form}${shop() ? `<div class="btns" style="margin:0 0 10px"><button class="btn sm" data-tab="addprep">+ Add prep</button></div>` : ''}
+  return `<h1>${shop() ? 'Prep' : 'Checklists'}</h1>${shop() ? '' : listSeg(cl)}
+    ${shop() ? '' : form}${shop() ? `<div class="shopgo"><button class="btn go" data-tab="addprep">＋ Add prep</button>${shopPrepRec() ? `<button class="btn" data-tab="${esc(shopPrepRec())}">❦ Prep recipes</button>` : ''}${on('inventory') ? '<button class="btn" data-tab="inventory">▤ Count inventory</button>' : ''}</div>` : ''}
     <h2>To prep</h2><div class="card">${open.map(prepRow).join('') || '<div class="empty">Nothing to prep.</div>'}</div>
     ${done.length ? `<h2>Done recently</h2><div class="card">${done.map(prepRow).join('')}</div>` : ''}
     <p class="sub">The people on that shift get a pop-up when they open the app on that day, and see it on their Today screen until it's done. No email is sent.</p>`;
 }
 function viewLists() {
   const side = tab === 'sidework',
-    cl = (data.checklists || []).filter((c) => !shop() || side === SIDE_RE.test(c.list)),
+    cl = (data.checklists || []).filter((c) => !side || SIDE_RE.test(c.list)),
     title = side ? esc(SIDE_TAB) : 'Checklists';
-  if (listTab === PREP && !side) return viewPrep(cl);
+  if (listTab === PREP && !side) return shop() ? viewShopPrep() : viewPrep(cl);
   if (listTab === INV) listTab = ''; // inventory has its own tab now
   if (!cl.length)
     return (
@@ -3819,11 +3819,8 @@ function recCosts(r) {
 }
 /** Where the recipe book opens: the shop iPad's recipe tab, or More › Recipes. */
 function recHome(r) {
-  if (shop() && r && r.type === 'Drink' && shopTabs().some((t) => t[0] === 'bar')) return ['bar', ''];
-  if (shop()) {
-    const g = resGroups().find((x) => /recipe/i.test(x));
-    return g ? ['res:' + g, ''] : ['recipes', ''];
-  }
+  if (shop() && r && r.type === 'Drink' && barTab()) return ['bar', ''];
+  if (shop()) return [shopPrepRec() || 'recipes', ''];
   return mainTabs().some((t) => t[0] === 'recipes') ? ['recipes', ''] : ['more', 'recipes'];
 }
 const isRecView = () =>
@@ -4707,33 +4704,50 @@ document.addEventListener(
 );
 const DRAW = { busy: false, last: null };
 /** Today: the current dial-in, one tap to log a new one. */
+const dialCan = () => !shop() || Number(data.version) >= 5.09; // the shop iPad logs dial-ins from Code.gs 5.09
 function dialCard() {
   if (!on('dialin') || !data.dialin) return '';
-  const x = data.dialin.find((d) => d.date === T());
-  return `<h2>Dial-in</h2><div class="card">${
+  const today = data.dialin.filter((d) => d.date === T()),
+    x = today[0],
+    sub = (y) => [y.dose && y.dose + 'g in', y.yield && y.yield + 'g out', y.time && y.time + ' sec'].filter(Boolean).join(' · ') + (y.note ? ' · ' + esc(y.note) : '');
+  return `<h2>Dial-in${today.length > 1 ? ' · ' + today.length + ' today' : ''}</h2><div class="card">${
     x
-      ? rowBtn('data-more="dialin"', `<div class="txt"><b>${esc(x.coffee)} · grind ${esc(x.grind)}</b><div class="sub">${[x.dose && x.dose + 'g in', x.yield && x.yield + 'g out', x.time && x.time + ' sec'].filter(Boolean).join(' · ')}${x.note ? ' · ' + esc(x.note) : ''}</div><div class="sub">${esc(first(x.by))} · ${timeOf(x.at)}</div></div><span>›</span>`)
-      : `<div class="row"><div class="txt"><b>Not dialed in yet today</b><div class="sub">${data.dialin[0] ? 'Last: ' + esc(data.dialin[0].coffee) + ' · grind ' + esc(data.dialin[0].grind) + ' (' + esc(shortDay(data.dialin[0].date)) + ')' : 'Log the first one'}</div></div><button class="btn sm go" data-dialnew>Log it</button></div>`
+      ? `<div class="row dialnow ${!dialCan() ? 'ro' : ''}"><div class="txt"><span class="pill ok">Now · ${timeOf(x.at)}</span><b class="dialbig">${esc(x.coffee)} · grind ${esc(x.grind)}</b><div class="sub">${sub(x)}</div><div class="sub">${esc(first(x.by))}</div></div>${dialCan() ? '<button class="btn go" data-dialnew>＋ New dial-in</button>' : ''}</div>
+        ${today
+          .slice(1, 4)
+          .map((y) => `<div class="row dialold"><span class="sub dialt">${timeOf(y.at)}</span><div class="txt"><b>${esc(y.coffee)} · grind ${esc(y.grind)}</b><div class="sub">${sub(y)} · ${esc(first(y.by))}</div></div></div>`)
+          .join('')}${today.length > 4 || data.dialin.length > today.length ? `<button class="row rb" data-more="dialin"><div class="txt sub">All dial-ins</div><span>›</span></button>` : ''}`
+      : `<div class="row"><div class="txt"><b>Not dialed in yet today</b><div class="sub">${data.dialin[0] ? 'Last: ' + esc(data.dialin[0].coffee) + ' · grind ' + esc(data.dialin[0].grind) + ' (' + esc(shortDay(data.dialin[0].date)) + ')' : 'Log the first one'}</div></div>${dialCan() ? '<button class="btn go" data-dialnew>Log it</button>' : ''}</div>`
   }</div>`;
 }
 /** Shop iPad: the Bar tab – today's dial-in on top, then the drink recipes in big type, screen kept on. */
 function viewBar() {
-  return viewRecipes({ title: 'Bar', drinksOnly: true, top: recSel ? '' : dialCard() });
+  return viewRecipes({ title: 'Bar Menu', drinksOnly: true, top: recSel ? '' : dialCard() });
 }
 function viewDialIn() {
   const L = data.dialin || [],
     last = L[0] || {},
     coffees = [...new Set(L.map((x) => x.coffee).filter(Boolean))];
   const f = (n, label, attrs, val) => `<label class="f">${label}<input name="${n}" ${attrs} value="${esc(val || '')}"></label>`;
-  return `${back()}<h1>Dial-in log</h1>
-    <h2>Log today's dial-in</h2><div class="card"><form class="stack" data-form="dialin" onsubmit="return false">
+  const whoPick = shop()
+    ? (() => {
+        const { today, rest } = shopPeople(),
+          cur = whoNow();
+        return `<label class="f">Who's dialing in?<select name="as"><option value="">Pick your name…</option>${today
+          .concat(rest)
+          .map((p) => `<option ${p.name === cur ? 'selected' : ''}>${esc(p.name)}</option>`)
+          .join('')}</select></label>`;
+      })()
+    : '';
+  return `${shop() ? '<div class="btns" style="margin-bottom:8px"><button class="btn sm" data-tab="bar">‹ Bar Menu</button></div>' : back()}<h1>Dial-in log</h1>
+    <h2>Log a dial-in</h2><p class="sub" style="margin:-4px 4px 8px">Log every time you adjust – each one keeps its time.</p><div class="card"><form class="stack" data-form="dialin" onsubmit="return false">${whoPick}
       ${f('coffee', 'Coffee', 'list="dialcoffees" placeholder="House"', last.coffee)}<datalist id="dialcoffees">${coffees.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>
       <div class="trtwo">${f('grind', 'Grind setting', 'inputmode="decimal" placeholder="e.g. 4.2"', last.grind)}${f('dose', 'Dose (g)', 'type="number" step="0.1" inputmode="decimal"', last.dose || '17.5')}</div>
       <div class="trtwo">${f('yield', 'Yield (g)', 'type="number" step="0.1" inputmode="decimal"', last.yield || '')}${f('time', 'Time (sec)', 'type="number" step="1" inputmode="numeric"', '')}</div>
       ${f('note', 'Taste / notes', 'placeholder="e.g. balanced, a touch sour – went finer"', '')}
       <button class="btn go" data-dialsave ${DIAL.busy ? 'disabled' : ''}>${DIAL.busy ? 'Saving…' : 'Save'}</button></form></div>
     <h2>History</h2><div class="card">${
-      L.map((x) => `<div class="row"><div class="txt"><b>${esc(x.coffee)} · grind ${esc(x.grind)}</b><div class="sub">${[x.dose && x.dose + 'g in', x.yield && x.yield + 'g out', x.time && x.time + ' sec'].filter(Boolean).join(' · ')}${x.note ? ' · ' + esc(x.note) : ''}</div></div><span class="sub" style="text-align:right">${esc(shortDay(x.date))}<br>${esc(first(x.by))}</span></div>`).join('') ||
+      L.map((x) => `<div class="row"><div class="txt"><b>${esc(x.coffee)} · grind ${esc(x.grind)}</b><div class="sub">${[x.dose && x.dose + 'g in', x.yield && x.yield + 'g out', x.time && x.time + ' sec'].filter(Boolean).join(' · ')}${x.note ? ' · ' + esc(x.note) : ''}</div></div><span class="sub" style="text-align:right">${esc(shortDay(x.date))} · ${timeOf(x.at)}<br>${esc(first(x.by))}</span></div>`).join('') ||
       '<div class="empty">No dial-ins yet. The opener logs the first one each morning.</div>'
     }</div>`;
 }
@@ -4791,16 +4805,19 @@ document.addEventListener('click', async (e) => {
     const f = $('form[data-form="dialin"]'),
       v = (n) => f.elements.namedItem(n).value;
     if (!v('grind').trim()) return toast('Add the grind setting');
+    const as = shop() ? v('as') : '';
+    if (shop() && !as) return toast("Pick who's dialing in");
+    if (as) setWho(as);
     DIAL.busy = true;
     render();
-    const r = await act('dialIn', { coffee: v('coffee'), grind: v('grind'), dose: v('dose'), yield: v('yield'), time: v('time'), note: v('note') });
+    const r = await act('dialIn', Object.assign({ coffee: v('coffee'), grind: v('grind'), dose: v('dose'), yield: v('yield'), time: v('time'), note: v('note') }, as ? { as } : {}));
     DIAL.busy = false;
     if (r) {
       (data.checklists || []).forEach((c) =>
         (c.items || []).forEach((i) => {
           if (!i.by && isDialTask(i.task)) {
             busy['c|' + c.list + '|' + i.task] = true;
-            act('check', { list: c.list, task: i.task, done: '1' });
+            act('check', Object.assign({ list: c.list, task: i.task, done: '1' }, as ? { as } : {}));
           }
         })
       );
@@ -4812,6 +4829,12 @@ document.addEventListener('click', async (e) => {
         window.scrollTo(0, 0);
       }
       DIAL.list = '';
+      if (shop() && tab === 'more') {
+        tab = 'bar'; // back to the Bar Menu with the new numbers on top
+        moreView = '';
+        save('pt-tab', tab);
+        window.scrollTo(0, 0);
+      }
     }
     render();
   }
@@ -5219,7 +5242,7 @@ function viewTests() {
   const okSubs = [['skills', 'training'], ['study', 'tests'], ['manual', 'manual'], ['res', 'library'], ['forms', 'hr'], ['dash', 'progress']].filter(([k, f]) => (k === 'forms' ? on('hr') || on('foodhandler') : on(f)) && (k !== 'dash' || lead())).map((x) => x[0]);
   if (!TRN.sub || okSubs.indexOf(TRN.sub) < 0) TRN.sub = okSubs[0] || '';
   if (!TRN.sub) return '<h1>Training</h1><div class="card"><div class="empty">Training is turned off for this shop.</div></div>';
-  const body = TRN.sub === 'skills' ? trSkillsView() : TRN.sub === 'manual' ? trManualView() : TRN.sub === 'res' ? trResView() : TRN.sub === 'forms' ? trFormsView() : TRN.sub === 'dash' && lead() ? trDashView() : trStudyView();
+  const body = TRN.sub === 'skills' ? trSkillsView() : TRN.sub === 'manual' ? trManualView() : TRN.sub === 'res' ? trResView() : TRN.sub === 'forms' ? trFormsView() : TRN.sub === 'dash' && lead() ? testAccCard() + trDashView() : trStudyView();
   setTimeout(trAfter, 0);
   return `<div class="trhub"><h1>Training ${levelPill(data.me.name)}</h1>${trPillsHtml()}${trAlertHtml()}${body}</div>`;
 }
@@ -5787,6 +5810,18 @@ const accSummary = (t) =>
   ]
     .filter(Boolean)
     .join(' · ');
+/** Managers: who can take each test – open a test to allow or block people one by one. */
+function testAccCard() {
+  if (!mgr()) return '';
+  if (!tdata || Date.now() - tAt > 60000) loadTests();
+  const L = ((tdata && tdata.tests) || []).filter((t) => t.who);
+  return `<h2>Test access</h2><div class="card">${
+    !tdata
+      ? '<div class="empty">Loading…</div>'
+      : L.map((t) => rowBtn(`data-testacc="${esc(t.name)}"`, `<div class="txt"><b>${esc(t.name)}</b><div class="sub">${esc(accSummary(t))}</div></div><span class="btn sm">Access</span>`)).join('') ||
+        '<div class="empty">No tests in the Tests tab yet.</div>'
+  }</div>`;
+}
 function testAccSheet() {
   const t = ((tdata && tdata.tests) || []).find((x) => x.name === sheet.test);
   if (!t) return '';
@@ -5969,7 +6004,7 @@ function viewMore() {
     master: viewMaster,
     team: () => (mgr() ? viewTeam() : viewMoreList()),
   };
-  if (shop() && ['news', 'resources', 'settings', 'recipes'].indexOf(moreView) < 0) moreView = wide() ? 'news' : '';
+  if (shop() && ['news', 'resources', 'settings', 'recipes', 'dialin'].indexOf(moreView) < 0) moreView = wide() ? 'news' : '';
   if (!views[moreView] && wide()) moreView = 'settings'; // desktop has no More list – the sidebar lists everything
   return views[moreView] ? views[moreView]() : viewMoreList();
 }
@@ -6047,6 +6082,99 @@ function viewSettings() {
     <p class="sub" style="text-align:center">Peregrine Team · server ${esc(data.version || '')}</p>`;
 }
 
+/* ---------- loading screen (in index.html, so it shows before this file has even loaded) ---------- */
+let splashT = 0;
+function splash(show) {
+  const el = $('#splash');
+  if (!el) return;
+  if (show) {
+    if (!splashT) splashT = setTimeout(() => el.classList.add('slow'), 9000); // "taking longer than usual"
+    return;
+  }
+  clearTimeout(splashT);
+  if (el.classList.contains('out')) return;
+  el.classList.add('out');
+  setTimeout(() => el.remove(), 450);
+}
+/* ---------- shop iPad: new-message alert – a big banner, a chime and a pulsing Chat tab until someone looks ---------- */
+let pingN = -1,
+  ping = null,
+  pingAudio = null;
+document.addEventListener(
+  'pointerdown',
+  () => {
+    // iPads only play sound after a tap; the first tap of the day unlocks the chime
+    try {
+      if (!pingAudio) pingAudio = new (window.AudioContext || window.webkitAudioContext)();
+      if (pingAudio.state === 'suspended') pingAudio.resume();
+    } catch (_) {}
+  },
+  { capture: true, passive: true }
+);
+function chime() {
+  try {
+    if (!pingAudio) return;
+    const t0 = pingAudio.currentTime;
+    [880, 1318.5].forEach((f, i) => {
+      const o = pingAudio.createOscillator(),
+        g = pingAudio.createGain();
+      o.type = 'sine';
+      o.frequency.value = f;
+      g.gain.setValueAtTime(0, t0 + i * 0.18);
+      g.gain.linearRampToValueAtTime(0.25, t0 + i * 0.18 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + i * 0.18 + 0.6);
+      o.connect(g).connect(pingAudio.destination);
+      o.start(t0 + i * 0.18);
+      o.stop(t0 + i * 0.18 + 0.65);
+    });
+  } catch (_) {}
+}
+function shopPing(n) {
+  const looking = tab === 'chat' && !!chat.open;
+  if (pingN >= 0 && n > pingN && !looking) {
+    const c = (data.channels || [])
+      .filter((x) => x.unread && x.last)
+      .sort((a, b) => String(b.last.at || '').localeCompare(String(a.last.at || '')))[0];
+    ping = {
+      id: c ? c.id : '',
+      from: c && c.last ? first(c.last.from) : '',
+      where: c && c.kind !== 'dm' ? c.name : '',
+      text: c && c.last ? c.last.text : '',
+      n,
+    };
+    kioskIdle = Date.now();
+    if (asleep) setAsleep(false); // a new message wakes the iPad
+    chime();
+  }
+  if (!n || looking) ping = null;
+  if (ping) ping.n = n;
+  pingN = n;
+  let el = $('#ping');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'ping';
+    el.setAttribute('role', 'alert');
+    document.body.appendChild(el);
+  }
+  el.hidden = !ping;
+  el.innerHTML = ping
+    ? `<button class="ping-go" data-pingopen="${esc(ping.id)}"><span class="ping-ic">✉︎</span><span class="ping-txt"><b>New message${ping.from ? ' from ' + esc(ping.from) : ''}${ping.where ? ' in ' + esc(ping.where) : ''}</b>${ping.text ? `<span>${esc(ping.text)}</span>` : ''}${ping.n > 1 ? `<small>${ping.n} unread</small>` : ''}</span><span class="ping-open">Open</span></button><button class="ping-x" data-pingx aria-label="Dismiss">✕</button>`
+    : '';
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest && e.target.closest('[data-pingopen], [data-pingx]');
+  if (!b || !data) return;
+  e.preventDefault();
+  ping = null;
+  if (b.dataset.pingx !== undefined) return render();
+  sheet = null;
+  viewer = null;
+  recSel = '';
+  tab = 'chat';
+  save('pt-tab', tab);
+  if (b.dataset.pingopen) openChat(b.dataset.pingopen);
+  else render();
+});
 /* ---------- shop iPad: clock-in screen, whole-team schedule, "who did it" ---------- */
 const shopToday = () =>
   shiftsOn(T())
@@ -6084,17 +6212,14 @@ function viewShopHome() {
     on = data.onClock || [],
     sh = shopToday(),
     chatN = (data.channels || []).reduce((n, c) => n + (Number(c.unread) || 0), 0),
-    cl = (data.checklists || []).filter((c) => !SIDE_RE.test(c.list)),
+    cl = data.checklists || [],
     clDone = cl.reduce((n, c) => n + c.done, 0),
     clAll = cl.reduce((n, c) => n + c.total, 0),
     prepN = (data.prep || []).filter((x) => !x.doneAt && (!x.date || x.date <= T())).length,
     pinned = (data.announcements || []).find((a) => a.pinned);
   const working = [...new Set(sh.map((s) => s.name))].length;
-  const tile = (attrs, ic, label, sub, n, hue) =>
-    `<button class="hs-app" ${attrs}><span class="hs-ic" style="--hue:${hue}">${ic}${n ? `<span class="hs-n">${n > 99 ? '99+' : n}</span>` : ''}</span><b>${label}</b>${sub ? `<small>${sub}</small>` : ''}</button>`;
-  const groups = resGroups().filter((g) => !sideLists().length || g !== SIDE_TAB).map((g, i) =>
-    tile(`data-tab="res:${esc(g)}"`, resIcon(g, i), /recipe/i.test(g) && barTab() ? 'Prep recipes' : esc(g), /recipe/i.test(g) && barTab() ? RECIPES().filter((r) => r.type === 'Prep').length + ' recipes' : '', 0, [28, 340, 150, 210, 260, 100][i % 6])
-  );
+  const tile = (attrs, ic, label, sub, n, hue, cls) =>
+    `<button class="hs-app ${cls || ''}" ${attrs}><span class="hs-ic" style="--hue:${hue}">${ic}${n ? `<span class="hs-n">${n > 99 ? '99+' : n}</span>` : ''}</span><b>${label}</b>${sub ? `<small>${sub}</small>` : ''}</button>`;
   return `<div class="hs">
     <div class="hs-top"><div class="hs-time">${now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(/\s?[AP]M$/i, '')}<span>${now.getHours() < 12 ? 'AM' : 'PM'}</span></div><div class="hs-date">${now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}</div></div>
     <button class="hs-clock" data-kpick><span class="hs-cic">◷</span><span><b>Clock in / out</b><small>Tap, pick your name, type your code</small></span></button>
@@ -6111,17 +6236,10 @@ function viewShopHome() {
     ${shopReminders()}
     ${pinned ? `<div class="hs-ann"><span class="pill">Pinned</span> <b>${esc(pinned.title)}</b>${pinned.message ? ` <span class="sub">${linkify(esc(pinned.message))}</span>` : ''}</div>` : ''}
     <div class="hs-grid">
-      ${tile('data-tab="bar"', '◎', 'Bar', ((x) => (x ? 'Grind ' + esc(x.grind) + ' · ' + esc(x.coffee) : !data.features || data.features.dialin !== false ? 'Not dialed in yet' : 'Drink recipes'))(dialToday()), 0, 15)}
-      ${tile('data-tab="schedule"', '▦', 'Schedule', working ? working + ' working today' : 'No one today', 0, 195)}
-      ${tile('data-tab="chat"', '✉︎', 'Chat', chatN ? chatN + ' unread' : '', chatN, 175)}
+      ${barTab() ? tile('data-tab="bar"', '◎', 'Bar Menu', ((x) => (x ? 'Grind ' + esc(x.grind) + ' · ' + timeOf(x.at) : !data.features || data.features.dialin !== false ? 'Not dialed in yet' : 'Drink recipes'))(dialToday()), 0, 15) : ''}
       ${tile('data-tab="lists"', '✓', 'Checklists', clAll ? clDone + ' of ' + clAll + ' done' : '', 0, 120)}
-      ${sideLists().length ? tile('data-tab="sidework"', '☾︎', esc(SIDE_TAB), ((xs) => xs.reduce((n, c) => n + c.done, 0) + ' of ' + xs.reduce((n, c) => n + c.total, 0) + ' done')(sideLists()), 0, 260) : ''}
-      ${tile(`data-golist="${PREP}"`, '✎', 'Prep to-do', prepN ? prepN + ' to do' : 'All done', prepN, 40)}
-      ${tile('data-tab="addprep"', '＋', 'Add prep', 'Send to a shift', 0, 80)}
-      ${tile('data-tab="inventory"', '▤', 'Inventory', 'Count stock', 0, 225)}
-      ${groups.join('')}
-      ${RECIPES().length && !resGroups().some((g) => /recipe/i.test(g)) ? tile('data-tab="recipes"', '❦', barTab() ? 'Prep recipes' : 'Recipes', barTab() ? RECIPES().filter((r) => r.type === 'Prep').length + ' recipes' : RECIPES().length + ' recipes', 0, 28) : ''}
-      ${tile('data-more="news"', '⚑', 'Announcements', '', 0, 0)}
+      ${tile('data-tab="prep"', '✎', 'Prep', prepN ? prepN + ' to do' : 'All done', prepN, 40)}
+      ${tile('data-tab="chat"', '✉︎', 'Chat', chatN ? chatN + ' unread' : '', chatN, 175, chatN ? 'hs-ping' : '')}
     </div></div>`;
 }
 /* ---------- prep done: "how much do we have now?" → straight into the inventory sheet ---------- */
@@ -6448,19 +6566,28 @@ const resIcon = (g, i) =>
 const barTab = () => RECIPES().some((r) => r.type === 'Drink') || on('dialin');
 const resGroups = () =>
   (data.links || []).reduce((a, l) => (l.group && a.indexOf(l.group) < 0 ? a.concat(l.group) : a), []);
+/* Shop iPad: the menu holds the reference screens; the work (Bar Menu, Checklists, Prep, Chat) is the big tiles on Home. */
 const shopTabs = () =>
   [
-    ['today', 'Clock in', '◷'],
-    ...(barTab() ? [['bar', 'Bar', '◎']] : []),
+    ['today', 'Home', '◷'],
     ['schedule', 'Schedule', '▦'],
-    ['chat', 'Chat', '✉︎'],
-    ['lists', 'Lists', '✓'],
   ]
-    .concat(sideLists().length ? [['sidework', SIDE_TAB, '☾︎']] : [])
-    .concat([['inventory', 'Inventory', '▤']])
-    .concat(resGroups().filter((g) => !sideLists().length || g !== SIDE_TAB).map((g, i) => ['res:' + g, /recipe/i.test(g) && barTab() ? 'Prep recipes' : g, resIcon(g, i)]))
-    .concat(RECIPES().length && !resGroups().some((g) => /recipe/i.test(g)) ? [['recipes', barTab() ? 'Prep recipes' : 'Recipes', '❦']] : [])
+    .concat(resGroups().filter((g) => !/recipe/i.test(g)).map((g, i) => ['res:' + g, g, resIcon(g, i)]))
     .concat([['more', 'More', '☰']]);
+/* Screens opened from the Home tiles (or from Prep): the menu lights up Home while they're open. */
+const SHOP_REACH = /^(bar|lists|prep|chat|inventory|addprep|recipes|more|res:.*)$/;
+const shopUnder = (t) =>
+  t === 'more' && /^(news|settings|resources)$/.test(moreView) ? 'more' : /^(bar|lists|prep|chat|inventory|addprep|recipes)$/.test(t) || (t === 'more' && moreView === 'dialin') || (/^res:/.test(t) && /recipe/i.test(t)) ? 'today' : t;
+/** Shop iPad: where the prep recipes live (the recipe book, or a resource group of recipe docs). */
+const shopPrepRec = () => {
+  const g = resGroups().find((x) => /recipe/i.test(x));
+  return g ? 'res:' + g : RECIPES().some((r) => r.type !== 'Drink') ? 'recipes' : '';
+};
+/** Shop iPad: the Prep tab – what to make, add prep, prep recipes and the inventory count in one place. */
+function viewShopPrep() {
+  listTab = PREP;
+  return whoBar() + viewPrep([]);
+}
 let navHide = load('pt-navhide') === '1';
 const INV_TAB = ['inventory', 'Inventory', '▤'];
 /* The bottom bar is the same for everyone, with Today in the middle; leads also keep Inventory on wide screens and in More. */
@@ -6638,6 +6765,8 @@ function render() {
     $('#main').innerHTML = viewJoined();
     return;
   }
+  if (TOKEN && !data) splash(true);
+  else splash(false);
   if (!TOKEN || !data) {
     $('#tabs').hidden = true;
     $('#refresh').hidden = true;
@@ -6662,7 +6791,8 @@ function render() {
   }
   const chatN = (data.channels || []).reduce((n, c) => n + c.unread, 0);
   const badge = {
-    lists: prepMine().length,
+    lists: shop() ? 0 : prepMine().length,
+    today: shop() && tab !== 'today' ? chatN : 0,
     chat: chatN,
     more:
       (mgr() ? (data.requests || []).filter((q) => q.status === 'Pending' && q.from !== data.me.name).length : 0) +
@@ -6670,13 +6800,15 @@ function render() {
     tests: data.trBadge ? (data.trBadge.manual || 0) + (data.trBadge.recipes || 0) + (data.trBadge.sign || 0) : 0,
   };
   $('#tabs').hidden = false;
-  if (shop() && !shopTabs().some((t) => t[0] === tab) && tab !== 'addprep') tab = 'today';
+  if (shop()) shopPing(chatN);
+  if (shop() && tab === 'sidework') tab = 'lists'; // side work now sits with the other checklists
+  if (shop() && !shopTabs().some((t) => t[0] === tab) && !SHOP_REACH.test(tab)) tab = 'today';
   if (!shop() && tab === 'inventory' && !lead()) tab = 'today';
   $('#tabs').innerHTML =
     (shop() ? shopTabs() : mainTabs())
       .map(
         ([k, n, ic, cls]) =>
-          `<button data-tab="${k}" class="${cls || ''}${k === 'more' ? ' mobonly' : ''}${k === 'more' && tab === 'tests' ? ' cur-m' : ''}" ${tab === k && !(k === 'more' && wide()) ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}${badge[k] ? `<span class="n">${badge[k]}</span>` : ''}</button>`
+          `<button data-tab="${k}" class="${cls || ''}${k === 'more' ? ' mobonly' : ''}${k === 'more' && tab === 'tests' ? ' cur-m' : ''}${shop() && k === 'today' && chatN && tab !== 'today' ? ' ping' : ''}" ${(shop() ? shopUnder(tab) : tab) === k && !(k === 'more' && wide()) ? 'aria-current="page"' : ''}><span class="ic" aria-hidden="true">${ic}</span>${n}${badge[k] ? `<span class="n">${badge[k]}</span>` : ''}</button>`
       )
       .join('') +
     deskMore() +
@@ -6716,6 +6848,8 @@ function render() {
     ? viewResGroup(tab.slice(4))
     : tab === 'bar'
       ? viewBar()
+      : tab === 'prep'
+        ? viewShopPrep()
       : tab === 'addprep'
         ? viewPrep([], true)
     : tab === 'recipes'
@@ -7004,7 +7138,7 @@ document.addEventListener('click', async (e) => {
   }
   if (d.golist) {
     listTab = d.golist;
-    tab = shop() && SIDE_RE.test(d.golist) ? 'sidework' : 'lists';
+    tab = shop() && d.golist === PREP ? 'prep' : 'lists';
     save('pt-tab', tab);
     window.scrollTo(0, 0);
     render();

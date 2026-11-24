@@ -4016,3 +4016,238 @@ html.barmode .rb-grid{grid-template-columns:repeat(auto-fill,minmax(132px,1fr))}
 .hs-rem-row b { font-weight: 600; }
 .hs-rem-row span { grid-column: 1; color: var(--muted); font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hs-rem-row i { grid-column: 2; grid-row: 1 / 3; align-self: center; font-style: normal; color: var(--muted); }
+
+/* Loading screen: shown by index.html until the first screen is ready, then fades out */
+#splash {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  background: var(--bar);
+  transition: opacity 0.4s ease;
+}
+#splash.out {
+  opacity: 0;
+  pointer-events: none;
+}
+#splash .sp-in {
+  text-align: center;
+  animation: sp-rise 0.6s ease both;
+}
+#splash img {
+  width: min(38vw, 190px);
+  animation: sp-breathe 2.4s ease-in-out infinite;
+}
+#splash .sp-name {
+  margin-top: 16px;
+  font: 400 1.5rem/1 var(--head);
+  letter-spacing: 0.35em;
+  padding-left: 0.35em;
+  text-transform: uppercase;
+  color: #e2ac4c;
+}
+#splash .sp-bar {
+  width: 140px;
+  height: 3px;
+  margin: 26px auto 0;
+  border-radius: 3px;
+  background: rgba(247, 245, 240, 0.16);
+  overflow: hidden;
+}
+#splash .sp-bar i {
+  display: block;
+  width: 40%;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--gold);
+  animation: sp-slide 1.3s ease-in-out infinite;
+}
+#splash .sp-msg,
+#splash .sp-slow {
+  margin-top: 14px;
+  font: 400 0.9rem/1.3 var(--body);
+  color: rgba(247, 245, 240, 0.7);
+}
+#splash .sp-slow {
+  display: none;
+  color: #f0c27a;
+}
+#splash.slow .sp-slow {
+  display: block;
+}
+@keyframes sp-slide {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(260%);
+  }
+}
+@keyframes sp-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.95;
+  }
+  50% {
+    transform: scale(1.04);
+    opacity: 1;
+  }
+}
+@keyframes sp-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* Shop iPad: new-message banner (above everything, even the sleep screen) and a pulsing Chat tab */
+#ping {
+  position: fixed;
+  left: 50%;
+  top: calc(var(--safe-top) + 12px);
+  transform: translateX(-50%);
+  z-index: 60;
+  width: min(720px, calc(100vw - 24px));
+  display: flex;
+  align-items: stretch;
+  border-radius: 18px;
+  background: var(--gold);
+  color: #231f20;
+  box-shadow:
+    0 10px 40px rgba(0, 0, 0, 0.35),
+    0 0 0 4px rgba(210, 146, 41, 0.35);
+  animation:
+    ping-in 0.35s cubic-bezier(0.2, 1.2, 0.4, 1) both,
+    ping-glow 1.6s ease-in-out 0.35s infinite;
+}
+#ping[hidden] {
+  display: none;
+}
+#ping button {
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+#ping .ping-go {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 20px;
+  text-align: left;
+  min-width: 0;
+}
+#ping .ping-ic {
+  font-size: 2rem;
+  line-height: 1;
+}
+#ping .ping-txt {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+#ping .ping-txt b {
+  font: 500 1.25rem/1.2 var(--head);
+  letter-spacing: 0.02em;
+}
+#ping .ping-txt span {
+  font-size: 1.05rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#ping .ping-txt small {
+  font-size: 0.85rem;
+  opacity: 0.75;
+}
+#ping .ping-open {
+  padding: 10px 18px;
+  border-radius: 12px;
+  background: #231f20;
+  color: #f7f5f0;
+  font-weight: 600;
+}
+#ping .ping-x {
+  padding: 0 20px;
+  font-size: 1.2rem;
+  border-left: 1px solid rgba(35, 31, 32, 0.2);
+}
+@keyframes ping-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -30px);
+  }
+}
+@keyframes ping-glow {
+  50% {
+    box-shadow:
+      0 10px 40px rgba(0, 0, 0, 0.35),
+      0 0 0 10px rgba(210, 146, 41, 0.15);
+  }
+}
+.tabs button.ping {
+  color: var(--gold) !important;
+}
+.tabs button.ping .ic {
+  animation: tab-ping 1.2s ease-in-out infinite;
+}
+@keyframes tab-ping {
+  50% {
+    transform: scale(1.25);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  #splash img,
+  #splash .sp-bar i,
+  #splash .sp-in,
+  #ping,
+  .tabs button.ping .ic {
+    animation: none;
+  }
+}
+
+/* Shop iPad: Prep tab quick links */
+.shopgo {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 14px;
+}
+.shopgo .btn {
+  flex: 1 1 180px;
+  min-height: 56px;
+  font-size: 1.05rem;
+}
+
+/* Dial-in card: the current numbers big, earlier ones today with their times */
+.dialnow .pill {
+  margin-bottom: 6px;
+}
+.dialbig {
+  display: block;
+  font: 500 1.35rem/1.2 var(--head);
+}
+.dialold {
+  opacity: 0.75;
+}
+.dialt {
+  min-width: 64px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Shop iPad: the Chat tile pulses while messages are unread */
+.hs-app.hs-ping .hs-ic {
+  animation: tab-ping 1.2s ease-in-out infinite;
+  box-shadow: 0 0 0 4px rgba(210, 146, 41, 0.55);
+}
+@media (prefers-reduced-motion: reduce) {
+  .hs-app.hs-ping .hs-ic {
+    animation: none;
+  }
+}
