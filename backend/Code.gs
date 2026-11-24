@@ -11,10 +11,10 @@
  *  Later updates: paste the new Code.gs, then Deploy › Manage deployments › pencil › New version.
  */
 
-const VERSION = '5.07';
+const VERSION = '5.09';
 const ROLES = ['Manager', 'Lead', 'Staff', 'Shop']; // Shop: the shared counter iPad – lists, messages, resources, schedule, clock-in screen
 // Everything the Shop iPad may change. Anything else is refused on the server, whatever the app sends.
-const SHOP_ACTIONS_ = ['check', 'read', 'addPrep', 'donePrep', 'delPrep', 'kioskClock', 'pinChat'];
+const SHOP_ACTIONS_ = ['check', 'read', 'addPrep', 'donePrep', 'delPrep', 'kioskClock', 'pinChat', 'dialIn'];
 const isShop_ = (r) => role_(r[1]) === 'Shop'; // a Users row
 const REMIND_ = ['Night before', 'Before shift', 'Both', 'Morning of', 'Morning and before', 'Off'];
 
@@ -102,6 +102,8 @@ const TABS = {
     'Decided at',
     'Note',
     'Last day (time off)',
+    'Shift (ID, cover requests)',
+    'Taken by',
   ],
   Links: ['Name', 'Link', 'Who sees it', 'Order', 'Opens in (blank = the app, or Drive)', 'Group (shop iPad tab)'],
   'Training items': ['Section', 'Skill', 'Standard', 'Order'],
@@ -149,6 +151,23 @@ const TABS = {
     'Email ID',
   ],
   'Sales import': ['Received', 'Subject', 'File', 'Result', 'Report (first 45,000 characters)', 'Email ID'],
+  // Training tab (Training.gs): the Employee Manual, HR records, food handler certificates, reimbursements, recipe alerts.
+  Manual: ['Chapter', 'Chapter intro (first row of a chapter)', 'Section', 'Text (formatting: see Start Here)', 'Order', 'Active'],
+  'Manual checks': ['Chapter', 'Question', 'Right answer', 'Wrong answer 1', 'Wrong answer 2', 'Wrong answer 3', 'Why (shown after a right answer)', 'Active'],
+  'Resource pages': ['Page', 'Who sees it', 'Icon', 'Summary', 'Section', 'Text (formatting: see Start Here)', 'Order', 'Active'],
+  'Manual progress': ['Name', 'Done (step ids)', 'Completed', 'Updated'],
+  // Shift handoff: left when someone clocks out, read by the next people on (Today › Shift handoff).
+  'Dial-in': ['ID', 'When', 'By', 'Coffee', 'Grind', 'Dose (g)', 'Yield (g)', 'Time (s)', 'Taste / notes'],
+  'Drawer counts': ['ID', 'When', 'Counted by', 'Counted ($)', 'Deposit ($)', 'POS expected ($)', 'Over / short ($)', 'Note', 'Bills (do not edit)'],
+  Handoffs: ['ID', 'Date', 'Name', 'Punch ID', 'Ran out or running low', 'Prepped', 'Equipment or issues', 'Note', 'Read by', 'Left at', 'For (next shift)'],
+  'Manual acks': ['Name', 'Manual version', 'Signed as', 'Acknowledged'],
+  Proficiency: ['Name', 'Acknowledged by', 'Date', 'Note'],
+  'HR log': ['ID', 'Filed', 'Type', 'About', 'Filed by', 'Status', 'PDF'],
+  'Food handler': ['Name', 'Uploaded', 'Certificate expires', 'Course cost', 'Reimbursed', 'Pay period starts', 'Certificate', 'Receipt'],
+  Reimbursements: ['ID', 'Name', 'Type', 'Amount', 'Pay period starts', 'Added', 'Status', 'Payroll workbook'],
+  'Recipe changes': ['ID', 'Date', 'Recipe', 'Type', 'Change', 'Before', 'After'],
+  'Recipe change reads': ['Name', 'Read change IDs', 'Updated'],
+  'Recipe snapshot': ['Recipe', 'What it said (do not edit)'],
   // The in-app recipe book. One row per recipe; ingredients and steps one per line in the cell (Alt/Option+Enter).
   Recipes: [
     'Recipe',
@@ -333,6 +352,40 @@ const SETTINGS = [
   ],
   ['Data service secret', '', "Must match DATA_SECRET_PEREGRINE in the team-data Worker. Don't share it."],
   ['Chat service secret', '', "Must match SECRET_PEREGRINE in the team-chat Worker. Don't share it."],
+  ['Drawer starting cash', '200', 'The cash left in the drawer each night (Drawer count works out the deposit from it).'],
+  [
+    'Require shift handoff to clock out',
+    'On',
+    'On or Off. While On, clocking out in the app asks for a short handoff (what ran out, what is prepped, any equipment issue) that the next shift sees on Today. The shop iPad clock-out is not blocked.',
+  ],
+  [
+    'Manual version',
+    '2026-11',
+    'Change this (e.g. 2026-12) when the Employee Manual changes in a way everyone must re-read. Everyone is asked to sign again.',
+  ],
+  [
+    'Lock tests until the manual is signed',
+    'On',
+    'On or Off. While On, nobody but a manager can start a test until they have read and signed the current Employee Manual.',
+  ],
+  ['HR folder', '', 'The Drive folder for HR records (paste its link). Forms are saved as PDFs in a subfolder named for each person.'],
+  [
+    'Drink Build Menu doc',
+    '',
+    'Optional. A Google Doc kept matched to the Recipes tab: it is rewritten whenever a drink recipe changes. Leave blank to turn off.',
+  ],
+  ['Food handler reimbursement (max $)', '15', 'Most we pay back for the food handler course. It goes on the pay period\'s payroll workbook.'],
+  ['Food handler due (days after added)', '14', 'The certificate is due this many days after the person was added on the Users tab.'],
+  [
+    'Owner contact',
+    'Stephen Holmes, stephen@peregrineroasters.com',
+    'Shown when a concern involves the Manager: those go straight to the owner, never through the app.',
+  ],
+  [
+    'Training service secret',
+    '',
+    "Lets the Training tab open the training portal signed in. Paste the secret the portal shows (run setupTraining in the portal's Apps Script). Don't share it.",
+  ],
   ['Push public key', '', 'Must match VAPID_PUBLIC in the Worker.'],
   [
     'Delete chat photos after (days)',
@@ -363,13 +416,21 @@ function onOpen() {
   try {
     moveSecrets_(SpreadsheetApp.getActive());
   } catch (e) {}
-  SpreadsheetApp.getUi()
+  let ui;
+  try {
+    ui = SpreadsheetApp.getUi(); // only exists when the sheet is open in a browser (not when run from the editor)
+  } catch (e) {
+    console.log('onOpen adds the Team menu when the sheet is opened. Nothing to do when it is run from the editor.');
+    return;
+  }
+  ui
     .createMenu('Team')
     .addItem('1. Set up', 'setup')
     .addItem('2. Show sign-in codes', 'showCodes')
     .addSeparator()
     .addItem('Sign the selected person out everywhere', 'signOutSelected')
     .addItem('Fast loading: turn on / check', 'setupFastLoading')
+    .addItem('Master admin: add someone', 'addMasterAdmin')
     .addSeparator()
     .addItem("Payroll: update this pay period's timesheet", 'payrollUpdateNow')
     .addItem("Payroll: make the last pay period's workbook now", 'payrollMakeLast')
@@ -401,7 +462,7 @@ function setup() {
   if (!hadShifts) props.setProperty('DRAFTS_V', '1');
   dirty_('*');
   ['Start Here', 'Settings', 'Users'].forEach((n, i) => move_(ss, n, i + 1));
-  ['Checklist log', 'Reads', 'Audit', 'Messages', 'Chat reads', 'Reminder log', 'Push'].forEach((n) => {
+  ['Checklist log', 'Reads', 'Audit', 'Messages', 'Chat reads', 'Reminder log', 'Push', 'Recipe snapshot', 'Recipe change reads', 'Manual progress'].forEach((n) => {
     const s = ss.getSheetByName(n);
     if (s) {
       move_(ss, n, ss.getSheets().length);
@@ -413,6 +474,12 @@ function setup() {
   if (!ScriptApp.getProjectTriggers().some((t) => t.getHandlerFunction() === 'sendShiftReminders'))
     ScriptApp.newTrigger('sendShiftReminders').timeBased().everyMinutes(15).create();
   salesTrigger_();
+  try {
+    trSeedContent_(ss); // Manual, Manual checks and Resource pages tabs, filled once from TrainingContent.gs
+    trMenuDoc_(ss); // the Drink Build Menu doc, matched to Recipes
+  } catch (e) {
+    console.warn('training content: ' + e);
+  }
   ss.setActiveSheet(ss.getSheetByName('Start Here'));
   SpreadsheetApp.getUi().alert(
     'Set up done',
@@ -765,10 +832,17 @@ function writeStartHere_(ss) {
     ],
     [''],
     ['Grey tabs (Checklist log, Reads, Audit) are written by the app. Leave them alone.'],
+    [''],
+    ['Editing the Employee Manual and resource pages'],
+    ['   Manual, Manual checks and Resource pages tabs: one row per section or question. Changes show in the app within a few minutes.'],
+    ['   In the Text column:  ## Heading   ·   - bullet   ·   1. numbered step   ·   [ ] tap-to-check item   ·   **bold**   ·   *italic*'],
+    ['   Note: … / Tip: … / Warning: …  makes a box   ·   | a | b |  is a table row (first row = header)   ·   ?? Question | Answer  is tap-to-reveal'],
+    ['   {{deposit}} shows the drawer calculator   ·   {{list Drawer close}} shows a button that opens that checklist in Lists   ·   a blank line starts a new paragraph'],
+    ['   When the manual changes in a way everyone must re-read, change Settings › Manual version and everyone is asked to sign again.'],
   ];
   sh.getRange(1, 1, L.length, 1).setValues(L);
   sh.getRange(1, 1).setFontSize(16).setFontWeight('bold');
-  [3, 7, 10, 14].forEach((r) => sh.getRange(r, 1).setFontWeight('bold'));
+  [3, 7, 10, 14, 19].forEach((r) => sh.getRange(r, 1).setFontWeight('bold'));
   sh.setColumnWidth(1, 900);
 }
 
@@ -794,7 +868,13 @@ function doPost(e) {
     if (body.fn === 'joinInfo') return json_(joinInfo_(body.invite));
     if (body.fn === 'join') return json_(join_(body.invite, body.phone, body.email));
     if (body.fn === 'api') return json_(api_(body.token, body.p || {}));
+    const fnFeature = { chatTicket: 'chat', chat: 'chat', chatSearch: 'chat', photo: 'chat', inventory: 'inventory', recipeCosts: 'recipes', tests: 'tests' }[body.fn];
+    if (fnFeature && !feat_(fnFeature)) return json_({ error: 'That part of the app is turned off for this shop' });
     if (body.fn === 'chatTicket') return json_(chatTicket_(body.token));
+    if (body.fn === 'hr') {
+      if (typeof hr_ !== 'function') throw new Error('The Training files are missing on the server: add Training.gs and TrainingContent.gs in Apps Script');
+      return json_(hr_(body.token, body.call, body.args || {}));
+    }
     if (body.fn === 'chatPush') return json_(chatPush_(body.args && body.args[0], body.args && body.args[1]));
     if (body.fn === 'chat') return json_(chat_(body.token, body.channel, body.text, body.photo, body));
     if (body.fn === 'chatSearch') return json_(chatSearch_(body.token, body.q));
@@ -808,6 +888,7 @@ function doPost(e) {
       return json_({
         ok: true,
         tests: tests_(ss, me),
+        portal: trainingUrl_(ss, me),
         results: me.role === 'Manager' ? setting_(ss, 'Test results sheet') : '',
         team: me.role === 'Manager' ? testTeam_(ss) : null,
       });
@@ -995,7 +1076,7 @@ const SECTIONS_ = {
   lists: ['Checklists', 'Checklist log', 'Settings'],
   news: ['Announcements', 'Reads', 'Users'],
   sched: ['Shifts', 'Availability', 'Settings', 'Users'],
-  clock: ['Time clock', 'Users', 'Shifts', 'Settings'],
+  clock: ['Time clock', 'Users', 'Shifts', 'Settings', 'Handoffs'],
   prep: ['Prep', 'Shifts', 'Users', 'Settings', 'Recipes'],
   chat: ['Channels', 'Messages', 'Chat reads', 'Users', 'Settings'],
   reqs: ['Requests'],
@@ -1003,7 +1084,11 @@ const SECTIONS_ = {
   recipes: ['Recipes'],
   team: ['Users', 'Settings'],
   train: ['Training items', 'Trainees', 'Training log'],
+  dial: ['Dial-in'],
+  drawer: ['Drawer counts', 'Settings'],
 };
+/** The feature switch behind each section of the app's data (sections not listed are core). */
+const SECTION_FEATURE_ = { lists: 'lists', news: 'news', sched: 'schedule', clock: 'timeclock', prep: 'prep', chat: 'chat', reqs: 'requests', links: 'resources', recipes: 'recipes', train: 'training', dial: 'dialin', drawer: 'drawer' };
 const SLIM_SKIP_ = ['lists', 'news', 'clock', 'prep', 'chat', 'links', 'recipes'];
 function secVersion_(name, me, today) {
   return [VERSION, name, me.id, me.role, today, Math.floor(Date.now() / 9e5), gen_('*')]
@@ -1027,6 +1112,7 @@ function state_(ss, me, slim, have) {
   const same = [],
     vers = {};
   const want = (name) => {
+    if (SECTION_FEATURE_[name] && !feat_(SECTION_FEATURE_[name])) return false; // turned off for this shop: never built or sent
     if (slim && SLIM_SKIP_.indexOf(name) >= 0) {
       same.push(name);
       return false;
@@ -1095,6 +1181,9 @@ function state_(ss, me, slim, have) {
       .map((r) => String(r[2])),
   };
 
+  out.features = features_();
+  out.master = isMaster_(me);
+  out.featureList = out.master ? FEATURES_.map((f) => ({ key: f[0], name: f[1], desc: f[2], group: f[4] })) : undefined;
   out.v = vers;
   out.same = same;
   out.from = window_(ss, today); // the oldest day this load covers (the app asks for anything older)
@@ -1192,7 +1281,7 @@ function state_(ss, me, slim, have) {
     if (isLead) out.unpublished = out.shifts.filter((s) => s.status !== 'published' && s.date >= today).length;
     out.positions = splitList_(setting_(ss, 'Positions'));
     out.presets = presets_(ss, tz);
-    out.availability = rv_(ss, 'Availability')
+    out.availability = !feat_('availability') ? [] : rv_(ss, 'Availability')
       .filter((r) => r[0] && r[1] && (isLead || String(r[1]).trim() === me.name))
       .map((r) => ({
         id: String(r[0]),
@@ -1227,6 +1316,12 @@ function state_(ss, me, slim, have) {
     }
     out.geo = /\d/.test(setting_(ss, 'Shop location (lat, lng)'));
     out.punches = punchesFor_(rv_(ss, 'Time clock', 2500), me, first, '9999', tz); // only the newest rows of the Time clock are read
+    out.handoffRequired = feat_('handoff') && !isShop && !/^off$/i.test(setting_(ss, 'Require shift handoff to clock out') || 'On');
+    try {
+      out.handoffs = feat_('handoff') ? handoffsFor_(ss, me) : [];
+    } catch (e) {
+      out.handoffs = [];
+    }
     out.open =
       out.punches.find((x) => x.name === me.name && x.in && !x.out && Date.now() - new Date(x.in) < 16 * 36e5) || null; // older ones are missed clock-outs for a manager to fix
     // Shop iPad: who is on the clock right now (names and clock-in times only – no hours, no pay)
@@ -1276,6 +1371,8 @@ function state_(ss, me, slim, have) {
         at: toIso_(r[8]),
         note: String(r[9] || ''),
         until: ymd_(r[10], tz) || '',
+        shift: String(r[11] || ''),
+        takenBy: String(r[12] || ''),
       }))
       .map((q) => {
         if (!/^\d{4}-/.test(q.until) || q.until <= q.date) q.until = '';
@@ -1286,6 +1383,8 @@ function state_(ss, me, slim, have) {
         (q) =>
           isMgr ||
           q.from === me.name ||
+          (q.type === 'Cover' && q.status === 'Pending' && !isShop && q.date >= today) || // open shifts anyone can pick up
+          (q.type === 'Cover' && q.takenBy === me.name) ||
           (isLead && q.type === 'Time off' && (q.status === 'Approved' || q.status === 'Pending'))
       )
       .filter((q) => q.status === 'Pending' || !q.date || (q.until || q.date) >= addDays_(today, -14))
@@ -1321,8 +1420,20 @@ function state_(ss, me, slim, have) {
       isMgr && ss.getSheetByName('Recipes') ? ss.getUrl() + '#gid=' + ss.getSheetByName('Recipes').getSheetId() : '';
   }
 
+  if (want('dial')) out.dialin = dialFor_(ss);
+  if (want('drawer')) {
+    out.drawer = drawerFor_(ss, me);
+    out.drawerBase = Number(setting_(ss, 'Drawer starting cash') || 200) || 200;
+  }
+
   // Training checklists – leads and managers only
   if (isLead && want('train')) out.training = training_(ss, tz);
+  else if (!isLead && !isShop && want('train')) {
+    // staff see their own Level I checklist (read-only in the app), nobody else's
+    const T = MEMO_.train || (MEMO_.train = training_(ss, tz)), // built once per load or per fast-loading push
+      mine = T.active.find((t) => t.name === me.name) || null;
+    out.myTraining = { items: mine ? T.items : [], me: mine };
+  }
 
   // Team (managers), pay settings
   if (want('team')) {
@@ -1361,7 +1472,13 @@ function state_(ss, me, slim, have) {
         otRate: Number(setting_(ss, 'Overtime rate')) || 1.5,
       };
     }
-    if (isMgr) out.sales = salesFor_(ss, users, today, tz); // yesterday's sales vs labor (SkyTab daily email), managers only
+    out.levels = feat_('levels') ? levels_(ss) : {}; // the name badges (Trainee, Level I, Level II, Lead…)
+    try {
+      out.trBadge = typeof trBadge_ === 'function' ? trBadge_(ss, me) : null; // Training tab: manual to sign, recipe changes to read, documents to sign
+    } catch (e) {
+      out.trBadge = null;
+    }
+    if (isMgr && feat_('sales')) out.sales = salesFor_(ss, users, today, tz); // yesterday's sales vs labor (SkyTab daily email), managers only
     if (isMgr)
       out.pay = {
         ot: Number(setting_(ss, 'Overtime after (hours a week)')) || 40,
@@ -1370,6 +1487,57 @@ function state_(ss, me, slim, have) {
       };
   }
   return out;
+}
+/** Shift handoffs from the last 24 hours (everyone's; managers see the read list). */
+/** Who a handoff is for: whoever is still on after the person leaves, plus the next group to start (today or tomorrow). */
+function handoffRecipients_(ss, author, when, tz) {
+  const d0 = Utilities.formatDate(when, tz, 'yyyy-MM-dd'),
+    hm = Utilities.formatDate(when, tz, 'HH:mm'),
+    d1 = addDays_(d0, 1);
+  const pub = vals_(ss.getSheetByName('Shifts'))
+    .filter((r) => !truthy_(r[8]))
+    .map((r) => pubObj_(r, tz))
+    .filter((x) => x && x.name && x.name !== author && (x.date === d0 || x.date === d1));
+  const key = (x) => x.date + ' ' + x.start;
+  const on = pub.filter((x) => x.date === d0 && x.start <= hm && x.end > hm);
+  const later = pub.filter((x) => key(x) > d0 + ' ' + hm).sort((a, b) => key(a).localeCompare(key(b)));
+  const nextGroup = later.length ? later.filter((x) => x.date === later[0].date && x.start <= addMin_(later[0].start, 60)) : [];
+  return [...new Set(on.concat(nextGroup).map((x) => x.name))];
+}
+/** Shift handoffs from the last 24 hours: managers see them all; everyone else only the ones left for their shift. */
+function handoffsFor_(ss, me) {
+  if (!ss.getSheetByName('Handoffs')) return [];
+  const cut = Date.now() - 24 * 36e5,
+    isMgr = me.role === 'Manager';
+  return rv_(ss, 'Handoffs', 200)
+    .filter((r) => r[0] && r[9] instanceof Date && r[9].getTime() > cut)
+    .filter(
+      (r) =>
+        isMgr ||
+        String(r[10] || '')
+          .split(',')
+          .map((x) => x.trim())
+          .indexOf(me.name) >= 0
+    )
+    .map((r) => {
+      const readers = String(r[8] || '')
+        .split(',')
+        .map((x) => x.trim())
+        .filter(Boolean);
+      return {
+        id: String(r[0]),
+        name: String(r[2]).trim(),
+        at: toIso_(r[9]),
+        low: String(r[4] || ''),
+        prepped: String(r[5] || ''),
+        issues: String(r[6] || ''),
+        note: String(r[7] || ''),
+        read: readers.indexOf(me.name) >= 0 || String(r[2]).trim() === me.name,
+        readers: isMgr ? readers : undefined,
+        for: isMgr ? String(r[10] || '') : undefined,
+      };
+    })
+    .reverse();
 }
 /** Shifts between two days, as this person may see them. */
 function shiftsFor_(ss, me, first, last, tz) {
@@ -1468,7 +1636,9 @@ function act_(ss, me, p, touched) {
   };
   const isShop = me.role === 'Shop';
   if (isShop && SHOP_ACTIONS_.indexOf(A) < 0) throw new Error("The shop iPad can't do that – use your own phone");
-  // On the shop iPad, ticks and prep are recorded under the person who picked their name
+  needFeature_(ACTION_FEATURE_[A]);
+  if (A === 'clockOut' && !feat_('handoff')) p.kiosk = true; // no handoff needed when the feature is off
+  // On the shop iPad, ticks, prep and dial-ins are recorded under the person who picked their name
   const asWho = () => {
     if (!isShop) return me.name;
     const n = String(p.as || '').trim(),
@@ -1499,6 +1669,23 @@ function act_(ss, me, p, touched) {
         if (String(v[i][3]) !== me.name && !isLead && !isShop) throw new Error(v[i][3] + ' checked that one');
         sh.deleteRow(i + 2);
       }
+      return;
+    }
+    case 'setFeatures':
+      return setFeatures_(ss, me, p);
+    case 'dialIn':
+      return dialIn_(ss, me, p, tab, asWho());
+    case 'drawerCount':
+      return drawerCount_(ss, me, p, tab);
+    case 'readHandoff': {
+      const sh = tab('Handoffs'),
+        r = findRow_(sh, p.id);
+      if (!r) return;
+      const cur = String(sh.getRange(r, 9).getValue() || '')
+        .split(',')
+        .map((x) => x.trim())
+        .filter(Boolean);
+      if (cur.indexOf(me.name) < 0) sh.getRange(r, 9).setValue(cur.concat([me.name]).join(', '));
       return;
     }
     case 'read': {
@@ -1559,6 +1746,15 @@ function act_(ss, me, p, touched) {
       if (until === p.date) until = '';
       const sh = tab('Requests');
       if (sh.getLastColumn() < TABS.Requests.length) buildTab_(ss, 'Requests');
+      let shiftId = '';
+      if (type === 'Cover' && p.shift) {
+        const x = vals_(ss.getSheetByName('Shifts'))
+          .map((r) => pubObj_(r, tz))
+          .find((o) => o && o.id === String(p.shift));
+        if (!x || x.name !== me.name) throw new Error('Pick one of your own shifts');
+        if (x.date !== p.date) p.date = x.date;
+        shiftId = x.id;
+      }
       const row = sh.getLastRow() + 1;
       const auto = type === 'Time off' && isMgr; // managers' own time off doesn't wait for anyone
       sh.getRange(row, 1, 1, 11).setValues([
@@ -1577,6 +1773,17 @@ function act_(ss, me, p, touched) {
         ],
       ]);
       sh.getRange(row, 11).setNumberFormat('@').setValue(until);
+      if (shiftId) {
+        sh.getRange(row, 12).setValue(shiftId);
+        try {
+          push_(
+            ss,
+            vals_(ss.getSheetByName('Users'))
+              .filter((u) => truthy_(u[3]) && u[6] && String(u[6]) !== me.id && !isShop_(u))
+              .map((u) => ({ uid: String(u[6]), kind: 'schedule', title: 'Open shift: ' + longDay_(p.date), body: first_(me.name) + ' needs this shift covered. Tap to pick it up.', url: '?go=more:requests', tag: 'cover-' + p.date }))
+          );
+        } catch (e) {}
+      }
       if (auto) audit('Approved own time off for ' + p.date + (until ? ' to ' + until : '') + ' (manager, automatic)');
       return { approved: auto };
     }
@@ -1657,6 +1864,32 @@ function act_(ss, me, p, touched) {
         );
       return { pending: again };
     }
+    case 'takeShift': {
+      // someone offers to pick up an open shift (a cover request); a manager approves it
+      const sh = tab('Requests'),
+        r = findRow_(sh, p.id);
+      if (!r) throw new Error('That shift was taken down');
+      if (sh.getLastColumn() < TABS.Requests.length) buildTab_(ss, 'Requests');
+      const q = sh.getRange(r, 1, 1, 13).getValues()[0];
+      if (String(q[3]) !== 'Cover' || String(q[6]) !== 'Pending') throw new Error("That shift isn't open anymore");
+      if (String(q[2]).trim() === me.name) throw new Error("That's your own shift");
+      const cur = String(q[12] || '').trim();
+      if (p.undo === '1') {
+        if (cur === me.name) sh.getRange(r, 13).setValue('');
+        return;
+      }
+      if (cur && cur !== me.name) throw new Error(cur + ' already offered to take it');
+      sh.getRange(r, 13).setValue(me.name);
+      try {
+        push_(
+          ss,
+          vals_(ss.getSheetByName('Users'))
+            .filter((u) => truthy_(u[3]) && u[6] && (role_(u[1]) === 'Manager' || String(u[0]).trim() === String(q[2]).trim()))
+            .map((u) => ({ uid: String(u[6]), kind: 'schedule', title: first_(me.name) + ' can take ' + first_(String(q[2])) + "'s shift", body: longDay_(ymd_(q[4], tz)) + ' · waiting on a manager', url: '?go=more:requests', tag: 'cover-' + r }))
+        );
+      } catch (e) {}
+      return;
+    }
     case 'decide': {
       needMgr();
       const sh = tab('Requests'),
@@ -1664,6 +1897,34 @@ function act_(ss, me, p, touched) {
       if (!r) throw new Error('That request was removed');
       const st = p.approve === '1' ? 'Approved' : 'Denied';
       sh.getRange(r, 7, 1, 4).setValues([[st, me.name, new Date(), clean_(p.note, 300)]]);
+      // an approved cover with someone who took it: the shift moves to them and is published right away
+      if (st === 'Approved' && sh.getLastColumn() >= 13) {
+        const q = sh.getRange(r, 1, 1, 13).getValues()[0],
+          taker = String(q[12] || '').trim(),
+          sid = String(q[11] || '');
+        if (String(q[3]) === 'Cover' && taker && sid) {
+          const ssh = tab('Shifts'),
+            v = vals_(ssh),
+            i = v.findIndex((x) => String(x[6]) === sid);
+          if (i >= 0) {
+            const c = shiftObj_(v[i], tz);
+            c.name = taker;
+            ssh.getRange(i + 2, 4).setValue(taker);
+            ssh.getRange(i + 2, 8, 1, 2).setValues([[pubJson_(c), false]]);
+            audit('Gave ' + q[2] + "'s shift on " + c.date + ' to ' + taker + ' (cover approved)');
+            try {
+              const us = vals_(ss.getSheetByName('Users'));
+              push_(
+                ss,
+                [taker, String(q[2]).trim()]
+                  .map((n) => us.find((u) => String(u[0]).trim() === n && truthy_(u[3])))
+                  .filter(Boolean)
+                  .map((u) => ({ uid: String(u[6]), kind: 'schedule', title: 'Shift cover approved', body: longDay_(c.date) + ' ' + t12_(c.start) + '–' + t12_(c.end) + ' is now ' + first_(taker) + "'s", url: '?go=schedule', tag: 'cover-ok-' + r }))
+              );
+            } catch (e) {}
+          }
+        }
+      }
       const last = sh.getLastColumn() >= 11 ? ymd_(sh.getRange(r, 11).getValue(), tz) : '';
       audit(
         st +
@@ -2449,7 +2710,7 @@ function act_(ss, me, p, touched) {
       act_(
         ss,
         person,
-        { action: did === 'in' ? 'clockIn' : 'clockOut', lat: p.lat, lng: p.lng, type: p.type },
+        { action: did === 'in' ? 'clockIn' : 'clockOut', lat: p.lat, lng: p.lng, type: p.type, kiosk: true },
         touched
       );
       audit(
@@ -2466,6 +2727,29 @@ function act_(ss, me, p, touched) {
         v = vals_(sh),
         i = v.findIndex((r) => String(r[1]).trim() === me.name && openPunch_(r));
       if (i < 0) throw new Error("You aren't clocked in");
+      const ho = p.handoff && typeof p.handoff === 'object' ? p.handoff : null,
+        need = !p.kiosk && !/^off$/i.test(setting_(ss, 'Require shift handoff to clock out') || 'On');
+      if (need && !ho) throw new Error('Leave a shift handoff before you clock out');
+      if (ho) {
+        const f = (k, n) => clean_(ho[k], n || 500);
+        if (need && !f('low') && !f('prepped') && !f('issues') && !f('note') && !ho.nothing)
+          throw new Error('Fill in at least one part of the handoff, or tick "Nothing to hand off"');
+        const hsh = tab('Handoffs');
+        if (hsh.getLastColumn() < TABS.Handoffs.length) buildTab_(ss, 'Handoffs');
+        const forN = handoffRecipients_(ss, me.name, new Date(), tz);
+        hsh.appendRow(['h' + newId_(8), today, me.name, String(v[i][0]), f('low'), f('prepped'), f('issues'), ho.nothing && !f('note') ? 'Nothing to hand off' : f('note', 1000), '', new Date(), forN.join(', ')]);
+        if (!ho.nothing || f('note'))
+          try {
+            const us = vals_(ss.getSheetByName('Users'));
+            push_(
+              ss,
+              forN
+                .map((n) => us.find((u) => String(u[0]).trim() === n && truthy_(u[3]) && u[6]))
+                .filter(Boolean)
+                .map((u) => ({ uid: String(u[6]), kind: 'news', title: 'Shift handoff from ' + first_(me.name), body: [f('low') && 'Low: ' + f('low'), f('issues') && 'Issues: ' + f('issues')].filter(Boolean).join(' · ') || 'Tap to read it before you start.', url: '?go=today', tag: 'handoff' }))
+            );
+          } catch (e) {}
+      }
       sh.getRange(i + 2, 5).setValue(new Date());
       sh.getRange(i + 2, 8).setValue(place_(ss, p.lat, p.lng));
       return;
@@ -3528,6 +3812,27 @@ function testTeam_(ss) {
     unmatched: Object.keys(unmatched).slice(0, 20),
   };
 }
+/** The training portal's address with a signed 12-hour pass, so the Training tab opens it already signed in. '' when not set up. */
+function trainingUrl_(ss, me) {
+  if (me.role === 'Shop') return '';
+  const portal = setting_(ss, 'Test portal').replace(/[?#].*$/, ''),
+    secret = setting_(ss, 'Training service secret');
+  if (!portal || !secret) return '';
+  const body = b64u_(
+    Utilities.newBlob(
+      JSON.stringify({ n: me.name, r: me.role, l: space_(ss), e: Math.floor(Date.now() / 1000) + 12 * 3600 })
+    ).getBytes()
+  );
+  return portal + '?embed=1&t=' + encodeURIComponent(body + '.' + chatSign_(secret, body));
+}
+/** Everyone's level for the name badges (Training.gs works it out from the test results and the Proficiency tab). */
+function levels_(ss) {
+  try {
+    return typeof trLevels_ === 'function' ? trLevels_(ss) : {};
+  } catch (e) {
+    return {};
+  }
+}
 const names_ = (v) =>
   String(v || '')
     .split(/\s*[,;\n]\s*/)
@@ -4057,9 +4362,14 @@ function sendShiftReminders() {
     console.warn('clock: ' + e);
   }
   try {
-    payrollTick_(ss, false);
+    if (feat_('payroll')) payrollTick_(ss, false);
   } catch (e) {
     console.warn('payroll: ' + e);
+  }
+  try {
+    if (feat_('recipes')) trRecipeWatch_(ss);
+  } catch (e) {
+    console.warn('recipe changes: ' + e);
   }
   if (/^off$/i.test(setting_(ss, 'Shift reminder emails'))) return;
   const tz = ss.getSpreadsheetTimeZone(),
@@ -5525,6 +5835,11 @@ function payrollMake_(ss, from, to, again) {
         ? ['More punches than Timesheet rows – ' + (P.rows.length - rows.length) + ' left out']
         : []
     );
+  try {
+    trPayroll_(ss, x, from); // food handler and other reimbursements for this pay period
+  } catch (e) {
+    warn.push("Reimbursements couldn't be added: " + e.message);
+  }
   ts.getRange('A2').setValue(warn.length ? '⚠ ' + warn.join(' · ') : '');
   props.setProperty(key, file.getId());
   return { url: x.getUrl(), rows: rows.length, warn };
@@ -5598,7 +5913,7 @@ function payrollMakeUi_(which) {
    Anything typed into one of those Settings cells is moved there the next time the script runs (opening the sheet is
    enough), and the cell then just says where it went. To change a secret, type the new one into its Settings cell.
    ============================================================ */
-const SECRET_SETTINGS_ = ['Push service secret', 'Chat service secret', 'Data service secret'];
+const SECRET_SETTINGS_ = ['Push service secret', 'Chat service secret', 'Data service secret', 'Training service secret'];
 const SECRET_NOTE_ = 'Hidden – in Apps Script › Project Settings › Script properties';
 function secret_(ss, label, cell) {
   const props = PropertiesService.getScriptProperties();
@@ -5775,6 +6090,7 @@ function salesTrigger_() {
   PropertiesService.getScriptProperties().setProperty('SALES_EVERY', '10');
 }
 function importSales() {
+  if (!feat_('sales')) return;
   try {
     return importSales_(SpreadsheetApp.getActive());
   } catch (e) {
@@ -5978,4 +6294,183 @@ function salesFor_(ss, users, today, tz) {
     x.hours = Math.round((hours[x.date] || 0) * 10) / 10;
   });
   return { days: list, search: true };
+}
+/**
+ * Peregrine Team – feature switches (sold as pieces).
+ * A Master Admin turns each part of the app on or off for this shop in the app (More › Master admin).
+ * The switches live in this script's Script Properties (FEATURES), not on a sheet tab, so they aren't edited by hand.
+ * Master Admins: Script Property MASTER_ADMINS (app names, comma-separated). Add yourself with Team › Master admin.
+ * Always on (the core): sign-in, Today, Team & codes, Settings, notifications, search.
+ */
+const FEATURES_ = [
+  // key, name, what it is, on by default, group
+  ['schedule', 'Schedule', 'Shifts, publishing, presets and the calendar feed', true, 'Scheduling'],
+  ['availability', 'Availability', "When people can't work", true, 'Scheduling'],
+  ['requests', 'Requests', 'Time off, swaps, covers and open shifts', true, 'Scheduling'],
+  ['timeclock', 'Time clock', 'Clock in and out, time sheets, labor', true, 'Time & pay'],
+  ['payroll', 'Payroll workbooks', 'Pay period timesheets and reimbursements', true, 'Time & pay'],
+  ['sales', 'Sales vs labor', 'Daily POS sales import and labor %', true, 'Time & pay'],
+  ['lists', 'Checklists', 'Opening, mid, closing and side work lists', true, 'Shift'],
+  ['prep', 'Prep requests', 'Ask the next shift to prep something', true, 'Shift'],
+  ['handoff', 'Shift handoff', 'Required note at clock-out for the next shift', true, 'Shift'],
+  ['dialin', 'Dial-in log', "Today's espresso settings and history", true, 'Shift'],
+  ['drawer', 'Drawer count', 'Count the drawer in the app; flags differences over $5', false, 'Shift'],
+  ['inventory', 'Inventory', 'Counts and reorder', true, 'Shift'],
+  ['chat', 'Messages', 'Channels, groups and direct messages', true, 'Team'],
+  ['news', 'Announcements', 'Posts with must-acknowledge', true, 'Team'],
+  ['recipes', 'Recipes', 'The recipe book and bar mode', true, 'Menu'],
+  ['recipeAlerts', 'Recipe change alerts', 'Tell everyone when a recipe changes', true, 'Menu'],
+  ['resources', 'Documents', 'Links and files from the Links tab', true, 'Training'],
+  ['training', 'Skill checklist', 'Level I trainee checklists', true, 'Training'],
+  ['tests', 'Study guides & tests', 'Certification portal inside the app', true, 'Training'],
+  ['manual', 'Employee Manual', 'Read and sign in the app', true, 'Training'],
+  ['library', 'Resource pages', 'Searchable guides and policies', true, 'Training'],
+  ['levels', 'Level badges', 'Trainee, Level I, Level II, Lead next to names', true, 'Training'],
+  ['progress', 'Team progress', 'Lead and Manager training dashboard', true, 'Training'],
+  ['hr', 'HR forms', 'Write-ups, Lead reports, concerns, signing', true, 'HR'],
+  ['foodhandler', 'Food handler tracker', 'Certificate upload and reimbursement', true, 'HR'],
+];
+/** This shop's switches: { key: true/false }. */
+function features_() {
+  if (MEMO_.features) return MEMO_.features;
+  let saved = {};
+  try {
+    saved = JSON.parse(PropertiesService.getScriptProperties().getProperty('FEATURES') || '{}');
+  } catch (e) {}
+  const out = {};
+  FEATURES_.forEach((f) => (out[f[0]] = f[0] in saved ? !!saved[f[0]] : f[3]));
+  return (MEMO_.features = out);
+}
+const feat_ = (k) => features_()[k] !== false;
+function masters_() {
+  return String(PropertiesService.getScriptProperties().getProperty('MASTER_ADMINS') || '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+const isMaster_ = (me) => me && masters_().indexOf(me.name) >= 0;
+
+/** Which switch each app action belongs to (actions not listed are core). */
+const ACTION_FEATURE_ = {
+  addShift: 'schedule', saveShift: 'schedule', deleteShift: 'schedule', restoreShift: 'schedule', publish: 'schedule', sendWeek: 'schedule', copyWeek: 'schedule', clearWeek: 'schedule',
+  addAvail: 'availability', editAvail: 'availability', delAvail: 'availability',
+  request: 'requests', cancelRequest: 'requests', editRequest: 'requests', decide: 'requests', takeShift: 'requests',
+  clockIn: 'timeclock', clockOut: 'timeclock', kioskClock: 'timeclock', savePunch: 'timeclock', deletePunch: 'timeclock',
+  check: 'lists', addPrep: 'prep', donePrep: 'prep', delPrep: 'prep', readHandoff: 'handoff',
+  announce: 'news', unannounce: 'news', read: 'news',
+  newChannel: 'chat', editChannel: 'chat', deleteMessage: 'chat', pinChat: 'chat',
+  saveRecipe: 'recipes', showRecipe: 'recipes', delRecipe: 'recipes',
+  trainStart: 'training', trainCheck: 'training', trainEdit: 'training', trainFile: 'training', trainDelete: 'training',
+  dialIn: 'dialin', drawerCount: 'drawer',
+};
+function needFeature_(k) {
+  if (k && !feat_(k)) throw new Error('That part of the app is turned off for this shop');
+}
+
+/** Master Admin: turn features on or off. */
+function setFeatures_(ss, me, p) {
+  if (!isMaster_(me)) throw new Error('Only a Master Admin can turn features on or off');
+  const cur = features_(),
+    next = Object.assign({}, cur);
+  Object.keys(p.features || {}).forEach((k) => {
+    if (FEATURES_.some((f) => f[0] === k)) next[k] = !!p.features[k];
+  });
+  PropertiesService.getScriptProperties().setProperty('FEATURES', JSON.stringify(next));
+  MEMO_.features = next;
+  const changed = Object.keys(next).filter((k) => next[k] !== cur[k]);
+  if (changed.length) {
+    dirty_('*'); // everyone's data is rebuilt with the new set
+    try {
+      (ss.getSheetByName('Audit') || (buildTab_(ss, 'Audit'), ss.getSheetByName('Audit'))).appendRow([new Date(), me.name, 'Features: ' + changed.map((k) => k + (next[k] ? ' on' : ' off')).join(', ')]);
+    } catch (e) {}
+  }
+  return { features: next };
+}
+/** Menu: Team › Master admin: add someone (by their name on the Users tab). */
+function addMasterAdmin() {
+  const ui = SpreadsheetApp.getUi(),
+    r = ui.prompt('Master admin', 'Type the name exactly as it is on the Users tab:', ui.ButtonSet.OK_CANCEL);
+  if (r.getSelectedButton() !== ui.Button.OK) return;
+  const n = String(r.getResponseText() || '').trim(),
+    ok = vals_(SpreadsheetApp.getActive().getSheetByName('Users')).some((u) => String(u[0]).trim() === n);
+  if (!ok) return ui.alert('Nobody called "' + n + '" on the Users tab.');
+  const list = masters_();
+  if (list.indexOf(n) < 0) list.push(n);
+  PropertiesService.getScriptProperties().setProperty('MASTER_ADMINS', list.join(', '));
+  dirty_('*');
+  ui.alert(n + ' is a Master Admin. In the app: More › Master admin.');
+}
+
+/* ---------------- Dial-in log ---------------- */
+function dialFor_(ss) {
+  if (!ss.getSheetByName('Dial-in')) return [];
+  const tz = ss.getSpreadsheetTimeZone();
+  return rv_(ss, 'Dial-in', 200)
+    .filter((r) => r[0] && r[1])
+    .slice(-40)
+    .reverse()
+    .map((r) => ({
+      id: String(r[0]),
+      at: toIso_(r[1]),
+      date: ymd_(r[1], tz),
+      by: String(r[2] || ''),
+      coffee: String(r[3] || ''),
+      grind: String(r[4] || ''),
+      dose: String(r[5] || ''),
+      yield: String(r[6] || ''),
+      time: String(r[7] || ''),
+      note: String(r[8] || ''),
+    }));
+}
+/** by: who dialed in (on the shop iPad, the person picked in "Who's dialing in?"; otherwise the signed-in person). */
+function dialIn_(ss, me, p, tab, by) {
+  const n = (v, lo, hi) => {
+    const t = String(v == null ? '' : v).trim();
+    if (t === '') return '';
+    const x = Number(t);
+    if (!(x >= lo && x <= hi)) throw new Error('Check the numbers: dose, yield and time');
+    return x;
+  };
+  const grind = clean_(p.grind, 20);
+  if (!grind) throw new Error('Add the grind setting');
+  tab('Dial-in').appendRow(['d' + newId_(8), new Date(), by || me.name, clean_(p.coffee, 80) || 'House', grind, n(p.dose, 5, 30), n(p.yield, 10, 80), n(p.time, 5, 60), clean_(p.note, 300)]);
+}
+
+/* ---------------- Drawer count (off until a Master Admin turns it on) ---------------- */
+const DENOMS_ = [100, 50, 20, 10, 5, 1];
+function drawerFor_(ss, me) {
+  if (!ss.getSheetByName('Drawer counts')) return [];
+  const lead = me.role === 'Lead' || me.role === 'Manager';
+  return rv_(ss, 'Drawer counts', 200)
+    .filter((r) => r[0] && (lead || String(r[2]).trim() === me.name))
+    .slice(-30)
+    .reverse()
+    .map((r) => ({ id: String(r[0]), at: toIso_(r[1]), by: String(r[2] || ''), counted: Number(r[3]) || 0, deposit: Number(r[4]) || 0, expected: r[5] === '' ? null : Number(r[5]), diff: r[6] === '' ? null : Number(r[6]), note: String(r[7] || '') }));
+}
+function drawerCount_(ss, me, p, tab) {
+  const tz = ss.getSpreadsheetTimeZone(),
+    base = Number(setting_(ss, 'Drawer starting cash') || 200) || 200;
+  const bills = p.bills || {};
+  let total = 0;
+  DENOMS_.forEach((d) => {
+    const c = Number(bills[d] || 0);
+    if (!(c >= 0 && c < 1000) || Math.floor(c) !== c) throw new Error('Bill counts are whole numbers');
+    total += c * d;
+  });
+  const coins = Math.round((Number(p.coins || 0) || 0) * 100) / 100;
+  if (coins < 0 || coins > 500) throw new Error('Check the coin total');
+  total = Math.round((total + coins) * 100) / 100;
+  const deposit = Math.max(0, Math.round(total) - base);
+  const exp = String(p.expected == null ? '' : p.expected).trim() === '' ? '' : Math.round(Number(p.expected) * 100) / 100;
+  if (exp !== '' && !(exp >= 0 && exp < 100000)) throw new Error('Check the expected cash from the POS');
+  const diff = exp === '' ? '' : Math.round((total - exp) * 100) / 100;
+  const id = 'c' + newId_(8);
+  tab('Drawer counts').appendRow([id, new Date(), me.name, total, deposit, exp, diff, clean_(p.note, 300), JSON.stringify(Object.assign({ coins }, bills))]);
+  if (diff !== '' && Math.abs(diff) > 5) {
+    try {
+      const mg = vals_(ss.getSheetByName('Users')).filter((u) => truthy_(u[3]) && u[6] && role_(u[1]) === 'Manager');
+      push_(ss, mg.map((u) => ({ uid: String(u[6]), kind: 'news', title: 'Drawer ' + (diff < 0 ? 'short' : 'over') + ' $' + Math.abs(diff).toFixed(2), body: first_(me.name) + ' counted $' + total.toFixed(2) + ' (POS expected $' + Number(exp).toFixed(2) + '). Policy 1: tell the manager the same day.', url: '?go=more:drawer', tag: 'drawer-' + id })));
+    } catch (e) {}
+  }
+  return { id, total, deposit, diff };
 }

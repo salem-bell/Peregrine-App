@@ -4740,12 +4740,12 @@ function viewDialIn() {
       })()
     : '';
   return `${shop() ? '<div class="btns" style="margin-bottom:8px"><button class="btn sm" data-tab="bar">‹ Bar Menu</button></div>' : back()}<h1>Dial-in log</h1>
-    <h2>Log a dial-in</h2><p class="sub" style="margin:-4px 4px 8px">Log every time you adjust – each one keeps its time.</p><div class="card"><form class="stack" data-form="dialin" onsubmit="return false">${whoPick}
+    ${!dialCan() ? `<div class="card"><div class="empty">Dial-ins can't be logged from the shop iPad yet – this location's server (Code.gs ${esc(data.version || '?')}) needs updating to 5.09. Log it on your own phone for now.</div></div>` : `<h2>Log a dial-in</h2><p class="sub" style="margin:-4px 4px 8px">Log every time you adjust – each one keeps its time.</p><div class="card"><form class="stack" data-form="dialin" onsubmit="return false">${whoPick}
       ${f('coffee', 'Coffee', 'list="dialcoffees" placeholder="House"', last.coffee)}<datalist id="dialcoffees">${coffees.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>
       <div class="trtwo">${f('grind', 'Grind setting', 'inputmode="decimal" placeholder="e.g. 4.2"', last.grind)}${f('dose', 'Dose (g)', 'type="number" step="0.1" inputmode="decimal"', last.dose || '17.5')}</div>
       <div class="trtwo">${f('yield', 'Yield (g)', 'type="number" step="0.1" inputmode="decimal"', last.yield || '')}${f('time', 'Time (sec)', 'type="number" step="1" inputmode="numeric"', '')}</div>
       ${f('note', 'Taste / notes', 'placeholder="e.g. balanced, a touch sour – went finer"', '')}
-      <button class="btn go" data-dialsave ${DIAL.busy ? 'disabled' : ''}>${DIAL.busy ? 'Saving…' : 'Save'}</button></form></div>
+      <button class="btn go" data-dialsave ${DIAL.busy ? 'disabled' : ''}>${DIAL.busy ? 'Saving…' : 'Save'}</button></form></div>`}
     <h2>History</h2><div class="card">${
       L.map((x) => `<div class="row"><div class="txt"><b>${esc(x.coffee)} · grind ${esc(x.grind)}</b><div class="sub">${[x.dose && x.dose + 'g in', x.yield && x.yield + 'g out', x.time && x.time + ' sec'].filter(Boolean).join(' · ')}${x.note ? ' · ' + esc(x.note) : ''}</div></div><span class="sub" style="text-align:right">${esc(shortDay(x.date))} · ${timeOf(x.at)}<br>${esc(first(x.by))}</span></div>`).join('') ||
       '<div class="empty">No dial-ins yet. The opener logs the first one each morning.</div>'
@@ -4804,6 +4804,7 @@ document.addEventListener('click', async (e) => {
   if (d.dialsave !== undefined) {
     const f = $('form[data-form="dialin"]'),
       v = (n) => f.elements.namedItem(n).value;
+    if (!dialCan()) return toast('Update the server to Code.gs 5.09 to log dial-ins from the iPad');
     if (!v('grind').trim()) return toast('Add the grind setting');
     const as = shop() ? v('as') : '';
     if (shop() && !as) return toast("Pick who's dialing in");
